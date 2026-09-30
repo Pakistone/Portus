@@ -133,9 +133,16 @@ export const QrCameraScanner: React.FC<QrCameraScannerProps> = ({
     }
   }, [facingMode, stopCamera]);
 
-  // Boucle d'analyse vidéo continue avec jsQR
+  // Boucle d'analyse vidéo continue avec jsQR et limitation de fréquence (10-12 FPS / ~95ms) + ROI central 360x360
   const tick = useCallback(() => {
     if (!videoRef.current || !canvasRef.current || !isScanning) {
+      animationFrameId.current = requestAnimationFrame(tick);
+      return;
+    }
+
+    const now = Date.now();
+    // Limiter la fréquence à ~10-12 images par seconde (intervalle de 90ms min)
+    if (now - lastScannedTimeRef.current < 90 && lastScannedTimeRef.current > 0) {
       animationFrameId.current = requestAnimationFrame(tick);
       return;
     }
@@ -149,30 +156,31 @@ export const QrCameraScanner: React.FC<QrCameraScannerProps> = ({
         const width = video.videoWidth;
         const height = video.videoHeight;
 
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(video, 0, 0, width, height);
+        // ROI (Region Of Interest) central de 360x360 pour éviter d'analyser toute la frame 720p/1080p
+        const roiSize = Math.min(width, height, 360);
+        const startX = Math.floor((width - roiSize) / 2);
+        const startY = Math.floor((height - roiSize) / 2);
 
-        const imageData = ctx.getImageData(0, 0, width, height);
+        canvas.width = roiSize;
+        canvas.height = roiSize;
+        ctx.drawImage(video, startX, startY, roiSize, roiSize, 0, 0, roiSize, roiSize);
+
+        const imageData = ctx.getImageData(0, 0, roiSize, roiSize);
         const code = jsQR(imageData.data, imageData.width, imageData.height, {
           inversionAttempts: 'dontInvert',
         });
 
         if (code && code.data) {
-          const now = Date.now();
-          // Débrayage de 1.5s entre deux lectures pour éviter les rafales
-          if (now - lastScannedTimeRef.current > 1500) {
-            lastScannedTimeRef.current = now;
-            playBeep();
-            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try {
-                navigator.vibrate(100);
-              } catch {
-                // Ignore
-              }
+          lastScannedTimeRef.current = now;
+          playBeep();
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+            try {
+              navigator.vibrate(100);
+            } catch {
+              // Ignore
             }
-            onScan(code.data);
           }
+          onScan(code.data);
         }
       }
     }

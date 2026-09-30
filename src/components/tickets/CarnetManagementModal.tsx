@@ -689,6 +689,16 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
           )}
+          
+          {/* Bouton de fermeture global en bas */}
+          <div className="mt-4 border-t border-slate-800 pt-3 flex justify-end">
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
+            >
+              Fermer la fenêtre
+            </button>
+          </div>
         </div>
       </div>
 

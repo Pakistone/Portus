@@ -11,8 +11,10 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { User, Role, LoginAttempt } from '../types';
 import { MAX_LOGIN_ATTEMPTS, LOCKOUT_DURATION_MS } from '../config/constants';
-import { getDB, INITIAL_USERS } from '../db/indexedDb';
+import { getDB } from '../db/indexedDb';
 import { SupabaseDataLayer } from '../db/supabaseService';
+import { getSupabase } from '../db/supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -22,7 +24,6 @@ interface AuthContextType {
   lockoutRemainingSeconds: number | null;
   login: (username: string, passwordRaw: string) => Promise<boolean>;
   logout: (reason?: string) => Promise<void>;
-  switchUserRole: (role: Role) => Promise<void>;
   changePassword: (currentPasswordRaw: string, newPasswordRaw: string) => Promise<{ success: boolean; error?: string }>;
   clearSessionNotice: () => void;
 }
@@ -102,6 +103,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     }
 
+    try {
+      const supabase = getSupabase();
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
+    } catch (e) {
+      console.warn('Erreur Supabase signOut:', e);
+    }
+
     sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
     sessionStorage.removeItem(SESSION_START_KEY);
     sessionStorage.removeItem(SESSION_LAST_ACTIVE_KEY);
@@ -117,45 +127,94 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     sessionStorage.setItem(SESSION_LAST_ACTIVE_KEY, Date.now().toString());
   };
 
-  // Vérifier la session au démarrage
+  // Vérifier la session au démarrage (Supabase Auth en tant qu'autorité exclusive)
   useEffect(() => {
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
     async function restoreSession() {
       try {
-        const db = await getDB();
-        const savedUserId = sessionStorage.getItem(CURRENT_USER_SESSION_KEY);
-        const sessionStart = sessionStorage.getItem(SESSION_START_KEY);
-        const lastActive = sessionStorage.getItem(SESSION_LAST_ACTIVE_KEY);
-
-        if (savedUserId) {
-          const now = Date.now();
-          const startMs = sessionStart ? parseInt(sessionStart, 10) : now;
-          const activeMs = lastActive ? parseInt(lastActive, 10) : now;
-
-          // Vérifier si la session a expiré par inactivité ou durée max
-          if (now - activeMs > SESSION_INACTIVITY_LIMIT_MS) {
-            await logout('Votre session a expiré suite à une inactivité prolongée (30 min).');
-            return;
-          }
-          if (now - startMs > SESSION_MAX_LIFETIME_MS) {
-            await logout('Votre session a atteint la durée maximale autorisée (8h). Veuillez vous reconnecter.');
-            return;
-          }
-
-          const user = await db.get('users', savedUserId);
-          if (user && user.isActive) {
-            setCurrentUser(user);
-            touchActivity();
-          } else {
-            await logout('Ce compte est désactivé ou introuvable.');
-          }
+        const supabase = getSupabase();
+        if (!supabase) {
+          setIsLoading(false);
+          return;
         }
+
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && session.user) {
+          const authUserId = session.user.id;
+          let { data: profile } = await supabase
+            .from('profiles')
+            .select('*, sector:sectors(name)')
+            .eq('id', authUserId)
+            .maybeSingle();
+
+          if (!profile) {
+            const { data: rpcProfile } = await supabase.rpc('get_my_profile');
+            if (rpcProfile && typeof rpcProfile === 'object') {
+              profile = {
+                ...rpcProfile,
+                sector: rpcProfile.sector_name ? { name: rpcProfile.sector_name } : undefined,
+              };
+            }
+          }
+
+          const VALID_ROLES: Role[] = ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'];
+          if (profile && profile.is_active && VALID_ROLES.includes(profile.role as Role)) {
+            const formattedUser: User = {
+              id: profile.id,
+              username: profile.username || session.user.email?.split('@')[0] || 'agent',
+              fullName: profile.full_name || session.user.email || 'Agent PORTUS',
+              role: profile.role || 'AGENT',
+              sectorId: profile.sector_id || undefined,
+              sectorName: profile.sector?.name || undefined,
+              phone: profile.phone || undefined,
+              isActive: true,
+              failedAttempts: 0,
+              createdAt: profile.created_at || new Date().toISOString(),
+              updatedAt: profile.updated_at || new Date().toISOString(),
+            };
+            setCurrentUser(formattedUser);
+            touchActivity();
+
+            // Cache local de consultation
+            try {
+              const db = await getDB();
+              await db.put('users', formattedUser);
+            } catch {}
+          } else {
+            // Aucun profil valide ou compte désactivé : accès refusé
+            await supabase.auth.signOut();
+            sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            setCurrentUser(null);
+          }
+        } else {
+          // Aucun token Supabase actif
+          sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+          setCurrentUser(null);
+        }
+
+        // Écouter les changements d'état d'authentification Supabase en temps réel
+        const { data: sub } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+          if (event === 'SIGNED_OUT' || !newSession) {
+            sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            setCurrentUser(null);
+          }
+        });
+        authSubscription = sub.subscription;
       } catch (err) {
-        console.error('Erreur chargement session', err);
+        console.error('Erreur chargement session Supabase', err);
       } finally {
         setIsLoading(false);
       }
     }
+
     restoreSession();
+
+    return () => {
+      if (authSubscription) {
+        authSubscription.unsubscribe();
+      }
+    };
   }, []);
 
   // Détecteurs d'activité utilisateur (throttle toutes les 15s)
@@ -238,193 +297,220 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLoginError(null);
     setLockoutRemainingSeconds(null);
 
-    const cleanUsername = usernameInput.trim().toLowerCase();
-    if (!cleanUsername || !passwordRaw) {
-      setLoginError('Veuillez renseigner votre nom d’utilisateur et votre mot de passe.');
+    const cleanInput = usernameInput.trim();
+    if (!cleanInput || !passwordRaw) {
+      setLoginError('Veuillez renseigner votre identifiant et votre mot de passe.');
       return false;
     }
 
+    const supabase = getSupabase();
+    if (!supabase) {
+      setLoginError('Supabase n’est pas configuré. Veuillez vérifier la connexion au serveur.');
+      return false;
+    }
+
+    // 1. Vérification du verrouillage de compte (serveur Supabase)
     try {
-      const db = await getDB();
-      const user = await db.getFromIndex('users', 'by-username', cleanUsername);
-
-      // Si l'utilisateur n'existe pas : NE PAS RÉVÉLER l'inexistence (message neutre et sécurisé)
-      if (!user) {
-        await logAttempt({
-          username: cleanUsername,
-          isSuccessful: false,
-          failureReason: 'Identifiant introuvable ou incorrect',
-        });
-        setLoginError('Identifiant ou mot de passe incorrect.');
+      const lockStatus = await SupabaseDataLayer.getAccountLockoutStatus(cleanInput);
+      if (lockStatus.isLocked && lockStatus.remainingSeconds > 0) {
+        setLockoutRemainingSeconds(lockStatus.remainingSeconds);
+        setLoginError(`Compte temporairement bloqué pendant ${Math.ceil(lockStatus.remainingSeconds / 60)} min suite à 5 tentatives erronées.`);
         return false;
       }
+    } catch {
+      // Continuer si RPC indisponible
+    }
 
-      // Vérifier si le compte a été désactivé par l'administrateur
-      if (!user.isActive) {
-        await logAttempt({
-          username: cleanUsername,
-          profileId: user.id,
-          isSuccessful: false,
-          failureReason: 'Compte désactivé par l’administrateur',
+    try {
+      // 2. Résolution du compte : si format email direct, on utilise l'email.
+      // Si format username, résolution stricte et autoritaire via public.resolve_username_for_auth (AUCUNE devinette de domaine, AUCUN cache local)
+      let targetEmail: string;
+
+      if (cleanInput.includes('@')) {
+        targetEmail = cleanInput.toLowerCase();
+      } else {
+        const { data: resolvedEmail, error: rpcErr } = await supabase.rpc('resolve_username_for_auth', {
+          p_username: cleanInput.toLowerCase(),
         });
-        setLoginError('Accès refusé. Ce compte a été désactivé par l’administrateur.');
-        return false;
-      }
 
-      // Vérifier le verrouillage temporaire (15 minutes après 5 échecs consécutifs)
-      const now = new Date();
-      if (user.lockedUntil) {
-        const lockedUntilDate = new Date(user.lockedUntil);
-        if (lockedUntilDate > now) {
-          const remainingSec = Math.ceil((lockedUntilDate.getTime() - now.getTime()) / 1000);
-          setLockoutRemainingSeconds(remainingSec);
-          await logAttempt({
-            username: cleanUsername,
-            profileId: user.id,
+        if (rpcErr) {
+          const rpcMsg = rpcErr.message || '';
+          if (rpcMsg.includes('COMPTE_VERROUILLE')) {
+            setLockoutRemainingSeconds(900);
+            setLoginError('Compte temporairement bloqué pendant 15 minutes suite à 5 tentatives infructueuses.');
+            return false;
+          }
+          if (rpcMsg.includes('Compte désactivé')) {
+            setLoginError('Ce compte professionnel a été désactivé par l’administrateur général.');
+            return false;
+          }
+          if (rpcMsg.toLowerCase().includes('failed to fetch') || rpcMsg.toLowerCase().includes('network')) {
+            setLoginError("Impossible de joindre le serveur d'authentification U.J.S.R.V.");
+            return false;
+          }
+          console.warn('RPC resolve_username_for_auth error:', rpcErr.message);
+        }
+
+        if (!resolvedEmail || typeof resolvedEmail !== 'string' || !resolvedEmail.includes('@')) {
+          // Échec de résolution : identifiant inconnu
+          setLoginError('Identifiant ou mot de passe incorrect.');
+          const lockoutRes = await SupabaseDataLayer.recordLoginAttempt({
+            username: cleanInput,
             isSuccessful: false,
-            failureReason: 'Tentative sur compte temporairement verrouillé (15 min)',
+            failureReason: 'Identifiant introuvable ou invalide',
           });
-          setLoginError(
-            `Compte temporairement bloqué suite à 5 tentatives consécutives infructueuses. Réessayez dans ${Math.ceil(remainingSec / 60)} minute(s).`
-          );
+          if (lockoutRes && lockoutRes.isLocked) {
+            setLockoutRemainingSeconds(lockoutRes.remainingSeconds || 900);
+            setLoginError('Compte temporairement bloqué pendant 15 minutes suite à 5 tentatives erronées.');
+          }
           return false;
+        }
+
+        targetEmail = resolvedEmail.toLowerCase();
+      }
+
+      // 3. Authentification unique et stricte auprès de Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: targetEmail,
+        password: passwordRaw,
+      });
+
+      if (authError || !authData?.user) {
+        const errMsg = authError?.message || '';
+        const isNetworkErr =
+          errMsg.toLowerCase().includes('failed to fetch') ||
+          errMsg.toLowerCase().includes('network') ||
+          errMsg.toLowerCase().includes('connection') ||
+          errMsg.toLowerCase().includes('injoignable');
+
+        if (isNetworkErr) {
+          setLoginError("Impossible de joindre le serveur d'authentification U.J.S.R.V.");
         } else {
-          // Verrouillage expiré, réinitialiser
-          user.lockedUntil = null;
-          user.failedAttempts = 0;
-          await db.put('users', user);
+          setLoginError('Identifiant ou mot de passe incorrect.');
+        }
+
+        // Enregistrement de l'échec et vérification du verrouillage
+        const lockoutRes = await SupabaseDataLayer.recordLoginAttempt({
+          username: cleanInput,
+          isSuccessful: false,
+          failureReason: errMsg || 'Identifiant ou mot de passe incorrect.',
+        });
+
+        if (lockoutRes && lockoutRes.isLocked) {
+          setLockoutRemainingSeconds(lockoutRes.remainingSeconds || 900);
+          setLoginError('Compte temporairement bloqué pendant 15 minutes suite à 5 tentatives erronées.');
+        } else if (lockoutRes && typeof lockoutRes.attemptsLeft === 'number' && lockoutRes.attemptsLeft <= 2) {
+          setLoginError(`Identifiant ou mot de passe incorrect. Attention : plus que ${lockoutRes.attemptsLeft} tentative(s) avant verrouillage.`);
+        }
+
+        return false;
+      }
+
+      const authUserId = authData.user.id;
+
+      // 4. Vérification autoritaire dans public.profiles
+      let { data: profile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*, sector:sectors(name)')
+        .eq('id', authUserId)
+        .maybeSingle();
+
+      if (!profile) {
+        // Tentative de récupération via RPC get_my_profile()
+        const { data: rpcProfile } = await supabase.rpc('get_my_profile');
+        if (rpcProfile && typeof rpcProfile === 'object') {
+          profile = {
+            ...rpcProfile,
+            sector: rpcProfile.sector_name ? { name: rpcProfile.sector_name } : undefined,
+          };
+          profileErr = null;
         }
       }
 
-      // Récupérer le mot de passe stocké (RÈGLE ABSOLUE : SANS AUCUNE NORMALISATION NI MODIFICATION)
-      const passwordsMap = (await db.get('settings', 'user_passwords')) || {};
-      const expectedPassword = passwordsMap[cleanUsername];
-
-      if (expectedPassword !== passwordRaw) {
-        // Échec de connexion : incrémenter le compteur d'échecs consécutifs
-        const newAttempts = (user.failedAttempts || 0) + 1;
-        let lockedTime: string | null = null;
-
-        if (newAttempts >= MAX_LOGIN_ATTEMPTS) {
-          // Bloquer le compte pour 15 minutes exactes
-          const lockExpiration = new Date(now.getTime() + LOCKOUT_DURATION_MS);
-          lockedTime = lockExpiration.toISOString();
-          user.lockedUntil = lockedTime;
-          user.failedAttempts = newAttempts;
-          await db.put('users', user);
-
-          // Enregistrer dans Supabase si connecté
-          if (SupabaseDataLayer.isAvailable()) {
-            SupabaseDataLayer.upsertProfile(user).catch(() => {});
-          }
-
-          // Enregistrer la tentative
-          await logAttempt({
-            username: cleanUsername,
-            profileId: user.id,
-            isSuccessful: false,
-            failureReason: `Compte verrouillé 15 minutes après ${MAX_LOGIN_ATTEMPTS} tentatives échouées`,
-          });
-
-          // Log d'audit immuable
-          await db.put('audit_logs', {
-            id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            actorId: user.id,
-            actorName: user.fullName,
-            actorRole: user.role,
-            action: 'ACCOUNT_LOCKED',
-            timestamp: new Date().toISOString(),
-            targetEntity: 'User',
-            targetId: user.id,
-            details: `Compte verrouillé pendant 15 minutes suite à ${MAX_LOGIN_ATTEMPTS} échecs consécutifs.`,
-          });
-
-          setLockoutRemainingSeconds(LOCKOUT_DURATION_MS / 1000);
-          setLoginError(
-            `Compte temporairement bloqué pendant 15 minutes suite à ${MAX_LOGIN_ATTEMPTS} tentatives infructueuses.`
-          );
-          return false;
-        } else {
-          user.failedAttempts = newAttempts;
-          await db.put('users', user);
-
-          // Enregistrer dans Supabase
-          if (SupabaseDataLayer.isAvailable()) {
-            SupabaseDataLayer.upsertProfile(user).catch(() => {});
-          }
-
-          // Enregistrer la tentative
-          await logAttempt({
-            username: cleanUsername,
-            profileId: user.id,
-            isSuccessful: false,
-            failureReason: `Mot de passe incorrect (Tentative ${newAttempts}/${MAX_LOGIN_ATTEMPTS})`,
-          });
-
-          // Log d'audit échec
-          await db.put('audit_logs', {
-            id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            actorId: user.id,
-            actorName: user.fullName,
-            actorRole: user.role,
-            action: 'LOGIN_FAILED',
-            timestamp: new Date().toISOString(),
-            targetEntity: 'User',
-            targetId: user.id,
-            details: `Échec d'authentification (Tentative ${newAttempts}/${MAX_LOGIN_ATTEMPTS})`,
-          });
-
-          const attemptsLeft = MAX_LOGIN_ATTEMPTS - newAttempts;
-          setLoginError(
-            `Identifiant ou mot de passe incorrect. Attention : ${attemptsLeft} tentative(s) restante(s) avant blocage temporaire du compte.`
-          );
+      if (profileErr) {
+        console.error('[PORTUS Auth] Erreur récupération profil:', profileErr);
+        if (profileErr.code === '42501' || profileErr.message?.toLowerCase().includes('permission denied')) {
+          setLoginError(`Erreur de privilèges PostgreSQL Supabase : ${profileErr.message}. Veuillez exécuter le script SQL d’attribution des permissions (GRANT EXECUTE).`);
+          await supabase.auth.signOut();
           return false;
         }
       }
 
-      // Connexion réussie : réinitialiser les compteurs d'échecs et le verrouillage
-      user.failedAttempts = 0;
-      user.lockedUntil = null;
-      user.updatedAt = new Date().toISOString();
-      await db.put('users', user);
-
-      if (SupabaseDataLayer.isAvailable()) {
-        SupabaseDataLayer.upsertProfile(user).catch(() => {});
+      if (!profile) {
+        setLoginError('Accès refusé. Aucun profil professionnel U.J.S.R.V. n’est associé à ce compte.');
+        await supabase.auth.signOut();
+        await SupabaseDataLayer.recordLoginAttempt({
+          username: cleanInput,
+          isSuccessful: false,
+          failureReason: 'Profil introuvable dans public.profiles',
+        });
+        return false;
       }
 
-      // Enregistrer la tentative réussie
-      await logAttempt({
-        username: cleanUsername,
-        profileId: user.id,
+      if (!profile.is_active) {
+        setLoginError('Ce compte professionnel a été désactivé par l’administrateur général.');
+        await supabase.auth.signOut();
+        await SupabaseDataLayer.recordLoginAttempt({
+          username: cleanInput,
+          profileId: profile.id,
+          isSuccessful: false,
+          failureReason: 'Compte désactivé (is_active = false)',
+        });
+        return false;
+      }
+
+      const VALID_ROLES: Role[] = ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'];
+      if (!profile.role || !VALID_ROLES.includes(profile.role as Role)) {
+        setLoginError('Accès refusé. Aucun profil professionnel U.J.S.R.V. n’est associé à ce compte.');
+        await supabase.auth.signOut();
+        return false;
+      }
+
+      const formattedUser: User = {
+        id: profile.id,
+        username: profile.username || cleanInput.split('@')[0],
+        fullName: profile.full_name || authData.user.email || 'Agent PORTUS',
+        role: profile.role || 'AGENT',
+        sectorId: profile.sector_id || undefined,
+        sectorName: profile.sector?.name || undefined,
+        phone: profile.phone || undefined,
+        isActive: true,
+        failedAttempts: 0,
+        createdAt: profile.created_at || new Date().toISOString(),
+        updatedAt: profile.updated_at || new Date().toISOString(),
+      };
+
+      // 5. Réinitialisation des tentatives et mise à jour de la dernière connexion
+      await SupabaseDataLayer.recordLoginAttempt({
+        username: cleanInput,
+        profileId: formattedUser.id,
         isSuccessful: true,
       });
 
-      // Log d'audit succès
-      await db.put('audit_logs', {
-        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        actorId: user.id,
-        actorName: user.fullName,
-        actorRole: user.role,
-        action: 'LOGIN_SUCCESS',
-        timestamp: new Date().toISOString(),
-        targetEntity: 'User',
-        targetId: user.id,
-        details: 'Authentification réussie',
-      });
+      // Synchronisation du profil local pour consultation
+      try {
+        const db = await getDB();
+        await db.put('users', formattedUser);
+      } catch (e) {
+        console.warn('Cache local warning:', e);
+      }
 
-      sessionStorage.setItem(CURRENT_USER_SESSION_KEY, user.id);
-      setCurrentUser(user);
+      sessionStorage.setItem(CURRENT_USER_SESSION_KEY, formattedUser.id);
+      sessionStorage.setItem(SESSION_START_KEY, Date.now().toString());
+      touchActivity();
+
+      setCurrentUser(formattedUser);
       return true;
-    } catch (err) {
-      console.error('Erreur lors du login', err);
-      setLoginError('Une erreur technique est survenue.');
+    } catch (err: any) {
+      console.error('Erreur technique lors de la connexion:', err);
+      setLoginError(`Erreur technique: ${err.message || 'Inconnue'}`);
       return false;
     }
   };
 
-  // Changement de mot de passe sécurisé par l'utilisateur connecté
+  // Changement de mot de passe sécurisé géré exclusivement par Supabase Auth
   const changePassword = async (
-    currentPasswordRaw: string,
+    _currentPasswordRaw: string,
     newPasswordRaw: string
   ): Promise<{ success: boolean; error?: string }> => {
     if (!currentUser) {
@@ -435,74 +521,41 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return { success: false, error: 'Le nouveau mot de passe doit comporter au moins 6 caractères.' };
     }
 
+    const supabase = getSupabase();
+    if (!supabase) {
+      return { success: false, error: 'Supabase n’est pas configuré.' };
+    }
+
     try {
-      const db = await getDB();
-      const passwordsMap = (await db.get('settings', 'user_passwords')) || {};
-      const expectedPassword = passwordsMap[currentUser.username] || 'ujsrv2026';
-
-      if (currentPasswordRaw !== expectedPassword) {
-        return { success: false, error: 'Le mot de passe actuel saisi est incorrect.' };
-      }
-
-      // Enregistrer le nouveau mot de passe brut SANS normalisation
-      passwordsMap[currentUser.username] = newPasswordRaw;
-      await db.put('settings', passwordsMap, 'user_passwords');
-
-      // Réinitialiser les compteurs
-      const user = await db.get('users', currentUser.id);
-      if (user) {
-        user.failedAttempts = 0;
-        user.lockedUntil = null;
-        user.updatedAt = new Date().toISOString();
-        await db.put('users', user);
-        setCurrentUser(user);
-      }
-
-      await db.put('audit_logs', {
-        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        actorId: currentUser.id,
-        actorName: currentUser.fullName,
-        actorRole: currentUser.role,
-        action: 'PASSWORD_CHANGED',
-        timestamp: new Date().toISOString(),
-        targetEntity: 'User',
-        targetId: currentUser.id,
-        details: `Modification réussie de mot de passe personnel par ${currentUser.username}`,
+      // 1. Mettre à jour le mot de passe dans Supabase Auth
+      const { error: updateErr } = await supabase.auth.updateUser({
+        password: newPasswordRaw,
       });
+
+      if (updateErr) {
+        return { success: false, error: updateErr.message };
+      }
+
+      // 2. Journaliser l'événement d'audit
+      try {
+        const db = await getDB();
+        await db.put('audit_logs', {
+          id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          actorId: currentUser.id,
+          actorName: currentUser.fullName,
+          actorRole: currentUser.role,
+          action: 'PASSWORD_CHANGED',
+          timestamp: new Date().toISOString(),
+          targetEntity: 'User',
+          targetId: currentUser.id,
+          details: `Modification réussie du mot de passe par ${currentUser.username} via Supabase Auth`,
+        });
+      } catch {}
 
       return { success: true };
     } catch (err: any) {
       console.error('Erreur changement mot de passe:', err);
       return { success: false, error: err?.message || 'Erreur technique lors du changement de mot de passe.' };
-    }
-  };
-
-  // Sélecteur de rôle (Testeur de rôles rapide / prévisualisation)
-  const switchUserRole = async (targetRole: Role) => {
-    try {
-      const db = await getDB();
-      // Trouver le premier utilisateur actif ayant ce rôle
-      const user = await db.getFromIndex('users', 'by-role', targetRole);
-      if (user && user.isActive) {
-        user.failedAttempts = 0;
-        user.lockedUntil = null;
-        await db.put('users', user);
-        sessionStorage.setItem(CURRENT_USER_SESSION_KEY, user.id);
-        setCurrentUser(user);
-      } else {
-        const initUser = INITIAL_USERS.find((u) => u.role === targetRole);
-        if (initUser) {
-          const { passwordHash: _h, ...clean } = initUser;
-          clean.isActive = true;
-          clean.failedAttempts = 0;
-          clean.lockedUntil = null;
-          await db.put('users', clean);
-          sessionStorage.setItem(CURRENT_USER_SESSION_KEY, clean.id);
-          setCurrentUser(clean);
-        }
-      }
-    } catch (err) {
-      console.error('Erreur switch role', err);
     }
   };
 
@@ -516,7 +569,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         lockoutRemainingSeconds,
         login,
         logout,
-        switchUserRole,
         changePassword,
         clearSessionNotice,
       }}

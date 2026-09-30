@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import {
   getSupabaseConfig,
-  setCustomSupabaseConfig,
   testSupabaseConnection,
 } from '../../db/supabaseClient';
 import { useData } from '../../context/DataContext';
@@ -33,14 +32,19 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = useState<'schema' | 'config' | 'tables'>('schema');
   const [copied, setCopied] = useState(false);
 
-  // Configuration live
-  const [urlInput, setUrlInput] = useState('');
-  const [anonKeyInput, setAnonKeyInput] = useState('');
+  // Configuration live (lecture seule depuis l'environnement)
+  const [config, setConfig] = useState<{ url: string; anonKey: string; isConfigured: boolean }>({
+    url: '',
+    anonKey: '',
+    isConfigured: false,
+  });
   const [testResult, setTestResult] = useState<{
     tested: boolean;
     success?: boolean;
     message?: string;
     loading?: boolean;
+    latencyMs?: number;
+    tablesFound?: string[];
   }>({ tested: false });
 
   // Synchro globale
@@ -52,32 +56,22 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (isOpen) {
       const cfg = getSupabaseConfig();
-      setUrlInput(cfg.url);
-      setAnonKeyInput(cfg.anonKey);
+      setConfig(cfg);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSaveConfig = () => {
-    setCustomSupabaseConfig(urlInput, anonKeyInput);
-    setTestResult({
-      tested: true,
-      success: true,
-      message: 'Configuration enregistrée dans votre session navigateur.',
-    });
-  };
-
   const handleTestConnection = async () => {
     setTestResult({ tested: true, loading: true });
-    // Sauvegarder d'abord pour mettre à jour le client
-    setCustomSupabaseConfig(urlInput, anonKeyInput);
     const res = await testSupabaseConnection();
     setTestResult({
       tested: true,
       loading: false,
       success: res.success,
       message: res.message,
+      latencyMs: res.latencyMs,
+      tablesFound: res.tablesFound,
     });
   };
 
@@ -500,6 +494,99 @@ CREATE POLICY "Agent read assigned tickets" ON public.tickets FOR SELECT TO auth
 CREATE POLICY "Agent insert own sale" ON public.sales FOR INSERT TO authenticated WITH CHECK (public.get_current_role() = 'AGENT' AND agent_id = auth.uid());
 CREATE POLICY "Controleur verify tickets" ON public.tickets FOR SELECT TO authenticated USING (public.get_current_role() = 'CONTROLEUR');
 CREATE POLICY "Controleur insert control" ON public.controls FOR INSERT TO authenticated WITH CHECK (public.get_current_role() = 'CONTROLEUR' AND controleur_id = auth.uid());
+
+-- FONCTIONS D'AUTHENTIFICATION STRICTES & SÉCURISÉES (PORTUS U.J.S.R.V.)
+CREATE OR REPLACE FUNCTION public.resolve_username_for_auth(p_username TEXT)
+RETURNS TEXT AS $$
+DECLARE
+  v_email TEXT;
+  v_locked_until TIMESTAMPTZ;
+  v_is_active BOOLEAN;
+BEGIN
+  IF p_username IS NULL OR TRIM(p_username) = '' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT u.email, p.locked_until, p.is_active
+  INTO v_email, v_locked_until, v_is_active
+  FROM auth.users u
+  JOIN public.profiles p ON p.id = u.id
+  WHERE LOWER(p.username) = LOWER(TRIM(p_username))
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF NOT v_is_active THEN
+    RAISE EXCEPTION 'Compte désactivé. Veuillez contacter l’administrateur.';
+  END IF;
+
+  IF v_locked_until IS NOT NULL AND v_locked_until > NOW() THEN
+    RAISE EXCEPTION 'COMPTE_VERROUILLE: Compte temporairement bloqué pendant 15 minutes suite à 5 tentatives infructueuses.';
+  END IF;
+
+  RETURN v_email;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
+
+GRANT EXECUTE ON FUNCTION public.resolve_username_for_auth(TEXT) TO anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.record_login_attempt(
+  p_username TEXT,
+  p_is_successful BOOLEAN,
+  p_profile_id UUID DEFAULT NULL,
+  p_failure_reason TEXT DEFAULT NULL,
+  p_user_agent TEXT DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+  v_user_id UUID;
+  v_profile public.profiles%ROWTYPE;
+  v_attempts INT := 0;
+  v_locked_until TIMESTAMPTZ := NULL;
+  v_is_locked BOOLEAN := FALSE;
+  v_remaining_seconds INT := 0;
+BEGIN
+  SELECT id INTO v_user_id FROM public.profiles WHERE LOWER(username) = LOWER(TRIM(p_username)) LIMIT 1;
+  IF v_user_id IS NULL AND p_profile_id IS NOT NULL THEN
+    v_user_id := p_profile_id;
+  END IF;
+
+  INSERT INTO public.login_attempts (username, profile_id, is_successful, failure_reason, user_agent)
+  VALUES (TRIM(p_username), v_user_id, p_is_successful, p_failure_reason, p_user_agent);
+
+  IF v_user_id IS NOT NULL THEN
+    SELECT * INTO v_profile FROM public.profiles WHERE id = v_user_id FOR UPDATE;
+    IF p_is_successful THEN
+      UPDATE public.profiles
+      SET failed_attempts = 0, locked_until = NULL, last_login_at = NOW(), updated_at = NOW()
+      WHERE id = v_user_id;
+      RETURN jsonb_build_object('success', TRUE, 'is_locked', FALSE, 'attempts_left', 5);
+    ELSE
+      v_attempts := COALESCE(v_profile.failed_attempts, 0) + 1;
+      IF v_attempts >= 5 THEN
+        v_locked_until := NOW() + INTERVAL '15 minutes';
+        v_is_locked := TRUE;
+        v_remaining_seconds := 900;
+        UPDATE public.profiles
+        SET failed_attempts = v_attempts, locked_until = v_locked_until, updated_at = NOW()
+        WHERE id = v_user_id;
+        RETURN jsonb_build_object('success', FALSE, 'is_locked', TRUE, 'remaining_seconds', 900, 'attempts_left', 0);
+      ELSE
+        UPDATE public.profiles
+        SET failed_attempts = v_attempts, updated_at = NOW()
+        WHERE id = v_user_id;
+        RETURN jsonb_build_object('success', FALSE, 'is_locked', FALSE, 'attempts_left', GREATEST(0, 5 - v_attempts));
+      END IF;
+    END IF;
+  END IF;
+
+  RETURN jsonb_build_object('success', p_is_successful, 'is_locked', FALSE, 'attempts_left', 5);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
+
+GRANT EXECUTE ON FUNCTION public.record_login_attempt(TEXT, BOOLEAN, UUID, TEXT, TEXT) TO anon, authenticated;
 `;
 
   const handleCopy = () => {
@@ -650,62 +737,70 @@ CREATE POLICY "Controleur insert control" ON public.controls FOR INSERT TO authe
           </div>
         )}
 
-        {/* CONTENU ONGLET 3 : CONFIGURATION & TEST */}
+        {/* CONTENU ONGLET 3 : DIAGNOSTIC & STATUT PRODUCTION */}
         {activeTab === 'config' && (
           <div className="flex-1 overflow-y-auto pt-3 space-y-4">
             <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                <Server className="w-4 h-4 text-emerald-400" />
-                Paramètres de connexion Supabase PostgreSQL
-              </h4>
-              <p className="text-xs text-slate-400">
-                Vous pouvez renseigner directement ici votre URL de projet Supabase et votre clé API publique (anon key) pour activer la synchronisation distante.
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <Server className="w-4 h-4 text-emerald-400" />
+                  Statut de connexion Supabase (Production)
+                </h4>
+                <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
+                  config.isConfigured
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                }`}>
+                  {config.isConfigured ? 'Environnement Configuré' : 'Non Configuré'}
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Les clés d'accès et paramètres de production sont protégés et gérés exclusivement via les variables d'environnement système (<code className="text-emerald-400">.env</code>). Conformément aux normes de sécurité, ils ne sont pas modifiables dans le navigateur.
               </p>
 
-              <div className="space-y-2">
-                <div>
-                  <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                    <Globe className="w-3.5 h-3.5 text-slate-400" />
-                    URL du Projet Supabase (VITE_SUPABASE_URL)
-                  </label>
-                  <input
-                    type="text"
-                    value={urlInput}
-                    onChange={(e) => setUrlInput(e.target.value)}
-                    placeholder="https://votre-projet.supabase.co"
-                    className="w-full mt-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-hidden font-mono"
-                  />
+              <div className="space-y-3 pt-1">
+                <div className="rounded-lg bg-slate-900 border border-slate-800 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-slate-400" />
+                      URL Supabase Active (VITE_SUPABASE_URL)
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                      {config.url ? config.url.replace(/^https?:\/\//, '').split('.')[0] : 'non définie'}
+                    </span>
+                  </div>
+                  <p className="mt-1 font-mono text-xs text-white truncate select-all">
+                    {config.url || 'Aucune URL configurée dans VITE_SUPABASE_URL'}
+                  </p>
                 </div>
 
-                <div>
-                  <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1">
-                    <Key className="w-3.5 h-3.5 text-slate-400" />
-                    Clé API Publique (VITE_SUPABASE_ANON_KEY)
-                  </label>
-                  <input
-                    type="password"
-                    value={anonKeyInput}
-                    onChange={(e) => setAnonKeyInput(e.target.value)}
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                    className="w-full mt-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-hidden font-mono"
-                  />
+                <div className="rounded-lg bg-slate-900 border border-slate-800 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-400 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-slate-400" />
+                      Clé Publique Active (VITE_SUPABASE_PUBLISHABLE_KEY)
+                    </span>
+                    {config.anonKey.startsWith('sb_publishable_') && (
+                      <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-1.5 py-0.5 rounded font-mono">
+                        Publishable Key Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 font-mono text-xs text-slate-300 truncate">
+                    {config.anonKey ? `${config.anonKey.slice(0, 16)}••••••••••••••••••••••••` : 'Aucune clé configurée'}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2 pt-2">
-                <button
-                  onClick={handleSaveConfig}
-                  className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition"
-                >
-                  Enregistrer la configuration
-                </button>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
                 <button
                   onClick={handleTestConnection}
                   disabled={testResult.loading}
-                  className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 transition disabled:opacity-50"
+                  className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition disabled:opacity-50 cursor-pointer shadow-lg shadow-emerald-900/30"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${testResult.loading ? 'animate-spin' : ''}`} />
-                  <span>{testResult.loading ? 'Vérification en cours...' : 'Tester la connexion PostgreSQL'}</span>
+                  <span>{testResult.loading ? 'Diagnostic en cours...' : 'Tester la connectivité Supabase'}</span>
                 </button>
               </div>
 
@@ -722,9 +817,26 @@ CREATE POLICY "Controleur insert control" ON public.controls FOR INSERT TO authe
                   ) : (
                     <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
                   )}
-                  <div>
-                    <p className="font-semibold">{testResult.success ? 'Succès de connexion' : 'Erreur de connexion'}</p>
-                    <p className="text-[11px] opacity-90 mt-0.5">{testResult.message}</p>
+                  <div className="space-y-1">
+                    <p className="font-semibold flex items-center gap-2">
+                      <span>{testResult.success ? 'Communication avec Supabase établie' : 'Erreur de communication Supabase'}</span>
+                      {testResult.latencyMs !== undefined && (
+                        <span className="text-[10px] bg-emerald-950/80 border border-emerald-700/60 px-1.5 py-0.2 rounded font-mono text-emerald-300">
+                          {testResult.latencyMs} ms
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px] opacity-90">{testResult.message}</p>
+                    {testResult.tablesFound && testResult.tablesFound.length > 0 && (
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <span className="text-[10px] text-slate-400">Tables accessibles :</span>
+                        {testResult.tablesFound.map((tbl) => (
+                          <span key={tbl} className="text-[10px] bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded font-mono text-slate-200">
+                            {tbl}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

@@ -115,6 +115,10 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
           ? 'VALID'
           : res.status === 'CANCELLED'
           ? 'CANCELLED'
+          : res.status === 'SUPERSEDED'
+          ? 'SUPERSEDED'
+          : res.status === 'NOT_SOLD'
+          ? 'NOT_SOLD'
           : 'INVALID_UNKNOWN';
 
       const ctrl = await recordControl({

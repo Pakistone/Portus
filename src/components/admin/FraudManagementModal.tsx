@@ -12,6 +12,7 @@ import {
   History,
   FileCheck,
   ChevronRight,
+  ChevronLeft,
   Eye,
   AlertTriangle,
   Send,
@@ -40,6 +41,7 @@ export const FraudManagementModal: React.FC<Props> = ({
   const [selectedStatusTab, setSelectedStatusTab] = useState<FraudReportStatus | 'ALL'>(initialFilterStatus);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedFraud, setSelectedFraud] = useState<FraudReport | null>(null);
+  const [activeMobilePane, setActiveMobilePane] = useState<'list' | 'detail'>('list');
 
   // Formulaire d'arbitrage
   const [decisionStatus, setDecisionStatus] = useState<FraudReportStatus>('CONFIRME');
@@ -93,6 +95,7 @@ export const FraudManagementModal: React.FC<Props> = ({
     setDecisionNote(report.adminDecisionNote || '');
     setDecisionError(null);
     setDecisionSuccess(false);
+    setActiveMobilePane('detail');
   };
 
   const handleApplyDecision = async (e: React.FormEvent) => {
@@ -187,9 +190,12 @@ export const FraudManagementModal: React.FC<Props> = ({
         {/* ========================================================================= */}
         <div className="border-b border-slate-800 bg-slate-950/70 px-4 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           {/* Onglets des 5 statuts demandés */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+          <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
             <button
-              onClick={() => setSelectedStatusTab('ALL')}
+              onClick={() => {
+                setSelectedStatusTab('ALL');
+                setActiveMobilePane('list');
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
                 selectedStatusTab === 'ALL'
                   ? 'bg-slate-700 text-white shadow-xs'
@@ -205,7 +211,10 @@ export const FraudManagementModal: React.FC<Props> = ({
             {FRAUD_STATUSES.map((st) => (
               <button
                 key={st.id}
-                onClick={() => setSelectedStatusTab(st.id)}
+                onClick={() => {
+                  setSelectedStatusTab(st.id);
+                  setActiveMobilePane('list');
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
                   selectedStatusTab === st.id
                     ? 'bg-rose-600 text-white shadow-xs'
@@ -232,7 +241,10 @@ export const FraudManagementModal: React.FC<Props> = ({
             <input
               type="text"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setActiveMobilePane('list');
+              }}
               placeholder="Immat, ticket, motif, contrôleur..."
               className="w-full rounded-xl border border-slate-700 bg-slate-900 py-1.5 pl-9 pr-3 text-xs text-white placeholder-slate-500 focus:border-rose-500 focus:outline-hidden"
             />
@@ -242,16 +254,18 @@ export const FraudManagementModal: React.FC<Props> = ({
         {/* ========================================================================= */}
         {/* CORPS : LISTE GAUCHE (60%) + FICHE DÉTAILLÉE ARBITRAGE DROITE (40%)        */}
         {/* ========================================================================= */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden bg-slate-900/30">
           {/* COLONNE GAUCHE : TABLEAU / LISTE DES SIGNALEMENTS */}
-          <div className="lg:col-span-7 border-r border-slate-800 overflow-y-auto p-3 space-y-2">
+          <div className={`lg:col-span-7 border-r border-slate-800/80 overflow-y-auto p-4 space-y-3 ${activeMobilePane === 'list' ? 'block' : 'hidden lg:block'}`}>
             {filteredReports.length === 0 ? (
-              <div className="py-16 text-center space-y-2">
-                <ShieldAlert className="w-10 h-10 text-slate-600 mx-auto" />
-                <p className="text-xs font-semibold text-slate-400">
+              <div className="py-24 text-center space-y-3">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-800 text-slate-500">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <p className="text-xs font-bold text-slate-400">
                   Aucun signalement de fraude ne correspond à ces critères.
                 </p>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-slate-500 max-w-xs mx-auto leading-relaxed">
                   Tous les signalements transmis par les contrôleurs routiers apparaîtront ici.
                 </p>
               </div>
@@ -264,20 +278,20 @@ export const FraudManagementModal: React.FC<Props> = ({
                   <div
                     key={report.id}
                     onClick={() => handleSelectReport(report)}
-                    className={`p-3.5 rounded-xl border transition cursor-pointer space-y-2 ${
+                    className={`p-4 rounded-xl border transition cursor-pointer space-y-2.5 ${
                       isSelected
-                        ? 'border-rose-500 bg-rose-950/20 shadow-md'
-                        : 'border-slate-800 bg-slate-900/90 hover:bg-slate-800/80'
+                        ? 'border-rose-500/85 bg-rose-500/[0.04] shadow-md shadow-rose-950/20'
+                        : 'border-slate-800 bg-slate-900/40 hover:bg-slate-800/50 hover:border-slate-700/60'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 flex-wrap">
                         {getTypeBadge(report.type || report.reason || 'AUTRE')}
-                        <span className="font-mono font-black text-sm text-white tracking-wider">
+                        <span className="font-mono font-bold text-xs text-white bg-slate-950 px-2.5 py-1 rounded-md border border-slate-850 tracking-wider">
                           {formatPlateDisplay(report.plateNumber)}
                         </span>
                         {report.ticketNumber && (
-                          <span className="font-mono text-slate-400 text-xs bg-slate-800 px-1.5 py-0.5 rounded">
+                          <span className="font-mono text-slate-400 text-[11px] bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/35">
                             Ticket : {report.ticketNumber}
                           </span>
                         )}
@@ -286,7 +300,7 @@ export const FraudManagementModal: React.FC<Props> = ({
                     </div>
 
                     {/* Commentaire résumé */}
-                    <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed bg-slate-950/50 p-2 rounded-lg border border-slate-800/80">
+                    <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed bg-slate-950/40 p-2.5 rounded-lg border border-slate-800/40">
                       {report.comment}
                     </p>
 
@@ -295,7 +309,7 @@ export const FraudManagementModal: React.FC<Props> = ({
                       <div className="flex items-center gap-2">
                         <span>Par : <strong className="text-slate-200">{report.controleurName}</strong></span>
                         <span>•</span>
-                        <span className="font-mono">{formatDateTime(report.reportedAt)}</span>
+                        <span className="font-mono text-slate-450">{formatDateTime(report.reportedAt)}</span>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -317,9 +331,19 @@ export const FraudManagementModal: React.FC<Props> = ({
           </div>
 
           {/* COLONNE DROITE : DOSSIER D'ARBITRAGE ADMINISTRATIF */}
-          <div className="lg:col-span-5 bg-slate-950/80 overflow-y-auto p-4 flex flex-col justify-between">
+          <div className={`lg:col-span-5 bg-slate-950/40 overflow-y-auto p-5 flex flex-col justify-between ${activeMobilePane === 'detail' ? 'block' : 'hidden lg:block'}`}>
             {selectedFraud ? (
               <div className="space-y-4">
+                {/* Bouton Retour pour Mobile */}
+                <button
+                  type="button"
+                  onClick={() => setActiveMobilePane('list')}
+                  className="flex items-center gap-1.5 text-xs text-rose-400 font-bold mb-4 hover:text-rose-300 lg:hidden px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  <span>Retour à la liste des dossiers</span>
+                </button>
+
                 {/* En-tête du dossier sélectionné */}
                 <div className="border-b border-slate-800 pb-3 flex items-start justify-between">
                   <div>
@@ -513,6 +537,13 @@ export const FraudManagementModal: React.FC<Props> = ({
               </div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveMobilePane('list')}
+                  className="flex items-center gap-1.5 text-xs text-rose-400 font-bold mb-2 hover:text-rose-300 lg:hidden px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 transition"
+                >
+                  <ChevronLeft className="w-4 h-4" /> Retour à la liste
+                </button>
                 <FileCheck className="w-12 h-12 text-slate-700" />
                 <h4 className="text-sm font-bold text-slate-400">Aucun signalement sélectionné</h4>
                 <p className="text-xs max-w-xs leading-relaxed">

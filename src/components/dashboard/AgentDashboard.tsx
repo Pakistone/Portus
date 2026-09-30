@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ShoppingCart,
   Ticket as TicketIcon,
@@ -30,7 +30,6 @@ import type { Ticket } from '../../types';
 import { SaleFormModal } from '../sales/SaleFormModal';
 import { SalesListModal } from '../sales/SalesListModal';
 import { TicketListModal } from '../tickets/TicketListModal';
-import { SalesEngineTestModal } from '../sales/SalesEngineTestModal';
 import { VentesARemettreModal } from '../remises/VentesARemettreModal';
 import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
 
@@ -54,9 +53,23 @@ export const AgentDashboard: React.FC = () => {
   const [salesListOpen, setSalesListOpen] = useState(false);
   const [ticketsListOpen, setTicketsListOpen] = useState(false);
   const [ventesModalOpen, setVentesModalOpen] = useState(false);
-  const [engineTestOpen, setEngineTestOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [selectedTicketForSale, setSelectedTicketForSale] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const handleNotificationClicked = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const notification = customEvent.detail;
+      if (!notification) return;
+
+      const type = notification.type;
+      if (type === 'ASSIGNMENT' || type === 'REMITTANCE' || type === 'SALE' || type === 'FINANCIAL_ALERT') {
+        setVentesModalOpen(true);
+      }
+    };
+    window.addEventListener('portus-notification-clicked', handleNotificationClicked);
+    return () => window.removeEventListener('portus-notification-clicked', handleNotificationClicked);
+  }, []);
 
   // Filtrage des tickets personnels de l'agent
   // RÈGLE STRICTE : L'agent ne voit QUE ses propres tickets !
@@ -255,15 +268,6 @@ export const AgentDashboard: React.FC = () => {
             >
               <Search className="w-3.5 h-3.5 text-amber-400" />
               <span>Rechercher</span>
-            </button>
-            <button
-              onClick={() => setEngineTestOpen(true)}
-              className="text-[11px] font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg border border-slate-700 flex items-center gap-1 transition"
-              title="Tester les 10 scénarios offline-first"
-            >
-              <span>🧪</span>
-              <span className="hidden sm:inline">Banc d'essais</span>
-              <span>Tests (10)</span>
             </button>
             <span className="text-xs text-slate-400">
               {stats.availableCount} ticket(s) disponible(s)
@@ -671,10 +675,6 @@ export const AgentDashboard: React.FC = () => {
       <TicketListModal
         isOpen={ticketsListOpen}
         onClose={() => setTicketsListOpen(false)}
-      />
-      <SalesEngineTestModal
-        isOpen={engineTestOpen}
-        onClose={() => setEngineTestOpen(false)}
       />
       <VentesARemettreModal
         isOpen={ventesModalOpen}

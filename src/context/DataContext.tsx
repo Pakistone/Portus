@@ -41,12 +41,14 @@ import {
   formatDateTime,
   formatDate,
   formatFCFA,
+  formatPlateDisplay,
 } from '../utils/normalization';
 import { getCurrentCoordinates } from '../utils/geolocation';
 import { generateUUID } from '../utils/uuid';
 import { useAuth } from './AuthContext';
 import { useOnlineStatus } from '../components/pwa/usePWAInstall';
 import { SupabaseDataLayer } from '../db/supabaseService';
+import { playIncidentAlertSound } from '../utils/audioAlert';
 import {
   buildTicketQRPayload,
   parseTicketQRPayload,
@@ -127,6 +129,12 @@ interface DataContextType {
   syncOfflineQueue: () => Promise<void>;
   syncAllToSupabase: () => Promise<{ success: boolean; message: string; count: number }>;
 
+  // Alertes Realtime Sécurité Routière (Contrôleurs & Supervision)
+  latestRealtimeIncident: FraudReport | null;
+  dismissLatestIncident: () => void;
+  isRealtimeConnected: boolean;
+  simulateIncidentForTesting: (plateNumber?: string) => Promise<void>;
+
   // Actions ADMINISTRATEUR
   createUser: (userData: {
     username: string;
@@ -147,12 +155,14 @@ interface DataContextType {
   ) => Promise<User>;
   toggleUserActive: (userId: string) => Promise<void>;
   resetUserPassword: (userId: string, newPasswordRaw: string) => Promise<void>;
+  changeOwnPassword: (newPasswordRaw: string) => Promise<void>;
+  resetApplicationData: () => Promise<void>;
   createCarnet: (params: {
     seriesPrefix?: string;
     size: number;
     startPhysicalNumber?: number;
     assignedResponsableId?: string;
-  }) => Promise<Carnet>;
+  }) => Promise<{ carnet: Carnet; tickets: Ticket[] }>;
   assignCarnetToResponsable: (carnetId: string, responsableId: string) => Promise<Carnet>;
   cancelCarnet: (carnetId: string, reason: string) => Promise<Carnet>;
   updateTicketStatus: (ticketId: string, newStatus: TicketStatus, reason?: string) => Promise<Ticket>;
@@ -256,6 +266,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [alerts, setAlerts] = useState<FinancialAlert[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
 
+  // Alertes Realtime Sécurité Routière
+  const [latestRealtimeIncident, setLatestRealtimeIncident] = useState<FraudReport | null>(null);
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
+
+  const dismissLatestIncident = useCallback(() => {
+    setLatestRealtimeIncident(null);
+  }, []);
+
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [lastSyncedSaleNumber, setLastSyncedSaleNumber] = useState<string | null>(null);
@@ -289,6 +307,46 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       await initializeDatabase();
       const db = await getDB();
 
+      // Synchroniser les données depuis Supabase
+      if (SupabaseDataLayer.isAvailable()) {
+        try {
+          const [remoteProfiles, remoteCarnets, remoteTickets, remoteSales, remoteRemises] = await Promise.all([
+            SupabaseDataLayer.fetchProfiles(),
+            SupabaseDataLayer.fetchCarnets(),
+            SupabaseDataLayer.fetchTickets(),
+            SupabaseDataLayer.fetchSales(),
+            SupabaseDataLayer.fetchRemittances(),
+          ]);
+          if (remoteProfiles && remoteProfiles.length > 0) {
+            for (const p of remoteProfiles) {
+              await db.put('users', p);
+            }
+          }
+          if (remoteCarnets && remoteCarnets.length > 0) {
+            for (const c of remoteCarnets) {
+              await db.put('carnets', c);
+            }
+          }
+          if (remoteTickets && remoteTickets.length > 0) {
+            for (const t of remoteTickets) {
+              await db.put('tickets', t);
+            }
+          }
+          if (remoteSales && remoteSales.length > 0) {
+            for (const s of remoteSales) {
+              await db.put('sales', s);
+            }
+          }
+          if (remoteRemises && remoteRemises.length > 0) {
+            for (const r of remoteRemises) {
+              await db.put('remises', r);
+            }
+          }
+        } catch (syncErr) {
+          console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
+        }
+      }
+
       const [
         allUsers,
         allCarnets,
@@ -318,7 +376,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // - Un responsable ne doit jamais accéder aux données d'un autre secteur
       // - Les journaux d'audit et la gestion système sont réservés à l'admin
       // ====================================================================
-      const activeSessionUserId = sessionStorage.getItem('portus_current_user_id');
+      const activeSessionUserId = sessionStorage.getItem('portus_session_user_id') || sessionStorage.getItem('portus_current_user_id');
       const activeUser = currentUser || allUsers.find((u) => u.id === activeSessionUserId) || null;
 
       let visibleUsers = allUsers;
@@ -412,7 +470,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch (err) {
       console.error('Erreur chargement données', err);
     }
-  }, []);
+  }, [currentUser, ticketPrice]);
 
   // Calcul dynamique des alertes financières (10, 15, 20... tickets sans remise)
   const calculateFinancialAlerts = (
@@ -709,17 +767,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         syncedCount++;
       }
 
-      // 2. Carnets
-      for (const c of allCarnets) {
-        await SupabaseDataLayer.insertCarnet(c);
-        syncedCount++;
-      }
-
-      // 3. Tickets par lots de 100
-      for (let i = 0; i < allTickets.length; i += 100) {
-        const batch = allTickets.slice(i, i + 100);
-        await SupabaseDataLayer.insertTicketsBatch(batch);
-        syncedCount += batch.length;
+      // 2. Carnets et Tickets vers Supabase Cloud
+      if (allCarnets.length > 0 || allTickets.length > 0) {
+        const carnetRes = await SupabaseDataLayer.syncCarnetsBatch(allCarnets, allTickets);
+        syncedCount += (carnetRes.syncedCarnets + carnetRes.syncedTickets);
       }
 
       // 4. Ventes (Idempotentes)
@@ -755,6 +806,118 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       syncOfflineQueue();
     }
   }, [isOnline, syncOfflineQueue]);
+
+  // =========================================================================
+  // ABONNEMENT SUPABASE REALTIME : INCIDENTS DE SÉCURITÉ ROUTIÈRE EN DIRECT
+  // Notifie instantanément les Contrôleurs lors d'un nouveau signalement
+  // =========================================================================
+  useEffect(() => {
+    if (!currentUser || !isOnline || !SupabaseDataLayer.isAvailable()) {
+      setIsRealtimeConnected(false);
+      return;
+    }
+
+    setIsRealtimeConnected(true);
+
+    const unsubscribe = SupabaseDataLayer.subscribeToRoadSafetyIncidents(async (incident) => {
+      console.log('[PORTUS Realtime] Réception d’un incident de sécurité en direct:', incident);
+
+      try {
+        const db = await getDB();
+
+        // 1. Idempotence : Ne pas dupliquer si déjà présent
+        const existing = await db.get('fraud_reports', incident.id);
+        if (existing) {
+          return;
+        }
+
+        // 2. Sauvegarde immédiate dans IndexedDB
+        await db.put('fraud_reports', incident);
+
+        // 3. Mise à jour de l'état réactif
+        setFraudReports((prev) => {
+          if (prev.some((f) => f.id === incident.id)) return prev;
+          return [incident, ...prev];
+        });
+
+        // 4. Création de notification prioritaire pour le Contrôleur / Responsable / Admin
+        const notifId = `notif-inc-${incident.id}-${Date.now()}`;
+        const newNotif: NotificationRecord = {
+          id: notifId,
+          recipientId: currentUser.id,
+          title: `🚨 ALERTE INCIDENT : ${formatPlateDisplay(incident.plateNumber)}`,
+          message: `Type: ${incident.typeLabel || incident.reason || 'Incident'} | Agent: ${incident.controleurName || 'Équipe Contrôle'}.${incident.comment ? ` Note: "${incident.comment}"` : ''}`,
+          level: 'CRITICAL',
+          type: 'FRAUD_ALERT',
+          metadata: {
+            incidentId: incident.id,
+            plateNumber: incident.plateNumber,
+            ticketNumber: incident.ticketNumber,
+            gpsLatitude: incident.gpsLatitude,
+            gpsLongitude: incident.gpsLongitude,
+          },
+          createdAt: new Date().toISOString(),
+          isRead: false,
+        };
+
+        if (db.objectStoreNames.contains('notifications')) {
+          await db.put('notifications', newNotif);
+        }
+
+        setNotifications((prev) => [newNotif, ...prev]);
+
+        // 5. Déclenchement de l'alerte sonore et haptique
+        playIncidentAlertSound();
+
+        // 6. Affichage du bandeau d'alerte en direct
+        setLatestRealtimeIncident(incident);
+
+        // 7. Émission d'événements système pour notification globale et vibration
+        window.dispatchEvent(new CustomEvent('portus-road-safety-alert', { detail: incident }));
+        window.dispatchEvent(new CustomEvent('portus-notification-received', { detail: newNotif }));
+      } catch (err) {
+        console.warn('[PORTUS Realtime] Erreur traitement incident:', err);
+      }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+      setIsRealtimeConnected(false);
+    };
+  }, [currentUser, isOnline]);
+
+  const simulateIncidentForTesting = useCallback(
+    async (plateNumber = '1234HZ01') => {
+      const now = new Date();
+      const testIncident: FraudReport = {
+        id: `frd-test-${Date.now()}`,
+        ticketNumber: 'VRD-TEST-99',
+        plateNumber,
+        controleurId: currentUser?.id || 'ctrl-sim',
+        controleurName: currentUser?.fullName || 'Contrôle Corridor Vridi',
+        type: 'TICKET_FALSIFIE',
+        typeLabel: 'Ticket Falsifié / Contrefait',
+        comment: 'Véhicule suspect détecté au poste de contrôle Vridi Terminal (Test Realtime)',
+        photos: [],
+        reportedAt: now.toISOString(),
+        reportedDate: now.toISOString().slice(0, 10),
+        reportedTime: now.toLocaleTimeString('fr-FR', { hour12: false }),
+        gpsLatitude: 5.2647,
+        gpsLongitude: -4.0089,
+        status: 'NOUVEAU',
+        syncStatus: 'SYNCED',
+        syncedAt: now.toISOString(),
+      };
+
+      if (SupabaseDataLayer.isAvailable()) {
+        await SupabaseDataLayer.broadcastIncident(testIncident);
+        await SupabaseDataLayer.insertFraudReport(testIncident);
+      }
+    },
+    [currentUser]
+  );
 
   // Helper pour journaliser l'audit
   const recordAudit = async (
@@ -818,33 +981,36 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error(`Le nom d'utilisateur "${cleanUsername}" est déjà utilisé.`);
     }
 
-    const sector = DEFAULT_SECTORS.find((s) => s.id === userData.sectorId);
+    let newUser: User;
 
-    const newUser: User = {
-      id: `usr-${Date.now()}`,
-      username: cleanUsername,
-      fullName: normalizedFullName,
-      role: userData.role,
-      sectorId: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? userData.sectorId : undefined,
-      sectorName: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? sector?.name : undefined,
-      phone: normalizedPhone,
-      isActive: true,
-      failedAttempts: 0,
-      lockedUntil: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    await db.put('users', newUser);
-
-    // Stocker le mot de passe SANS AUCUNE MODIFICATION (mot de passe brut NON altéré)
-    const passwordsMap = (await db.get('settings', 'user_passwords')) || {};
-    passwordsMap[cleanUsername] = userData.passwordRaw;
-    await db.put('settings', passwordsMap, 'user_passwords');
-
-    // Répliquer vers Supabase si disponible
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.upsertProfile(newUser).catch(() => {});
+      // Création officielle dans Supabase Auth + public.profiles
+      newUser = await SupabaseDataLayer.createAdminUser({
+        username: cleanUsername,
+        fullName: normalizedFullName,
+        role: userData.role,
+        sectorId: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? userData.sectorId : undefined,
+        phone: normalizedPhone,
+        passwordRaw: userData.passwordRaw,
+      });
+      await db.put('users', newUser);
+    } else {
+      const sector = DEFAULT_SECTORS.find((s) => s.id === userData.sectorId);
+      newUser = {
+        id: `usr-${Date.now()}`,
+        username: cleanUsername,
+        fullName: normalizedFullName,
+        role: userData.role,
+        sectorId: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? userData.sectorId : undefined,
+        sectorName: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? sector?.name : undefined,
+        phone: normalizedPhone,
+        isActive: true,
+        failedAttempts: 0,
+        lockedUntil: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await db.put('users', newUser);
     }
 
     await recordAudit(
@@ -901,7 +1067,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await db.put('users', user);
 
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.upsertProfile(user).catch(() => {});
+      SupabaseDataLayer.updateAdminUser(user.id, {
+        fullName: user.fullName,
+        phone: user.phone,
+        sectorId: user.sectorId,
+        role: user.role,
+      }).catch((e) => console.warn('Supabase updateAdminUser warning:', e));
     }
 
     await recordAudit(
@@ -1104,7 +1275,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await db.put('users', user);
 
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.upsertProfile(user).catch(() => {});
+      SupabaseDataLayer.updateAdminUser(user.id, {
+        isActive: willBeActive,
+      }).catch((e) => console.warn('Supabase toggle active warning:', e));
     }
 
     await refreshData();
@@ -1119,11 +1292,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const user = await db.get('users', userId);
     if (!user) throw new Error('Utilisateur introuvable');
 
-    // Mots de passe bruts NON normalisés (aucune altération de casse, accents ou caractères)
-    const passwordsMap = (await db.get('settings', 'user_passwords')) || {};
-    passwordsMap[user.username] = newPasswordRaw;
-    await db.put('settings', passwordsMap, 'user_passwords');
-
     // Débloquer également en cas de tentatives précédentes ou verrouillage 15 min
     user.failedAttempts = 0;
     user.lockedUntil = null;
@@ -1131,7 +1299,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await db.put('users', user);
 
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.upsertProfile(user).catch(() => {});
+      await SupabaseDataLayer.resetAdminUserPassword(userId, newPasswordRaw);
     }
 
     await recordAudit(
@@ -1144,12 +1312,98 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await refreshData();
   };
 
+  const changeOwnPassword = async (newPasswordRaw: string): Promise<void> => {
+    if (!currentUser) {
+      throw new Error('Vous devez être connecté pour changer votre mot de passe.');
+    }
+
+    const db = await getDB();
+    const user = await db.get('users', currentUser.id);
+    if (!user) throw new Error('Utilisateur introuvable');
+
+    user.failedAttempts = 0;
+    user.lockedUntil = null;
+    user.updatedAt = new Date().toISOString();
+    await db.put('users', user);
+
+    if (SupabaseDataLayer.isAvailable()) {
+      await SupabaseDataLayer.resetAdminUserPassword(currentUser.id, newPasswordRaw);
+    }
+
+    await recordAudit(
+      'PASSWORD_CHANGED',
+      'User',
+      user.id,
+      `Changement de mot de passe par l'utilisateur lui-même : ${user.fullName} (${user.username})`
+    );
+
+    await refreshData();
+  };
+
+  const resetApplicationData = async (): Promise<void> => {
+    if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
+      throw new Error('Seul l’administrateur est autorisé à réinitialiser l’application.');
+    }
+
+    const db = await getDB();
+    
+    const stores = [
+      'carnets',
+      'tickets',
+      'sales',
+      'controls',
+      'fraud_reports',
+      'remises',
+      'expenses',
+      'audit_logs',
+      'ticket_assignments',
+      'notifications',
+      'login_attempts',
+    ];
+    
+    const tx = db.transaction(stores as any, 'readwrite');
+    for (const store of stores) {
+      if (db.objectStoreNames.contains(store as any)) {
+        await tx.objectStore(store as any).clear();
+      }
+    }
+    await tx.done;
+
+    await db.put('settings', false, 'is_initialized');
+
+    if (SupabaseDataLayer.isAvailable()) {
+      try {
+        const supabase = (await import('../db/supabaseClient')).getSupabase();
+        if (supabase) {
+          await supabase.from('controls').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('fraud_reports').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('remittance_adjustments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('ticket_assignments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('tickets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('carnets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          await supabase.from('login_attempts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        }
+      } catch (err) {
+        console.warn('Erreur lors de la purge distante Supabase (Triggers ou RLS) :', err);
+      }
+    }
+
+    await recordAudit(
+      'DATABASE_RESET',
+      'System',
+      'all',
+      `Réinitialisation complète de l'application et de la base de données par l'administrateur.`
+    );
+  };
+
   const createCarnet = async (params: {
     seriesPrefix?: string;
     size: number;
     startPhysicalNumber?: number;
     assignedResponsableId?: string;
-  }): Promise<Carnet> => {
+  }): Promise<{ carnet: Carnet; tickets: Ticket[] }> => {
     // 1. RÈGLE MÉTIER : Seul ADMINISTRATEUR peut générer un carnet
     if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
       throw new Error('Seul l’administrateur est autorisé à générer un carnet.');
@@ -1301,14 +1555,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       );
     }
 
-    // Réplication Supabase
+    // Réplication autoritaire Supabase Cloud
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.insertCarnet(carnet).catch(() => {});
-      SupabaseDataLayer.insertTicketsBatch(createdTickets).catch(() => {});
+      await SupabaseDataLayer.insertCarnet(carnet, createdTickets).catch((err) => {
+        console.warn('Erreur insertion carnet Supabase:', err);
+      });
     }
 
     await refreshData();
-    return carnet;
+    return { carnet, tickets: createdTickets };
   };
 
   /**
@@ -2367,12 +2622,33 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await db.put('sales', sale);
 
-    // Si en ligne, réplication idempotente immédiate vers Supabase PostgreSQL
+    // Si en ligne, réplication atomique et sécurisée via la RPC PostgreSQL
     if (isOnline && SupabaseDataLayer.isAvailable()) {
       try {
-        await SupabaseDataLayer.insertSaleIdempotent(sale);
-      } catch (sbErr) {
-        console.warn('Synchro directe Supabase différée:', sbErr);
+        const secureSale = await SupabaseDataLayer.sellTicketSecureRPC({
+          ticketId: ticket.id,
+          plateNumber: cleanPlate,
+          driverPhone: cleanPhone,
+          syncIdempotencyKey: saleId,
+          latitude: gps.latitude ?? undefined,
+          longitude: gps.longitude ?? undefined,
+          accuracy: gps.accuracy ?? undefined,
+          soldAt: originalSoldAt,
+        });
+        if (secureSale && secureSale.sale_id) {
+          sale.id = secureSale.sale_id;
+          sale.syncStatus = 'SYNCED';
+        }
+      } catch (sbErr: any) {
+        if (sbErr.message && sbErr.message.includes('déjà été vendu')) {
+          throw sbErr;
+        }
+        console.warn('Synchro directe Supabase RPC différée, repli sur insertion idempotente:', sbErr);
+        try {
+          await SupabaseDataLayer.insertSaleIdempotent(sale);
+        } catch {
+          // Reste en local pour synchronisation différée
+        }
       }
     }
 
@@ -2454,18 +2730,50 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     let foundTicket: Ticket | null = null;
     let verifiedVia: 'SERVER' | 'LOCAL_CACHE' = 'LOCAL_CACHE';
 
-    // 1. Essai de vérification serveur si en ligne
+    // 1. Essai de vérification serveur via RPC sécurisée (HMAC-SHA256 autoritaire)
     if (isOnline && SupabaseDataLayer.isAvailable()) {
       try {
-        const serverTicket = await SupabaseDataLayer.fetchTicketForVerification(
-          targetTicketNumber || targetTicketId || identifierRaw
-        );
-        if (serverTicket) {
-          foundTicket = serverTicket;
-          verifiedVia = 'SERVER';
-          // Mettre à jour le cache local immédiatement
-          const db = await getDB();
-          await db.put('tickets', serverTicket);
+        const secureResult = await SupabaseDataLayer.verifyTicketSecureRPC({
+          identifier: targetTicketNumber || targetTicketId || identifierRaw,
+          scannedToken: parsedQR?.sig || parsedQR?.tok,
+        });
+
+        if (secureResult) {
+          if (!secureResult.valid && (secureResult.status === 'FORGED_SIGNATURE' || secureResult.status === 'FORGED_TOKEN')) {
+            return {
+              status: 'INVALID_UNKNOWN',
+              bannerTitle: '🚨 FALSIFICATION DÉTECTÉE — SIGNATURE NON CONFORME',
+              ticket: null,
+              agentName: secureResult.agent_name || null,
+              agentPhone: secureResult.agent_phone || null,
+              verifiedVia: 'SERVER',
+              message: secureResult.message || 'Signature cryptographique non authentique. Faux ticket détecté !',
+              isRepeatedControl: false,
+              previousControlCount: secureResult.control_count || 0,
+            };
+          }
+
+          if (secureResult.ticket_id) {
+            const serverTicket = await SupabaseDataLayer.fetchTicketForVerification(
+              secureResult.ticket_number || targetTicketNumber || targetTicketId || identifierRaw
+            );
+            if (serverTicket) {
+              foundTicket = serverTicket;
+              verifiedVia = 'SERVER';
+              const db = await getDB();
+              await db.put('tickets', serverTicket);
+            }
+          }
+        } else {
+          const serverTicket = await SupabaseDataLayer.fetchTicketForVerification(
+            targetTicketNumber || targetTicketId || identifierRaw
+          );
+          if (serverTicket) {
+            foundTicket = serverTicket;
+            verifiedVia = 'SERVER';
+            const db = await getDB();
+            await db.put('tickets', serverTicket);
+          }
         }
       } catch (err) {
         console.warn('Erreur vérification serveur Supabase, repli sur le cache local:', err);
@@ -2710,14 +3018,28 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Sauvegarde locale IndexedDB
     await db.put('controls', control);
 
-    // Envoi immédiat au serveur Supabase si en ligne
+    // Envoi immédiat au serveur Supabase si en ligne via la RPC officielle sécurisée
     if (isOnline && SupabaseDataLayer.isAvailable()) {
       try {
-        await SupabaseDataLayer.insertControl(control);
+        const secureControl = await SupabaseDataLayer.recordControlSecureRPC({
+          identifier: cleanNum,
+          plateNumber: cleanPlate,
+          location: 'Vridi',
+          notes: validationMessage,
+        });
+        if (secureControl) {
+          control.isValid = secureControl.valid;
+          if (secureControl.control_id) control.id = secureControl.control_id;
+          control.syncStatus = 'SYNCED';
+        }
       } catch (err) {
-        console.warn('Erreur envoi direct contrôle Supabase, bascule en file d’attente:', err);
-        control.syncStatus = 'PENDING_SYNC';
-        await db.put('controls', control);
+        console.warn('Erreur envoi direct contrôle Supabase via RPC, bascule sur insertion/file:', err);
+        try {
+          await SupabaseDataLayer.insertControl(control);
+        } catch {
+          control.syncStatus = 'PENDING_SYNC';
+          await db.put('controls', control);
+        }
       }
     }
 
@@ -2993,10 +3315,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         syncOfflineQueue,
         markNotificationAsRead,
         markAllNotificationsAsRead,
+        latestRealtimeIncident,
+        dismissLatestIncident,
+        isRealtimeConnected,
+        simulateIncidentForTesting,
         createUser,
         updateUser,
         toggleUserActive,
         resetUserPassword,
+        changeOwnPassword,
+        resetApplicationData,
         createCarnet,
         assignCarnetToResponsable,
         cancelCarnet,

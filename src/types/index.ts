@@ -338,6 +338,7 @@ export type AuditAction =
   | 'EXPENSE_CANCELLED'
   | 'EXPENSE_SYNCED'
   | 'DATABASE_EXPORTED'
+  | 'DATABASE_RESET'
   | 'CONFIG_UPDATE';
 
 export interface AuditLog {

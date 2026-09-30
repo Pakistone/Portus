@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   UserPlus,
@@ -30,9 +30,16 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     updateUser,
     toggleUserActive,
     resetUserPassword,
+    refreshData,
   } = useData();
 
   const [activeTab, setActiveTab] = useState<'LIST' | 'CREATE'>('LIST');
+
+  useEffect(() => {
+    if (isOpen) {
+      refreshData();
+    }
+  }, [isOpen, refreshData]);
 
   // Formulaire création
   const [username, setUsername] = useState('');
@@ -59,8 +66,6 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,8 +231,23 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     return { unsoldTickets: 0, carnets: 0 };
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-xs">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-xs"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl text-slate-100 max-h-[92vh] flex flex-col">
         {/* En-tête */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">

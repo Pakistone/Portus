@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -19,6 +20,7 @@ import {
   formatPlateDisplay,
   formatDateTime,
 } from '../../utils/normalization';
+import { CEDEAO_COUNTRIES, generateWhatsAppReceiptUrl } from '../../utils/cedeao';
 import type { Ticket, Sale } from '../../types';
 
 interface Props {
@@ -37,6 +39,7 @@ export const SaleFormModal: React.FC<Props> = ({
   const { currentUser } = useAuth();
   const {
     tickets,
+    sales,
     sellTicket,
     checkDuplicatePlate,
     getRecentPlates,
@@ -45,6 +48,7 @@ export const SaleFormModal: React.FC<Props> = ({
 
   const [selectedTicketId, setSelectedTicketId] = useState(defaultTicketId || '');
   const [plateInput, setPlateInput] = useState('');
+  const [selectedDialCode, setSelectedDialCode] = useState('+225');
   const [phoneInput, setPhoneInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +75,24 @@ export const SaleFormModal: React.FC<Props> = ({
     }
   }, [defaultTicketId, availableTickets, selectedTicketId]);
 
+  // Auto-remplissage du téléphone du chauffeur si le camion a déjà été enregistré dans les ventes passées
+  useEffect(() => {
+    const cleanCurrent = normalizePlate(plateInput);
+    if (cleanCurrent.length >= 3) {
+      const foundSale = sales.find((s) => normalizePlate(s.plateNumber) === cleanCurrent && s.driverPhone);
+      if (foundSale && foundSale.driverPhone && !phoneInput) {
+        const existingPhone = foundSale.driverPhone.trim();
+        const matchedCountry = CEDEAO_COUNTRIES.find((c) => existingPhone.startsWith(c.dialCode));
+        if (matchedCountry) {
+          setSelectedDialCode(matchedCountry.dialCode);
+          setPhoneInput(existingPhone.slice(matchedCountry.dialCode.length).trim());
+        } else {
+          setPhoneInput(existingPhone);
+        }
+      }
+    }
+  }, [plateInput, sales, phoneInput]);
+
   if (!isOpen) return null;
 
   const recentPlates = getRecentPlates();
@@ -91,17 +113,15 @@ export const SaleFormModal: React.FC<Props> = ({
       return;
     }
 
-    // RÈGLE MÉTIER CRITIQUE : Vérifier si l'immatriculation possède un ticket actif vendu depuis < 7 jours
     const check = checkDuplicatePlate(cleanPlate);
     if (check.hasActiveTicket && check.activeTicket) {
       setDuplicateWarning({
         oldTicket: check.activeTicket,
         daysRemaining: check.daysRemaining,
       });
-      return; // Suspend pour confirmation explicite obligatoire
+      return;
     }
 
-    // Pas de doublon récent : exécuter directement
     executeSale();
   };
 
@@ -109,10 +129,17 @@ export const SaleFormModal: React.FC<Props> = ({
     setLoading(true);
     setError(null);
     try {
+      const cleanPhone = phoneInput.trim();
+      const finalDriverPhone = cleanPhone
+        ? cleanPhone.startsWith('+')
+          ? cleanPhone
+          : `${selectedDialCode} ${cleanPhone}`
+        : undefined;
+
       const sale = await sellTicket({
         ticketId: selectedTicketId,
         plateNumber: plateInput,
-        driverPhone: phoneInput || undefined,
+        driverPhone: finalDriverPhone,
         overrideOldTicketId,
       });
 
@@ -150,111 +177,67 @@ export const SaleFormModal: React.FC<Props> = ({
               <ShoppingCart className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Vente de Ticket sur le Terrain</h3>
-              <p className="text-[11px] text-slate-400">
-                Tarif fixe réglementaire : <strong className="text-white">{formatFCFA(TICKET_PRICE_FCFA)}</strong>
-              </p>
+              <h3 className="text-sm font-bold text-white">Guichet de Vente Poids Lourd</h3>
+              <p className="text-[11px] text-slate-400">Tarif officiel : {formatFCFA(TICKET_PRICE_FCFA)}</p>
             </div>
           </div>
           <button
             onClick={handleResetAndClose}
-            className="rounded-lg p-1 text-slate-400 hover:text-white"
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {error && (
-          <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
-            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-            <span>{error}</span>
+          <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+            {error}
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* ÉCRAN DE CONFIRMATION : TICKET DÉJÀ VENDU DEPUIS MOINS DE 7 JOURS         */}
-        {/* ========================================================================= */}
-        {duplicateWarning ? (
-          <div className="my-auto space-y-4 py-3">
-            <div className="rounded-2xl border border-amber-500/50 bg-amber-500/15 p-4 space-y-3">
-              <div className="flex items-start gap-2.5 text-amber-300 font-black text-sm">
-                <AlertTriangle className="w-6 h-6 shrink-0 text-amber-400 mt-0.5 animate-pulse" />
-                <span className="text-base tracking-wide">
-                  ⚠️ CETTE IMMATRICULATION POSSÈDE DÉJÀ UN TICKET ACTIF RÉCENT.
-                </span>
-              </div>
-              <div className="rounded-xl bg-slate-950/80 p-3.5 text-xs text-slate-200 space-y-2 border border-amber-500/30">
-                <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
-                  <span className="text-slate-400">Immatriculation :</span>
-                  <span className="font-mono font-bold text-white text-sm">
-                    {formatPlateDisplay(plateInput)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
-                  <span className="text-slate-400">Date de l'ancien ticket :</span>
-                  <span className="font-mono font-bold text-amber-300">
-                    {formatDateTime(duplicateWarning.oldTicket.soldAt)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
-                  <span className="text-slate-400">Numéro ancien ticket :</span>
-                  <span className="font-mono font-bold text-white">
-                    {duplicateWarning.oldTicket.ticketNumber}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Validité restante :</span>
-                  <span className="font-bold text-amber-400">
-                    {duplicateWarning.daysRemaining} jour(s) restant(s)
-                  </span>
-                </div>
-              </div>
-              <p className="text-xs text-amber-200/90 leading-relaxed font-medium">
-                La vente doit continuer si vous confirmez. Si vous confirmez, <strong>l'ancien ticket deviendra immédiatement inactif</strong> et le nouveau ticket prendra le relais.
-              </p>
+        {/* Modal d'avertissement doublon actif < 7 jours */}
+        {duplicateWarning && (
+          <div className="mt-4 rounded-2xl border border-amber-500/50 bg-amber-500/10 p-4 space-y-3 animate-fadeIn">
+            <div className="flex items-center gap-2 text-amber-300 font-bold text-sm">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+              <span>ALERTE DOUBLON : TICKET ACTIF DÉJÀ EXISTANT</span>
             </div>
-
-            <div className="flex gap-2.5 pt-2">
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Le camion <strong>{formatPlateDisplay(plateInput)}</strong> possède déjà un ticket actif n°{' '}
+              <strong className="text-white">{duplicateWarning.oldTicket.ticketNumber}</strong> émis il y a{' '}
+              {7 - duplicateWarning.daysRemaining} jour(s) (encore valide {duplicateWarning.daysRemaining} jour(s)).
+            </p>
+            <div className="flex gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setDuplicateWarning(null)}
-                className="flex-1 rounded-xl bg-slate-800 py-3.5 text-xs font-bold text-slate-300 hover:bg-slate-700 transition"
+                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition"
               >
                 Annuler
               </button>
               <button
                 type="button"
-                disabled={loading}
                 onClick={() => executeSale(duplicateWarning.oldTicket.id)}
-                className="flex-1 rounded-xl bg-amber-600 py-3.5 text-xs font-black text-white hover:bg-amber-500 transition shadow-lg shadow-amber-950 disabled:opacity-50"
+                className="flex-1 rounded-xl bg-amber-600 py-2.5 text-xs font-bold text-white hover:bg-amber-500 transition shadow-md"
               >
-                {loading ? 'Validation en cours...' : 'Confirmer et continuer la vente'}
+                Forcer & Remplacer
               </button>
             </div>
           </div>
-        ) : completedSale ? (
-          /* ========================================================================= */
-          /* ÉCRAN DE SUCCÈS VENTE                                                     */
-          /* ========================================================================= */
-          <div className="my-auto space-y-4 py-4 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400">
-              <CheckCircle2 className="w-8 h-8" />
+        )}
+
+        {/* Écran de succès de vente */}
+        {completedSale && !duplicateWarning ? (
+          <div className="mt-4 space-y-4 text-center py-2 animate-fadeIn">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              <CheckCircle2 className="w-9 h-9" />
             </div>
 
             <div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mb-2">
-                {completedSale.syncStatus === 'SYNCED' ? (
-                  <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-full">
-                    🟢 VENTE SYNCHRONISÉE
-                  </span>
-                ) : (
-                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-3 py-1 rounded-full">
-                    🟠 VENTE ENREGISTRÉE — SYNCHRONISATION EN ATTENTE
-                  </span>
-                )}
-              </div>
-
-              <h4 className="text-xl font-black text-white">{completedSale.ticketNumber}</h4>
+              <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                Vente Encaissée avec Succès
+              </span>
+              <h4 className="text-xl font-black text-white mt-1">{completedSale.ticketNumber}</h4>
               <p className="text-sm font-bold text-emerald-400 mt-1">
                 Véhicule : {formatPlateDisplay(completedSale.plateNumber)}
               </p>
@@ -262,32 +245,16 @@ export const SaleFormModal: React.FC<Props> = ({
 
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5 text-xs text-slate-300 text-left space-y-2 font-mono">
               <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Identifiant Vente (UUID) :</span>
-                <span className="font-mono text-[11px] text-slate-300 truncate max-w-[200px]" title={completedSale.id}>
-                  {completedSale.id}
-                </span>
-              </div>
-              <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Montant :</span>
+                <span className="text-slate-500 font-sans">Montant réglé :</span>
                 <span className="font-bold text-white font-sans">{formatFCFA(completedSale.price)}</span>
               </div>
               <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Date originale (immuable) :</span>
+                <span className="text-slate-500 font-sans">Date et Heure :</span>
                 <span className="text-emerald-300">{formatDateTime(completedSale.soldAt)}</span>
               </div>
               <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Localisation GPS terrain :</span>
-                <span className={completedSale.gpsStatus === 'AVAILABLE' ? 'text-emerald-400' : 'text-amber-400'}>
-                  {completedSale.gpsStatus === 'AVAILABLE'
-                    ? `${completedSale.gpsLatitude?.toFixed(5)}, ${completedSale.gpsLongitude?.toFixed(5)} (±${completedSale.gpsAccuracy}m)`
-                    : 'GPS_UNAVAILABLE (Non bloquant)'}
-                </span>
-              </div>
-              <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">État synchronisation :</span>
-                <span className={completedSale.syncStatus === 'SYNCED' ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
-                  {completedSale.syncStatus === 'SYNCED' ? '🟢 SYNCED' : '🟠 PENDING_SYNC (IndexedDB)'}
-                </span>
+                <span className="text-slate-500 font-sans">Agent :</span>
+                <span className="text-white">{completedSale.agentName}</span>
               </div>
               {completedSale.driverPhone && (
                 <div className="flex justify-between items-center">
@@ -297,20 +264,41 @@ export const SaleFormModal: React.FC<Props> = ({
               )}
             </div>
 
+            {/* Bouton Partage WhatsApp Reçu Électronique */}
+            {completedSale.driverPhone && (
+              <div>
+                <a
+                  href={generateWhatsAppReceiptUrl({
+                    dialCode: '',
+                    phoneNumber: completedSale.driverPhone,
+                    ticketNumber: completedSale.ticketNumber,
+                    plateNumber: completedSale.plateNumber,
+                    amount: completedSale.price,
+                    agentName: completedSale.agentName,
+                    dateStr: formatDateTime(completedSale.soldAt),
+                  })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full rounded-xl bg-emerald-700 py-3 text-xs font-bold text-white hover:bg-emerald-600 shadow-lg shadow-emerald-950 transition"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Partager Reçu WhatsApp Chauffeur</span>
+                </a>
+              </div>
+            )}
+
             <div className="pt-2">
               <button
                 type="button"
                 onClick={handleResetAndClose}
-                className="w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition"
+                className="w-full rounded-xl bg-slate-800 py-3 text-xs font-bold text-slate-200 hover:bg-slate-700 transition"
               >
                 Terminer / Vente suivante
               </button>
             </div>
           </div>
         ) : (
-          /* ========================================================================= */
-          /* FORMULAIRE DE VENTE STANDARD                                              */
-          /* ========================================================================= */
+          /* Formulaire standard */
           <form onSubmit={handlePrevalidate} className="mt-4 space-y-4 flex-1 flex flex-col justify-between">
             <div className="space-y-4">
               {/* Choix du ticket dans le lot de l'agent */}
@@ -338,15 +326,13 @@ export const SaleFormModal: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Saisie obligatoire : Plaque d'immatriculation */}
+              {/* Plaque d'immatriculation avec auto-remplissage auto en arrière-plan */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-semibold text-slate-300">
                     Plaque d’immatriculation <span className="text-rose-400">*</span>
                   </label>
-                  <span className="text-[11px] text-slate-400 font-mono">
-                    Normalisation auto (ex: AB1234CD)
-                  </span>
+                  <span className="text-[11px] text-slate-400 font-mono">Auto-complétion active</span>
                 </div>
                 <input
                   id="input-sale-plate"
@@ -359,21 +345,15 @@ export const SaleFormModal: React.FC<Props> = ({
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 py-3 px-3 text-base font-mono font-bold tracking-wider text-white uppercase focus:border-emerald-500 focus:outline-hidden"
                 />
 
-                {/* Avertissement immédiat en cours de saisie si ticket actif < 7 jours */}
                 {liveDuplicateCheck?.hasActiveTicket && liveDuplicateCheck.activeTicket && (
                   <div className="mt-2.5 rounded-xl border border-amber-500/50 bg-amber-500/15 p-3 text-xs text-amber-200 space-y-1 animate-fadeIn">
                     <div className="flex items-center gap-1.5 font-bold text-amber-300">
                       <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                       <span>⚠️ CETTE IMMATRICULATION POSSÈDE DÉJÀ UN TICKET ACTIF RÉCENT.</span>
                     </div>
-                    <p className="text-[11px] text-amber-200/90 pl-5">
-                      Ancien ticket n° <strong>{liveDuplicateCheck.activeTicket.ticketNumber}</strong> vendu le{' '}
-                      <strong>{formatDateTime(liveDuplicateCheck.activeTicket.soldAt)}</strong>. Une confirmation explicite sera exigée lors de la validation.
-                    </p>
                   </div>
                 )}
 
-                {/* Suggestions d'immatriculations récentes */}
                 {recentPlates.length > 0 && (
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     <span className="text-[10px] text-slate-500 flex items-center gap-1">
@@ -393,34 +373,44 @@ export const SaleFormModal: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Téléphone facultatif du chauffeur */}
+              {/* Téléphone du Chauffeur avec sélecteur d'indicatif CEDEAO */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Téléphone du Chauffeur (Facultatif)
+                  Téléphone du Chauffeur & Indicatif CEDEAO
                 </label>
-                <div className="relative">
-                  <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                  <input
-                    type="tel"
-                    value={phoneInput}
-                    onChange={(e) => setPhoneInput(normalizePhone(e.target.value))}
-                    placeholder="Chiffres uniquement (ex: 0701020304)"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 pl-9 pr-3 text-sm font-mono text-white focus:border-emerald-500 focus:outline-hidden"
-                  />
+                <div className="flex gap-2">
+                  <select
+                    value={selectedDialCode}
+                    onChange={(e) => setSelectedDialCode(e.target.value)}
+                    className="w-32 rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-2 text-xs font-mono text-white focus:border-emerald-500"
+                  >
+                    {CEDEAO_COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.dialCode}>
+                        {c.flag} {c.dialCode} ({c.code})
+                      </option>
+                    ))}
+                  </select>
+                  <div className="relative flex-1">
+                    <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
+                    <input
+                      type="tel"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(normalizePhone(e.target.value))}
+                      placeholder="0701020304"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 pl-9 pr-3 text-sm font-mono text-white focus:border-emerald-500 focus:outline-hidden"
+                    />
+                  </div>
                 </div>
               </div>
 
-              {/* Indicateurs automatiques terrain */}
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-1.5 text-xs text-slate-400">
                 <div className="flex items-center gap-2 text-slate-300">
                   <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>GPS automatique lors de la validation (ne bloque pas si absent)</span>
+                  <span>GPS automatique lors de la validation</span>
                 </div>
                 <div className="flex items-center gap-2 text-slate-300">
                   <Clock className="w-3.5 h-3.5 text-blue-400" />
-                  <span>
-                    Date originale conservée même en mode hors ligne ({isOnline ? 'En ligne' : 'Hors connexion'})
-                  </span>
+                  <span>Mode 100% hors-ligne avec synchronisation IndexedDB</span>
                 </div>
               </div>
             </div>

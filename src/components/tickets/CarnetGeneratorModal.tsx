@@ -3,7 +3,7 @@ import { X, Layers, Printer, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { CARNET_SIZE_MULTIPLE } from '../../config/constants';
 import { generateCarnetPrintPDF } from '../../utils/pdfGenerator';
-import type { Carnet } from '../../types';
+import type { Carnet, Ticket } from '../../types';
 
 interface Props {
   isOpen: boolean;
@@ -20,6 +20,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdCarnet, setCreatedCarnet] = useState<Carnet | null>(null);
+  const [createdTickets, setCreatedTickets] = useState<Ticket[]>([]);
 
   if (!isOpen) return null;
 
@@ -40,13 +41,14 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
     setLoading(true);
     try {
-      const carnet = await createCarnet({
+      const res = await createCarnet({
         seriesPrefix,
         size: numSize,
         startPhysicalNumber: startPhysicalNumber ? Number(startPhysicalNumber) : 1,
         assignedResponsableId: assignedResponsableId || undefined,
       });
-      setCreatedCarnet(carnet);
+      setCreatedCarnet(res.carnet);
+      setCreatedTickets(res.tickets);
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la création du carnet.');
     } finally {
@@ -56,7 +58,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const handlePrintPDF = async () => {
     if (!createdCarnet) return;
-    const carnetTickets = tickets.filter((t) => t.carnetId === createdCarnet.id);
+    const carnetTickets = createdTickets.length > 0 ? createdTickets : tickets.filter((t) => t.carnetId === createdCarnet.id);
     await generateCarnetPrintPDF(createdCarnet, carnetTickets);
   };
 

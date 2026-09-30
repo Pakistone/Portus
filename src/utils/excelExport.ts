@@ -1,13 +1,13 @@
 /**
  * Module d'export Excel XLSX pour PORTUS — U.J.S.R.V.
- * Utilise la bibliothèque 'xlsx'
+ * Utilise un import dynamique de 'xlsx' pour le code-splitting des performances.
  */
 
-import * as XLSX from 'xlsx';
 import type { Sale, Ticket, Remise, Control, AuditLog } from '../types';
 import { formatDateTime } from './normalization';
 
-export function exportSalesToExcel(sales: Sale[]): void {
+export async function exportSalesToExcel(sales: Sale[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = sales.map((s) => ({
     'ID Vente': s.id,
     'Numéro Ticket': s.ticketNumber,
@@ -30,7 +30,8 @@ export function exportSalesToExcel(sales: Sale[]): void {
   XLSX.writeFile(workbook, `PORTUS_VENTES_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportTicketsToExcel(tickets: Ticket[]): void {
+export async function exportTicketsToExcel(tickets: Ticket[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = tickets.map((t) => ({
     'ID Unique': t.id,
     'Numéro Ticket': t.ticketNumber,
@@ -53,7 +54,8 @@ export function exportTicketsToExcel(tickets: Ticket[]): void {
   XLSX.writeFile(workbook, `PORTUS_TICKETS_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportRemisesToExcel(remises: Remise[]): void {
+export async function exportRemisesToExcel(remises: Remise[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = remises.map((r) => ({
     'Référence': r.reference,
     'Date': r.date,
@@ -73,7 +75,8 @@ export function exportRemisesToExcel(remises: Remise[]): void {
   XLSX.writeFile(workbook, `PORTUS_REMISES_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportVentesARemettreToExcel(sales: Sale[]): void {
+export async function exportVentesARemettreToExcel(sales: Sale[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = sales.map((s) => ({
     'Numéro Ticket': s.ticketNumber,
     'Immatriculation': s.plateNumber,
@@ -90,7 +93,8 @@ export function exportVentesARemettreToExcel(sales: Sale[]): void {
   XLSX.writeFile(workbook, `PORTUS_VENTES_A_REMETTRE_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportControlsToExcel(controls: Control[]): void {
+export async function exportControlsToExcel(controls: Control[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = controls.map((c) => ({
     'ID Contrôle': c.id,
     'Numéro Ticket': c.ticketNumber,
@@ -109,7 +113,8 @@ export function exportControlsToExcel(controls: Control[]): void {
   XLSX.writeFile(workbook, `PORTUS_CONTROLES_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-export function exportAuditToExcel(logs: AuditLog[]): void {
+export async function exportAuditToExcel(logs: AuditLog[]): Promise<void> {
+  const XLSX = await import('xlsx');
   const data = logs.map((l) => ({
     'ID Log': l.id,
     'Date/Heure': formatDateTime(l.timestamp),
@@ -131,16 +136,16 @@ export function exportAuditToExcel(logs: AuditLog[]): void {
 
 export const exportAuditLogsToExcel = exportAuditToExcel;
 
-export function exportFullAuditPackage(data: {
+export async function exportFullAuditPackage(data: {
   tickets: Ticket[];
   sales: Sale[];
   remises: Remise[];
   controls: Control[];
   auditLogs: AuditLog[];
-}): void {
+}): Promise<void> {
+  const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
 
-  // Feuille Ventes
   const salesSheet = XLSX.utils.json_to_sheet(
     data.sales.map((s) => ({
       'ID Vente': s.id,
@@ -156,7 +161,6 @@ export function exportFullAuditPackage(data: {
   );
   XLSX.utils.book_append_sheet(workbook, salesSheet, 'Ventes');
 
-  // Feuille Remises
   const remisesSheet = XLSX.utils.json_to_sheet(
     data.remises.map((r) => ({
       'Référence': r.reference,
@@ -173,7 +177,6 @@ export function exportFullAuditPackage(data: {
   );
   XLSX.utils.book_append_sheet(workbook, remisesSheet, 'Remises');
 
-  // Feuille Tickets
   const ticketsSheet = XLSX.utils.json_to_sheet(
     data.tickets.map((t) => ({
       'Numéro Ticket': t.ticketNumber,
@@ -188,7 +191,6 @@ export function exportFullAuditPackage(data: {
   );
   XLSX.utils.book_append_sheet(workbook, ticketsSheet, 'Tickets');
 
-  // Feuille Contrôles
   const controlsSheet = XLSX.utils.json_to_sheet(
     data.controls.map((c) => ({
       'Ticket': c.ticketNumber,
@@ -201,7 +203,6 @@ export function exportFullAuditPackage(data: {
   );
   XLSX.utils.book_append_sheet(workbook, controlsSheet, 'Contrôles');
 
-  // Feuille Audit
   const auditSheet = XLSX.utils.json_to_sheet(
     data.auditLogs.map((l) => ({
       'Date/Heure': formatDateTime(l.timestamp),
@@ -216,4 +217,3 @@ export function exportFullAuditPackage(data: {
 
   XLSX.writeFile(workbook, `PORTUS_PACKAGE_AUDIT_COMPLET_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
-

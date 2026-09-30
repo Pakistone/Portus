@@ -4,6 +4,7 @@ import { DataProvider } from './context/DataContext';
 import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import { Header } from './components/common/Header';
 import { LoginView } from './components/auth/LoginView';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 // Dashboards par rôle
 import { AdminDashboard } from './components/dashboard/AdminDashboard';
@@ -97,10 +98,13 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <DataProvider>
-        <AppContent />
-      </DataProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <DataProvider>
+          <AppContent />
+        </DataProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
+

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   UserPlus,
   HandCoins,
@@ -32,12 +32,13 @@ import { ControlsListModal } from '../controls/ControlsListModal';
 import { VentesARemettreModal } from '../remises/VentesARemettreModal';
 import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
 import { ExpensesModule } from '../expenses/ExpensesModule';
+import { AgentDirectoryView } from '../agents/AgentDirectoryView';
 
 export const ResponsableDashboard: React.FC = () => {
   const { currentUser } = useAuth();
   const { users, tickets, sales, remises, alerts, fraudReports } = useData();
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'agents' | 'expenses'>('dashboard');
 
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
   const [remiseModalOpen, setRemiseModalOpen] = useState(false);
@@ -49,6 +50,23 @@ export const ResponsableDashboard: React.FC = () => {
   const [salesListOpen, setSalesListOpen] = useState(false);
   const [controlsListOpen, setControlsListOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleNotificationClicked = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const notification = customEvent.detail;
+      if (!notification) return;
+
+      const type = notification.type;
+      if (type === 'ASSIGNMENT') {
+        setAssignmentModalOpen(true);
+      } else if (type === 'REMITTANCE' || type === 'FINANCIAL_ALERT') {
+        setRemiseModalOpen(true);
+      }
+    };
+    window.addEventListener('portus-notification-clicked', handleNotificationClicked);
+    return () => window.removeEventListener('portus-notification-clicked', handleNotificationClicked);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // DONNÉES STRICTEMENT LIMITÉES AU SECTEUR DU RESPONSABLE
@@ -161,8 +179,8 @@ export const ResponsableDashboard: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 space-y-5">
-      {/* Navigation Onglets (Tableau de bord / Dépenses) */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+      {/* Navigation Onglets */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
         <button
           onClick={() => setActiveTab('dashboard')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
@@ -173,6 +191,17 @@ export const ResponsableDashboard: React.FC = () => {
         >
           <Users className="w-4 h-4" />
           <span>Tableau de Bord</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('agents')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+            activeTab === 'agents'
+              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Suivi de mes Agents</span>
         </button>
         <button
           onClick={() => setActiveTab('expenses')}
@@ -189,6 +218,8 @@ export const ResponsableDashboard: React.FC = () => {
 
       {activeTab === 'expenses' ? (
         <ExpensesModule />
+      ) : activeTab === 'agents' ? (
+        <AgentDirectoryView viewMode="RESPONSABLE" />
       ) : (
         <div className="space-y-5">
       {/* ========================================================================= */}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, User, AlertCircle, Clock, CheckCircle } from 'lucide-react';
+import { ShieldCheck, Lock, User, AlertCircle, Clock, CheckCircle, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ORG_INFO } from '../../config/constants';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
@@ -8,6 +8,7 @@ export const LoginView: React.FC = () => {
   const { login, loginError, sessionNotice, clearSessionNotice, lockoutRemainingSeconds, isLoading } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState(false);
 
@@ -16,14 +17,8 @@ export const LoginView: React.FC = () => {
     if (lockoutRemainingSeconds && lockoutRemainingSeconds > 0) return;
 
     setSubmitting(true);
-    // RÈGLE MÉTIER CRITIQUE : Le mot de passe n'est JAMAIS normalisé ou altéré
     await login(username.trim(), password);
     setSubmitting(false);
-  };
-
-  const handleQuickFill = (u: string, p: string) => {
-    setUsername(u);
-    setPassword(p);
   };
 
   return (
@@ -89,16 +84,18 @@ export const LoginView: React.FC = () => {
 
           {/* Erreur de connexion */}
           {loginError && !lockoutRemainingSeconds && (
-            <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-200">
-              <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-              <span>{loginError}</span>
+            <div className="mb-5 flex flex-col gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-200">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                <span className="flex-1 leading-relaxed">{loginError}</span>
+              </div>
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Nom d’utilisateur
+                Nom d’utilisateur ou e-mail
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500">
@@ -113,7 +110,7 @@ export const LoginView: React.FC = () => {
                   disabled={Boolean(lockoutRemainingSeconds && lockoutRemainingSeconds > 0) || submitting}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="ex: admin, agent_eric, resp_port"
+                  placeholder="ex: ypaki090 ou ypaki090@gmail.com"
                   className="w-full rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
                 />
               </div>
@@ -138,17 +135,25 @@ export const LoginView: React.FC = () => {
                 </div>
                 <input
                   id="input-password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   disabled={Boolean(lockoutRemainingSeconds && lockoutRemainingSeconds > 0) || submitting}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 pl-9 pr-3 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 pl-9 pr-10 text-sm text-white placeholder-slate-500 focus:border-emerald-500 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-white transition cursor-pointer"
+                  title={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
               <p className="mt-1 text-[11px] text-slate-500">
-                Pas de PIN ni de 2FA. Respectez scrupuleusement les majuscules et minuscules.
+                Respectez scrupuleusement les majuscules et minuscules.
               </p>
             </div>
 
@@ -161,47 +166,6 @@ export const LoginView: React.FC = () => {
               {submitting ? 'Vérification...' : 'Se connecter'}
             </button>
           </form>
-
-          {/* Raccourcis de test des rôles */}
-          <div className="mt-6 border-t border-slate-800 pt-4">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
-              Comptes de test préconfigurés :
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('admin', 'admin123')}
-                className="flex flex-col text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 text-slate-300"
-              >
-                <span className="font-bold text-rose-400">1. Administrateur</span>
-                <span className="text-[10px] text-slate-400">admin / admin123</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('resp_port', 'resp123')}
-                className="flex flex-col text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 text-slate-300"
-              >
-                <span className="font-bold text-blue-400">2. Responsable Port</span>
-                <span className="text-[10px] text-slate-400">resp_port / resp123</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('agent_eric', 'agent123')}
-                className="flex flex-col text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 text-slate-300"
-              >
-                <span className="font-bold text-emerald-400">3. Agent Terrain</span>
-                <span className="text-[10px] text-slate-400">agent_eric / agent123</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('controleur_jean', 'ctrl123')}
-                className="flex flex-col text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-slate-700/60 text-slate-300"
-              >
-                <span className="font-bold text-amber-400">4. Contrôleur</span>
-                <span className="text-[10px] text-slate-400">controleur_jean / ctrl123</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Modale d'assistance mot de passe oublié */}

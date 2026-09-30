@@ -49,6 +49,7 @@ export const ExpensesModule: React.FC = () => {
   const [selectedExpenseForAction, setSelectedExpenseForAction] = useState<Expense | null>(null);
   const [actionType, setActionType] = useState<'VALIDATE' | 'REJECT' | 'CANCEL' | 'CORRECT' | 'DETAILS' | null>(null);
   const [actionReason, setActionReason] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
   const [newCorrectAmount, setNewCorrectAmount] = useState('');
   const [receiptModalUrl, setReceiptModalUrl] = useState<string | null>(null);
 
@@ -170,29 +171,30 @@ export const ExpensesModule: React.FC = () => {
 
   const handleExecuteAction = async () => {
     if (!selectedExpenseForAction || !actionType) return;
+    setActionError(null);
     try {
       if (actionType === 'VALIDATE') {
         await validateExpense(selectedExpenseForAction.id);
       } else if (actionType === 'REJECT') {
         if (!actionReason.trim()) {
-          alert('Veuillez saisir un motif de rejet.');
+          setActionError('Veuillez saisir un motif de rejet.');
           return;
         }
         await rejectExpense(selectedExpenseForAction.id, actionReason.trim());
       } else if (actionType === 'CANCEL') {
         if (!actionReason.trim()) {
-          alert("Veuillez saisir un motif d'annulation.");
+          setActionError("Veuillez saisir un motif d'annulation.");
           return;
         }
         await cancelExpense(selectedExpenseForAction.id, actionReason.trim());
       } else if (actionType === 'CORRECT') {
         const newAmt = Number(newCorrectAmount || 0);
         if (isNaN(newAmt) || newAmt <= 0) {
-          alert('Veuillez saisir un nouveau montant valide.');
+          setActionError('Veuillez saisir un nouveau montant valide.');
           return;
         }
         if (!actionReason.trim()) {
-          alert('Veuillez saisir un motif de correction administrative.');
+          setActionError('Veuillez saisir un motif de correction administrative.');
           return;
         }
         await correctExpense(selectedExpenseForAction.id, newAmt, actionReason.trim());
@@ -200,9 +202,10 @@ export const ExpensesModule: React.FC = () => {
       setSelectedExpenseForAction(null);
       setActionType(null);
       setActionReason('');
+      setActionError(null);
       setNewCorrectAmount('');
     } catch (err: any) {
-      alert(err.message || "Erreur lors de l'exécution de l'action.");
+      setActionError(err.message || "Erreur lors de l'exécution de l'action.");
     }
   };
 
@@ -816,6 +819,13 @@ export const ExpensesModule: React.FC = () => {
               <div className="text-white font-bold">{formatFCFA(selectedExpenseForAction.amount)}</div>
               <p className="text-slate-300">{selectedExpenseForAction.description}</p>
             </div>
+
+            {actionError && (
+              <div className="flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{actionError}</span>
+              </div>
+            )}
 
             {actionType === 'VALIDATE' && (
               <p className="text-xs text-slate-300">

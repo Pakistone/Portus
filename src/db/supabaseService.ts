@@ -21,6 +21,40 @@ import type {
   Expense,
 } from '../types';
 
+const DEFAULT_ADMIN_UUID = 'db2145a8-bdd8-492c-a2b4-f20126881b30';
+
+function sanitizeUuid(val?: string | null, defaultUuid = DEFAULT_ADMIN_UUID): string {
+  if (!val) return defaultUuid;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(val)) return val;
+
+  const sectorMap: Record<string, string> = {
+    'sec-vridi-port': '3a87f0f7-6141-45c2-a8c8-028d3b6cd734',
+    'sec-vridi-canal': 'e5dc1193-2741-4865-8379-4e8ab031cdfe',
+    'sec-vridi-zi': '5ebd07c5-ff87-4d8c-a535-43d10580b506',
+    'sec-vridi-sir': '6c8a2f18-ff61-416f-a1cf-a05edfdc8862',
+  };
+  if (sectorMap[val]) return sectorMap[val];
+
+  return defaultUuid;
+}
+
+function sanitizeUuidOrNull(val?: string | null): string | null {
+  if (!val) return null;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(val)) return val;
+
+  const sectorMap: Record<string, string> = {
+    'sec-vridi-port': '3a87f0f7-6141-45c2-a8c8-028d3b6cd734',
+    'sec-vridi-canal': 'e5dc1193-2741-4865-8379-4e8ab031cdfe',
+    'sec-vridi-zi': '5ebd07c5-ff87-4d8c-a535-43d10580b506',
+    'sec-vridi-sir': '6c8a2f18-ff61-416f-a1cf-a05edfdc8862',
+  };
+  if (sectorMap[val]) return sectorMap[val];
+
+  return null;
+}
+
 export interface SyncQueueItem {
   id?: string;
   clientMutationId: string;
@@ -75,6 +109,37 @@ export const SupabaseDataLayer = {
     const supabase = getSupabase();
     if (!supabase) return [];
 
+    // Tenter d'abord l'API backend admin si authentifié
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        const resp = await fetch('/api/admin/users', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (Array.isArray(json.users) && json.users.length > 0) {
+            return json.users.map((row: any) => ({
+              id: row.id,
+              username: row.username,
+              fullName: row.full_name,
+              role: row.role,
+              sectorId: row.sector_id,
+              sectorName: row.sector?.name || row.sectors?.name,
+              phone: row.phone,
+              isActive: row.is_active,
+              failedAttempts: row.failed_attempts || 0,
+              lockedUntil: row.locked_until,
+              createdAt: row.created_at,
+              updatedAt: row.updated_at,
+            }));
+          }
+        }
+      }
+    } catch {}
+
     const { data, error } = await supabase
       .from('profiles')
       .select('*, sectors(name)')
@@ -99,6 +164,140 @@ export const SupabaseDataLayer = {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  },
+
+  /**
+   * Crée un utilisateur officiel dans Supabase Auth et public.profiles
+   */
+  async createAdminUser(userData: {
+    username: string;
+    fullName: string;
+    role: string;
+    sectorId?: string;
+    phone?: string;
+    passwordRaw: string;
+  }): Promise<User> {
+    const supabase = getSupabase();
+    if (!supabase) {
+      throw new Error('Supabase n’est pas configuré.');
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('Session administrateur expirée. Veuillez vous reconnecter.');
+    }
+
+    const res = await fetch('/api/admin/users', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(userData),
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json.error || 'Erreur lors de la création de l’utilisateur dans Supabase.');
+    }
+
+    const row = json.user;
+    return {
+      id: row.id,
+      username: row.username,
+      fullName: row.full_name,
+      role: row.role,
+      sectorId: row.sector_id,
+      sectorName: row.sector?.name,
+      phone: row.phone,
+      isActive: row.is_active,
+      failedAttempts: row.failed_attempts || 0,
+      lockedUntil: row.locked_until,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  },
+
+  /**
+   * Modifie un utilisateur dans Supabase profiles
+   */
+  async updateAdminUser(userId: string, updates: {
+    fullName?: string;
+    phone?: string;
+    sectorId?: string;
+    role?: string;
+    isActive?: boolean;
+  }): Promise<User> {
+    const supabase = getSupabase();
+    if (!supabase) {
+      throw new Error('Supabase n’est pas configuré.');
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('Session administrateur expirée.');
+    }
+
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(updates),
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json.error || 'Erreur lors de la mise à jour de l’utilisateur.');
+    }
+
+    const row = json.user;
+    return {
+      id: row.id,
+      username: row.username,
+      fullName: row.full_name,
+      role: row.role,
+      sectorId: row.sector_id,
+      sectorName: row.sector?.name,
+      phone: row.phone,
+      isActive: row.is_active,
+      failedAttempts: row.failed_attempts || 0,
+      lockedUntil: row.locked_until,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  },
+
+  /**
+   * Réinitialise le mot de passe d'un utilisateur dans Supabase Auth
+   */
+  async resetAdminUserPassword(userId: string, newPasswordRaw: string): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase) {
+      throw new Error('Supabase n’est pas configuré.');
+    }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('Session administrateur expirée.');
+    }
+
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ newPasswordRaw }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json.error || 'Erreur lors de la réinitialisation du mot de passe.');
+    }
+
+    return true;
   },
 
   async upsertProfile(user: User): Promise<boolean> {
@@ -163,6 +362,18 @@ export const SupabaseDataLayer = {
   // 3. CARNETS
   // ------------------------------------------------------------------
   async fetchCarnets(): Promise<Carnet[]> {
+    // 1. Priorité API backend autoritaire (contourne les restrictions RLS)
+    try {
+      const res = await fetch('/api/carnets');
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.carnets)) {
+          return json.carnets;
+        }
+      }
+    } catch {}
+
+    // 2. Repli direct Supabase client
     const supabase = getSupabase();
     if (!supabase) return [];
 
@@ -194,7 +405,18 @@ export const SupabaseDataLayer = {
     }));
   },
 
-  async insertCarnet(carnet: Carnet): Promise<boolean> {
+  async insertCarnet(carnet: Carnet, tickets?: Ticket[]): Promise<boolean> {
+    // 1. Envoi prioritaire via le proxy serveur autoritaire
+    try {
+      const res = await fetch('/api/carnets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ carnet, tickets: tickets || [] }),
+      });
+      if (res.ok) return true;
+    } catch {}
+
+    // 2. Repli client Supabase
     const supabase = getSupabase();
     if (!supabase) return false;
 
@@ -207,9 +429,9 @@ export const SupabaseDataLayer = {
         size: carnet.size,
         start_number: carnet.startNumber,
         end_number: carnet.endNumber,
-        created_by: carnet.createdById,
-        assigned_to_responsable: carnet.assignedToResponsableId || null,
-        sector_id: carnet.sectorId || null,
+        created_by: sanitizeUuid(carnet.createdById),
+        assigned_to_responsable: sanitizeUuidOrNull(carnet.assignedToResponsableId),
+        sector_id: sanitizeUuidOrNull(carnet.sectorId),
         status: carnet.status,
         created_at: carnet.createdAt,
       },
@@ -223,10 +445,70 @@ export const SupabaseDataLayer = {
     return true;
   },
 
+  async syncCarnetsBatch(carnets: Carnet[], tickets: Ticket[]): Promise<{ success: boolean; syncedCarnets: number; syncedTickets: number }> {
+    let totalSyncedCarnets = 0;
+    let totalSyncedTickets = 0;
+
+    try {
+      // 1. Synchronisation des carnets
+      if (carnets.length > 0) {
+        const resCarnets = await fetch('/api/carnets/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ carnets, tickets: [] }),
+        });
+        if (resCarnets.ok) {
+          const json = await resCarnets.json();
+          totalSyncedCarnets = json.syncedCarnets || carnets.length;
+        }
+      }
+
+      // 2. Synchronisation des tickets par lots de 150 pour une performance réseau optimale
+      const CHUNK_SIZE = 150;
+      for (let i = 0; i < tickets.length; i += CHUNK_SIZE) {
+        const chunk = tickets.slice(i, i + CHUNK_SIZE);
+        const resTickets = await fetch('/api/carnets/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ carnets: [], tickets: chunk }),
+        });
+        if (resTickets.ok) {
+          const json = await resTickets.json();
+          totalSyncedTickets += json.syncedTickets || chunk.length;
+        }
+      }
+
+      return {
+        success: true,
+        syncedCarnets: totalSyncedCarnets,
+        syncedTickets: totalSyncedTickets,
+      };
+    } catch (err) {
+      console.warn('Erreur syncCarnetsBatch:', err);
+      return {
+        success: totalSyncedCarnets > 0 || totalSyncedTickets > 0,
+        syncedCarnets: totalSyncedCarnets,
+        syncedTickets: totalSyncedTickets,
+      };
+    }
+  },
+
   // ------------------------------------------------------------------
   // 4. TICKETS & AFFECTATIONS
   // ------------------------------------------------------------------
   async fetchTickets(): Promise<Ticket[]> {
+    // 1. Priorité API backend autoritaire
+    try {
+      const res = await fetch('/api/carnets');
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.tickets) && json.tickets.length > 0) {
+          return json.tickets;
+        }
+      }
+    } catch {}
+
+    // 2. Repli direct Supabase client
     const supabase = getSupabase();
     if (!supabase) return [];
 
@@ -375,9 +657,9 @@ export const SupabaseDataLayer = {
       qr_payload: t.qrPayload,
       status: t.status,
       price: t.price || 5000,
-      assigned_responsable_id: t.assignedResponsableId || null,
-      assigned_agent_id: t.assignedAgentId || null,
-      sector_id: t.sectorId || null,
+      assigned_responsable_id: sanitizeUuidOrNull(t.assignedResponsableId),
+      assigned_agent_id: sanitizeUuidOrNull(t.assignedAgentId),
+      sector_id: sanitizeUuidOrNull(t.sectorId),
       created_at: t.createdAt,
     }));
 
@@ -822,6 +1104,9 @@ export const SupabaseDataLayer = {
     const supabase = getSupabase();
     if (!supabase) return false;
 
+    // Diffusion broadcast instantanée via Supabase Realtime
+    this.broadcastIncident(report).catch(() => {});
+
     const { error } = await supabase.from('fraud_reports').upsert(
       {
         id: report.id,
@@ -844,6 +1129,85 @@ export const SupabaseDataLayer = {
       return false;
     }
     return true;
+  },
+
+  /**
+   * Diffusion broadcast en temps réel d'un nouvel incident de sécurité routière
+   */
+  async broadcastIncident(incident: FraudReport): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    try {
+      const channel = supabase.channel('road_safety_realtime_feed');
+      await channel.send({
+        type: 'broadcast',
+        event: 'new_incident',
+        payload: incident,
+      });
+    } catch (err) {
+      console.warn('[PORTUS Realtime] Erreur broadcast incident:', err);
+    }
+  },
+
+  /**
+   * Abonnement en direct Supabase Realtime aux incidents de sécurité routière
+   * (Écoute simultanée des postgres_changes sur fraud_reports et des broadcasts)
+   */
+  subscribeToRoadSafetyIncidents(onIncidentReceived: (incident: FraudReport) => void): (() => void) | null {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+
+    try {
+      const channel = supabase
+        .channel('road_safety_realtime_feed')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'fraud_reports' },
+          (payload) => {
+            const row = payload.new as any;
+            if (!row || !row.id) return;
+            const incident: FraudReport = {
+              id: row.id,
+              ticketNumber: row.ticket_number || undefined,
+              plateNumber: row.plate_number,
+              sectorId: row.sector_id || undefined,
+              controleurId: row.controleur_id || 'ctrl-remote',
+              controleurName: row.controleur_name || 'Équipe Contrôle Terrain',
+              type: (row.reason as any) || 'AUTRE',
+              typeLabel: row.reason || 'Incident de Sécurité',
+              comment: row.comment || '',
+              photos: row.photo_url ? [row.photo_url] : [],
+              photoDataUrl: row.photo_url || undefined,
+              reportedAt: row.reported_at || new Date().toISOString(),
+              reportedDate: (row.reported_at || new Date().toISOString()).slice(0, 10),
+              reportedTime: (row.reported_at || new Date().toISOString()).slice(11, 19),
+              gpsLatitude: row.gps_latitude,
+              gpsLongitude: row.gps_longitude,
+              status: row.status || 'NOUVEAU',
+              syncStatus: 'SYNCED',
+              syncedAt: new Date().toISOString(),
+            };
+            onIncidentReceived(incident);
+          }
+        )
+        .on('broadcast', { event: 'new_incident' }, ({ payload }) => {
+          if (payload && payload.id) {
+            onIncidentReceived(payload as FraudReport);
+          }
+        })
+        .subscribe((status) => {
+          console.log('[PORTUS Realtime] Statut abonnement incidents sécurité:', status);
+        });
+
+      return () => {
+        try {
+          supabase.removeChannel(channel);
+        } catch {}
+      };
+    } catch (err) {
+      console.warn('[PORTUS Realtime] Erreur initialisation abonnement:', err);
+      return null;
+    }
   },
 
   async updateFraudReportStatus(
@@ -1017,28 +1381,200 @@ export const SupabaseDataLayer = {
   },
 
   // ------------------------------------------------------------------
-  // 11. TENTATIVES DE CONNEXION (LOGIN_ATTEMPTS)
+  // 11. TENTATIVES DE CONNEXION (LOGIN_ATTEMPTS) & VERROUILLAGE SERVEUR
   // ------------------------------------------------------------------
   async recordLoginAttempt(params: {
     username: string;
     profileId?: string;
     isSuccessful: boolean;
     failureReason?: string;
-  }): Promise<void> {
+  }): Promise<{ isLocked?: boolean; remainingSeconds?: number; attemptsLeft?: number } | void> {
     const supabase = getSupabase();
     if (!supabase) return;
 
-    await supabase.from('login_attempts').insert({
-      username: params.username,
-      profile_id: params.profileId || null,
-      is_successful: params.isSuccessful,
-      failure_reason: params.failureReason || null,
-      attempted_at: new Date().toISOString(),
-    });
+    try {
+      // 1. Appel prioritaire à la RPC serveur
+      const { data, error } = await supabase.rpc('record_login_attempt', {
+        p_identifier: params.username,
+        p_is_success: params.isSuccessful,
+        p_failure_reason: params.failureReason || null,
+        p_ip: null,
+        p_user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+      });
+
+      if (!error && data) {
+        return {
+          isLocked: data.is_locked,
+          remainingSeconds: data.remaining_seconds,
+          attemptsLeft: data.attempts_left,
+        };
+      }
+    } catch {
+      // Fallback
+    }
+
+    try {
+      await supabase.from('login_attempts').insert({
+        username: params.username,
+        profile_id: params.profileId || null,
+        is_successful: params.isSuccessful,
+        failure_reason: params.failureReason || null,
+        attempted_at: new Date().toISOString(),
+      });
+    } catch {
+      // Silencieux
+    }
+  },
+
+  async getAccountLockoutStatus(identifier: string): Promise<{ isLocked: boolean; remainingSeconds: number }> {
+    const supabase = getSupabase();
+    if (!supabase) return { isLocked: false, remainingSeconds: 0 };
+
+    try {
+      const { data, error } = await supabase.rpc('get_account_lockout_status', {
+        p_identifier: identifier,
+      });
+
+      if (!error && data) {
+        return {
+          isLocked: Boolean(data.is_locked),
+          remainingSeconds: data.remaining_seconds || 0,
+        };
+      }
+    } catch (err) {
+      console.warn('Erreur getAccountLockoutStatus:', err);
+    }
+
+    return { isLocked: false, remainingSeconds: 0 };
   },
 
   // ------------------------------------------------------------------
-  // 12. PARAMÈTRES APPLICATIFS (APP_SETTINGS)
+  // 12. RPC SÉCURISÉES POUR TICKETS, VENTES ET CONTRÔLES (HMAC-SHA256)
+  // ------------------------------------------------------------------
+  async verifyTicketSecureRPC(params: {
+    identifier: string;
+    scannedToken?: string;
+    plateNumber?: string;
+  }): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+
+    try {
+      const { data, error } = await supabase.rpc('verify_ticket_secure', {
+        p_ticket_identifier: params.identifier.trim(),
+        p_scanned_token: params.scannedToken ? params.scannedToken.trim() : null,
+        p_plate_number: params.plateNumber ? params.plateNumber.trim() : null,
+      });
+
+      if (error) {
+        console.warn('Supabase verify_ticket_secure RPC error:', error.message);
+        return null;
+      }
+      return data;
+    } catch (err) {
+      console.warn('Exception verifyTicketSecureRPC:', err);
+      return null;
+    }
+  },
+
+  async recordControlSecureRPC(params: {
+    identifier: string;
+    scannedToken?: string;
+    plateNumber?: string;
+    location?: string;
+    notes?: string;
+  }): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase) throw new Error('Supabase non disponible');
+
+    const { data, error } = await supabase.rpc('record_control_secure', {
+      p_ticket_identifier: params.identifier.trim(),
+      p_scanned_token: params.scannedToken ? params.scannedToken.trim() : null,
+      p_plate_number: params.plateNumber ? params.plateNumber.trim() : null,
+      p_location: params.location ? params.location.trim() : null,
+      p_notes: params.notes ? params.notes.trim() : null,
+    });
+
+    if (error) {
+      console.warn('Supabase record_control_secure RPC error:', error.message);
+      throw new Error(error.message);
+    }
+    return data;
+  },
+
+  async sellTicketSecureRPC(params: {
+    ticketId: string;
+    plateNumber: string;
+    driverPhone?: string;
+    syncIdempotencyKey?: string;
+    latitude?: number;
+    longitude?: number;
+    accuracy?: number;
+    soldAt?: string;
+  }): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase) throw new Error('Supabase non disponible');
+
+    const { data, error } = await supabase.rpc('sell_ticket_secure', {
+      p_ticket_id: params.ticketId,
+      p_plate_number: params.plateNumber.trim().toUpperCase(),
+      p_driver_phone: params.driverPhone ? params.driverPhone.trim() : null,
+      p_sync_idempotency_key: params.syncIdempotencyKey || null,
+      p_latitude: params.latitude || null,
+      p_longitude: params.longitude || null,
+      p_accuracy: params.accuracy || null,
+      p_sold_at: params.soldAt || null,
+    });
+
+    if (error) {
+      console.warn('Supabase sell_ticket_secure RPC error:', error.message);
+      throw new Error(error.message);
+    }
+    return data;
+  },
+
+  async assignTicketsSecureRPC(params: {
+    agentId: string;
+    ticketIds: string[];
+  }): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase) throw new Error('Supabase non disponible');
+
+    const { data, error } = await supabase.rpc('assign_tickets_to_agent_secure', {
+      p_agent_id: params.agentId,
+      p_ticket_ids: params.ticketIds,
+    });
+
+    if (error) {
+      console.warn('Supabase assign_tickets_to_agent_secure RPC error:', error.message);
+      throw new Error(error.message);
+    }
+    return data;
+  },
+
+  async supersedeTicketSecureRPC(params: {
+    oldTicketId: string;
+    newTicketId: string;
+    reason: string;
+  }): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase) throw new Error('Supabase non disponible');
+
+    const { data, error } = await supabase.rpc('supersede_ticket_secure', {
+      p_old_ticket_id: params.oldTicketId,
+      p_new_ticket_id: params.newTicketId,
+      p_reason: params.reason,
+    });
+
+    if (error) {
+      console.warn('Supabase supersede_ticket_secure RPC error:', error.message);
+      throw new Error(error.message);
+    }
+    return data;
+  },
+
+  // ------------------------------------------------------------------
+  // 13. PARAMÈTRES APPLICATIFS (APP_SETTINGS)
   // ------------------------------------------------------------------
   async fetchAppSettings(): Promise<Record<string, any>> {
     const supabase = getSupabase();

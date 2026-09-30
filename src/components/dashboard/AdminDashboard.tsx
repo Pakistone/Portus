@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Layers,
   Ticket as TicketIcon,
@@ -21,6 +21,7 @@ import {
   Search,
   FileText,
   Settings,
+  CloudUpload,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -75,9 +76,12 @@ export const AdminDashboard: React.FC = () => {
     alerts,
     users,
     sectors,
+    syncAllToSupabase,
   } = useData();
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses'>('dashboard');
+  const [syncingCloud, setSyncingCloud] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Filtre de période
   const [period, setPeriod] = useState<PeriodFilterState>({ type: 'month' });
@@ -100,6 +104,29 @@ export const AdminDashboard: React.FC = () => {
   const [fraudFilterStatus, setFraudFilterStatus] = useState<any>('ALL');
   const [advancedSearchModalOpen, setAdvancedSearchModalOpen] = useState(false);
   const [adminSettingsModalOpen, setAdminSettingsModalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleNotificationClicked = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const notification = customEvent.detail;
+      if (!notification) return;
+
+      const type = notification.type;
+      if (type === 'FRAUD_ALERT') {
+        setFraudManagementModalOpen(true);
+      } else if (type === 'REMITTANCE') {
+        setRemisesModalOpen(true);
+      } else if (type === 'FINANCIAL_ALERT') {
+        setActiveTab('expenses');
+      } else if (type === 'ASSIGNMENT') {
+        setCarnetManagementModalOpen(true);
+      } else if (type === 'SALE') {
+        setSalesModalOpen(true);
+      }
+    };
+    window.addEventListener('portus-notification-clicked', handleNotificationClicked);
+    return () => window.removeEventListener('portus-notification-clicked', handleNotificationClicked);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // DONNÉES GLOBALES ET FILTRÉES PAR PÉRIODE (SUPABASE / INDEXEDDB)
@@ -362,8 +389,30 @@ export const AdminDashboard: React.FC = () => {
             <Settings className="w-4 h-4 text-purple-400" />
             <span>Paramètres & Tarifs</span>
           </button>
+          <button
+            onClick={async () => {
+              setSyncingCloud(true);
+              const res = await syncAllToSupabase();
+              setSyncingCloud(false);
+              setSyncMessage(res.message);
+              setTimeout(() => setSyncMessage(null), 6000);
+            }}
+            disabled={syncingCloud}
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 px-3.5 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-900/80 transition cursor-pointer shadow-xs disabled:opacity-50"
+            title="Synchroniser tous les carnets et données locales vers le cloud Supabase"
+          >
+            <CloudUpload className={`w-4 h-4 text-emerald-400 ${syncingCloud ? 'animate-spin' : ''}`} />
+            <span>{syncingCloud ? 'Synchro en cours...' : 'Synchro Cloud'}</span>
+          </button>
         </div>
       </div>
+
+      {syncMessage && (
+        <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-200 animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{syncMessage}</span>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* BARRE DE FILTRES TEMPORELS (AUJOURD'HUI / CETTE SEMAINE / CE MOIS / PERSO)*/}

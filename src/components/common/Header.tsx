@@ -13,10 +13,13 @@ import {
   CheckCheck,
   Search,
   Stamp,
+  KeyRound,
+  CloudUpload,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
+import { ChangePasswordModal } from './ChangePasswordModal';
 import { ORG_INFO } from '../../config/constants';
 import { formatDateTime } from '../../utils/normalization';
 import type { Role } from '../../types';
@@ -36,10 +39,21 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSearch,
   onOpenStamp,
 }) => {
-  const { currentUser, logout, switchUserRole } = useAuth();
-  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead } = useData();
+  const { currentUser, logout } = useAuth();
+  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase } = useData();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [syncingCloud, setSyncingCloud] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+
+  const handleNotificationClick = (n: any) => {
+    if (!n.isRead) {
+      markNotificationAsRead(n.id);
+    }
+    setNotifModalOpen(false);
+    window.dispatchEvent(new CustomEvent('portus-notification-clicked', { detail: n }));
+  };
 
   // Notifications pertinentes pour l'utilisateur actuel
   const myNotifications = notifications.filter((n) => {
@@ -142,26 +156,6 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Bouton PWA */}
           <PWAInstallButton />
 
-          {/* Testeur de Rôles Rapide */}
-          <div className="flex items-center gap-1 bg-slate-800/80 p-1 rounded-lg border border-slate-700/60">
-            <span className="text-[10px] uppercase font-bold text-slate-400 px-1.5">
-              Rôle :
-            </span>
-            {(['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'] as Role[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => switchUserRole(r)}
-                className={`px-2 py-1 text-[11px] font-bold rounded-md transition ${
-                  currentUser?.role === r
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
-                }`}
-              >
-                {r.slice(0, 4)}
-              </button>
-            ))}
-          </div>
-
           {/* Liens Admin / Audit / Supabase */}
           {currentUser?.role === 'ADMINISTRATEUR' && (
             <div className="flex items-center gap-1.5 border-l border-slate-700 pl-3">
@@ -236,6 +230,14 @@ export const Header: React.FC<HeaderProps> = ({
                   )}
                 </div>
               </div>
+
+              <button
+                onClick={() => setChangePasswordOpen(true)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 transition"
+                title="Modifier mon mot de passe"
+              >
+                <KeyRound className="w-4 h-4" />
+              </button>
 
               <button
                 onClick={() => logout()}
@@ -322,7 +324,7 @@ export const Header: React.FC<HeaderProps> = ({
                 myNotifications.map((n) => (
                   <div
                     key={n.id}
-                    onClick={() => !n.isRead && markNotificationAsRead(n.id)}
+                    onClick={() => handleNotificationClick(n)}
                     className={`p-3 rounded-xl border text-xs cursor-pointer transition space-y-1 ${
                       n.isRead
                         ? 'border-slate-800/80 bg-slate-950/40 text-slate-400'
@@ -382,43 +384,30 @@ export const Header: React.FC<HeaderProps> = ({
                   )}
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  logout();
-                  setMobileMenuOpen(false);
-                }}
-                className="flex items-center gap-1.5 rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-bold text-rose-300"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Quitter</span>
-              </button>
-            </div>
-          )}
-
-          {/* Changement rapide de rôle en mobile */}
-          <div>
-            <p className="text-[11px] font-bold uppercase text-slate-400 mb-2">
-              Basculer de rôle (Test direct) :
-            </p>
-            <div className="grid grid-cols-2 gap-1.5">
-              {(['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'] as Role[]).map((r) => (
+              <div className="flex gap-2">
                 <button
-                  key={r}
                   onClick={() => {
-                    switchUserRole(r);
+                    setChangePasswordOpen(true);
                     setMobileMenuOpen(false);
                   }}
-                  className={`py-2 text-xs font-bold rounded-lg border transition ${
-                    currentUser?.role === r
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'bg-slate-800 border-slate-700 text-slate-300'
-                  }`}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-bold text-amber-300"
                 >
-                  {roleLabels[r]}
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>Mot de passe</span>
                 </button>
-              ))}
+                <button
+                  onClick={() => {
+                    logout();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-rose-500/20 px-3 py-1.5 text-xs font-bold text-rose-300"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Quitter</span>
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Bouton Recherche Avancée en Mobile */}
           {onOpenSearch && (
@@ -427,10 +416,24 @@ export const Header: React.FC<HeaderProps> = ({
                 onOpenSearch();
                 setMobileMenuOpen(false);
               }}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-amber-600/20 border border-amber-500/40 p-2.5 text-xs font-bold text-amber-300 hover:bg-amber-600/30 transition"
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-amber-600/20 border border-amber-500/40 p-2.5 text-xs font-bold text-amber-300 hover:bg-amber-600/30 transition cursor-pointer"
             >
               <Search className="w-4 h-4 text-amber-400" />
               <span>Recherches Avancées & Filtres</span>
+            </button>
+          )}
+
+          {/* Bouton Cachet Officiel en Mobile */}
+          {onOpenStamp && (
+            <button
+              onClick={() => {
+                onOpenStamp();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 border border-emerald-500/40 p-2.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 transition cursor-pointer"
+            >
+              <Stamp className="w-4 h-4 text-emerald-400" />
+              <span>Cachet Officiel U.J.S.R.V.</span>
             </button>
           )}
 
@@ -473,10 +476,30 @@ export const Header: React.FC<HeaderProps> = ({
                   <span>Schéma Supabase SQL</span>
                 </button>
               )}
+              <button
+                onClick={async () => {
+                  setSyncingCloud(true);
+                  const res = await syncAllToSupabase();
+                  setSyncingCloud(false);
+                  setSyncNotice(res.message);
+                  setTimeout(() => setSyncNotice(null), 6000);
+                  setMobileMenuOpen(false);
+                }}
+                disabled={syncingCloud}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-950/80 border border-emerald-500/40 p-2.5 text-xs font-bold text-emerald-300 hover:bg-emerald-900 transition disabled:opacity-50"
+              >
+                <CloudUpload className={`w-4 h-4 text-emerald-400 ${syncingCloud ? 'animate-spin' : ''}`} />
+                <span>{syncingCloud ? 'Synchronisation Cloud...' : 'Synchroniser avec le Cloud Supabase'}</span>
+              </button>
             </div>
           )}
         </div>
       )}
+      
+      <ChangePasswordModal
+        isOpen={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
+      />
     </header>
   );
 };
