@@ -99,6 +99,21 @@ interface PortusDB extends DBSchema {
     value: LoginAttempt;
     indexes: { 'by-username': string; 'by-attempted-at': string };
   };
+  vehicles: {
+    key: string;
+    value: any;
+    indexes: { 'by-plate': string; 'by-type': string };
+  };
+  daily_closings: {
+    key: string;
+    value: any;
+    indexes: { 'by-date': string; 'by-cashier': string };
+  };
+  ticket_reprints: {
+    key: string;
+    value: any;
+    indexes: { 'by-ticket': string; 'by-requester': string };
+  };
   settings: {
     key: string;
     value: any;
@@ -106,7 +121,7 @@ interface PortusDB extends DBSchema {
 }
 
 const DB_NAME = 'portus_ujsrv_db_v1';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBPDatabase<PortusDB>> | null = null;
 
@@ -222,6 +237,27 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
           const loginStore = db.createObjectStore('login_attempts', { keyPath: 'id' });
           loginStore.createIndex('by-username', 'username');
           loginStore.createIndex('by-attempted-at', 'attemptedAt');
+        }
+
+        // Vehicles store
+        if (!db.objectStoreNames.contains('vehicles')) {
+          const vehicleStore = db.createObjectStore('vehicles', { keyPath: 'id' });
+          vehicleStore.createIndex('by-plate', 'plateNumber', { unique: true });
+          vehicleStore.createIndex('by-type', 'vehicleType');
+        }
+
+        // Daily closings store
+        if (!db.objectStoreNames.contains('daily_closings')) {
+          const closingStore = db.createObjectStore('daily_closings', { keyPath: 'id' });
+          closingStore.createIndex('by-date', 'closingDate');
+          closingStore.createIndex('by-cashier', 'cashierId');
+        }
+
+        // Ticket reprints store
+        if (!db.objectStoreNames.contains('ticket_reprints')) {
+          const reprintStore = db.createObjectStore('ticket_reprints', { keyPath: 'id' });
+          reprintStore.createIndex('by-ticket', 'ticketId');
+          reprintStore.createIndex('by-requester', 'requestedBy');
         }
 
         // Settings / meta

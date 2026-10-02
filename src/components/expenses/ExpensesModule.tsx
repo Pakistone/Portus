@@ -30,7 +30,11 @@ import { PeriodFilterState, filterItemByPeriod, PeriodSelector } from '../dashbo
 import { jsPDF } from 'jspdf';
 import * as XLSX from 'xlsx';
 
-export const ExpensesModule: React.FC = () => {
+export interface ExpensesModuleProps {
+  onClose?: () => void;
+}
+
+export const ExpensesModule: React.FC<ExpensesModuleProps> = ({ onClose }) => {
   const { currentUser } = useAuth();
   const { expenses, createExpense, validateExpense, rejectExpense, cancelExpense, correctExpense, remises, sales, users } = useData();
 
@@ -384,6 +388,16 @@ export const ExpensesModule: React.FC = () => {
             <Plus className="w-4 h-4" />
             <span>Nouvelle Dépense</span>
           </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 transition shadow-xs"
+              title="Fermer le module"
+            >
+              <X className="w-4 h-4" />
+              <span>Fermer</span>
+            </button>
+          )}
         </div>
       </div>
 

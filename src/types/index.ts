@@ -1,14 +1,41 @@
 /**
  * Types TypeScript pour PORTUS — U.J.S.R.V.
+ * Union des Jeunes de la Sécurité Routière de Vridi
  */
 
-export type Role = 'ADMINISTRATEUR' | 'RESPONSABLE' | 'AGENT' | 'CONTROLEUR';
+export type Role =
+  | 'ADMINISTRATEUR'
+  | 'RESPONSABLE'
+  | 'AGENT'
+  | 'CONTROLEUR'
+  | 'CAISSIER'
+  | 'FINANCE'
+  | 'AUDITEUR';
+
+export type PortusPermission =
+  | 'tickets.create'
+  | 'tickets.sell'
+  | 'tickets.cancel'
+  | 'tickets.reprint'
+  | 'tickets.verify'
+  | 'tickets.view'
+  | 'vehicles.create'
+  | 'vehicles.edit'
+  | 'finance.view'
+  | 'finance.reconcile'
+  | 'expenses.create'
+  | 'expenses.approve'
+  | 'reports.export'
+  | 'users.manage'
+  | 'settings.manage'
+  | 'audit.view';
 
 export interface User {
   id: string;
   username: string;
   fullName: string;
   role: Role;
+  permissions?: PortusPermission[];
   sectorId?: string;
   sectorName?: string;
   phone?: string;
@@ -17,6 +44,28 @@ export interface User {
   lockedUntil?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LoginAttempt {
+  id: string;
+  username: string;
+  profileId?: string;
+  isSuccessful: boolean;
+  failureReason?: string;
+  attemptedAt: string;
+  userAgent?: string;
+}
+
+export interface TicketAssignment {
+  id: string;
+  ticketId: string;
+  carnetId?: string;
+  fromProfileId?: string;
+  toProfileId: string;
+  assignedBy: string;
+  assignmentType: string;
+  notes?: string;
+  assignedAt: string;
 }
 
 export type TicketStatus =
@@ -48,6 +97,7 @@ export interface Carnet {
   createdByName: string;
   assignedToResponsableId?: string;
   assignedToResponsableName?: string;
+  assignedToResponsableAt?: string;
   assignedAt?: string; // Date et heure d'attribution au responsable
   assignedById?: string; // Administrateur ayant attribué
   assignedByName?: string;
@@ -64,6 +114,7 @@ export interface Ticket {
   carnetId: string;
   carnetNumber: string;
   qrPayload: string; // Payload crypté / lisible pour QR code
+  securityToken?: string;
   status: TicketStatus;
   price: number; // 5 000 FCFA
   assignedResponsableId?: string;
@@ -71,6 +122,7 @@ export interface Ticket {
   assignedAgentId?: string;
   assignedAgentName?: string;
   assignedAgentPhone?: string;
+  assignedAt?: string;
   sectorId?: string;
   sectorName?: string;
 
@@ -86,15 +138,37 @@ export interface Ticket {
   // Données de contrôle
   controlCount: number;
   lastControlledAt?: string;
+  controlledAt?: string;
   lastControlledBy?: string;
+  controlledByName?: string;
 
   // Annulation
   cancelledAt?: string;
   cancelledBy?: string;
+  cancelledByName?: string;
   cancellationReason?: string;
+  cancelledReason?: string;
+
+  // Réimpressions
+  reprintCount?: number;
+  lastReprintedAt?: string;
+  lastReprintAt?: string;
+  reprintReason?: string;
+  lastReprintBy?: string;
+  lastReprintByName?: string;
 
   createdAt: string;
+  updatedAt?: string;
 }
+
+export type VehicleCategory =
+  | 'Camion-citerne'
+  | 'Conteneur'
+  | 'Plateau'
+  | 'Benne'
+  | 'Marchandises'
+  | 'Autre commercial'
+  | string;
 
 export interface Sale {
   id: string; // Identifiant de vente unique UUID (généré immédiatement hors ligne)
@@ -106,6 +180,7 @@ export interface Sale {
   sectorName?: string;
   plateNumber: string; // Normalisé
   driverPhone?: string; // Chiffres uniquement ou vide
+  vehicleCategory?: string;
   soldAt: string; // Date originale de vente (NE JAMAIS écraser par la synchro)
   gpsLatitude: number | null;
   gpsLongitude: number | null;
@@ -114,6 +189,8 @@ export interface Sale {
   syncedAt?: string; // Date/heure réelle de synchronisation
   syncStatus: 'PENDING_SYNC' | 'SYNCED';
   price: number; // 5000 FCFA
+  paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+  paymentReference?: string;
   coveredByRemiseId?: string;
 }
 
@@ -169,19 +246,16 @@ export interface FraudReport {
   sectorName?: string;
   controleurId: string;
   controleurName: string;
-  // Type de fraude normalisé
   type: FraudType;
   typeLabel: string;
-  // Ancien champ rétrocompatible
   reason?: string;
   reasonLabel?: string;
   comment: string;
-  // Photos de preuve (multiple et stockage local offline-first garanti)
-  photos: string[]; // Tableau de data URLs base64
-  photoDataUrl?: string; // rétrocompatibilité 1ère photo
-  reportedAt: string; // ISO String
-  reportedDate: string; // YYYY-MM-DD
-  reportedTime: string; // HH:mm:ss
+  photos: string[];
+  photoDataUrl?: string;
+  reportedAt: string;
+  reportedDate: string;
+  reportedTime: string;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   gpsStatus?: 'AVAILABLE' | 'UNAVAILABLE';
@@ -191,7 +265,6 @@ export interface FraudReport {
   adminDecisionBy?: string;
   adminDecisionByName?: string;
   adminDecisionAt?: string;
-  // Statut hors-ligne & synchronisation
   isOnline?: boolean;
   syncStatus: 'PENDING_SYNC' | 'SYNCED';
   syncedAt?: string;
@@ -202,8 +275,8 @@ export interface RemiseHistoryEntry {
   modifiedAt: string;
   modifiedById: string;
   modifiedByName: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:mm:ss
+  date: string;
+  time: string;
   reason: string;
   oldAmount: number;
   newAmount: number;
@@ -211,52 +284,24 @@ export interface RemiseHistoryEntry {
   newNote?: string;
 }
 
-export interface AgentFinancialSummary {
-  agentId: string;
-  agentName: string;
-  sectorId?: string;
-  sectorName?: string;
-  responsableId?: string;
-  responsableName?: string;
-  ticketsSold: number;
-  expectedAmount: number; // ticketsSold * 5 000 FCFA
-  remittedAmount: number; // total des remises
-  remainingBalance: number; // solde restant dû (si remittedAmount < expectedAmount)
-  ecart: number; // écart positif (si remittedAmount > expectedAmount)
-  unremittedTicketsCount: number; // nombre équivalent de tickets restants
-  hasAlert: boolean;
-  alertThreshold?: number; // 10, 15, 20...
-  alertLevel?: 'WARNING' | 'CRITICAL';
-}
-
-export interface FinancialOverviewTotals {
-  totalSalesAmount: number; // Montant total attendu des ventes
-  totalRemittedAmount: number; // Montant total remis
-  totalRemainingBalance: number; // Solde total restant
-  totalSoldTickets: number; // Nombre de tickets vendus
-  stockDisponibleTickets: number; // Tickets disponibles non vendus
-  valeurStockDisponible: number; // stockDisponibleTickets * 5 000 FCFA
-  totalIssuedTickets: number; // Tickets valides émis (non annulés)
-  valeurPotentielleStock: number; // totalIssuedTickets * 5 000 FCFA
-  activeAlertsCount: number; // Nombre d'alertes financières
-}
-
 export interface Remise {
   id: string;
-  reference: string; // Ex: REM-2026-0042
+  reference: string;
   agentId: string;
   agentName: string;
   responsableId: string;
   responsableName: string;
   sectorId: string;
   sectorName: string;
-  amount: number; // Montant remis en FCFA
-  date: string; // YYYY-MM-DD
-  time: string; // HH:MM:SS
+  amount: number;
+  montant?: number; // compatibilité
+  date: string;
+  time: string;
   createdAt: string;
   note?: string;
-  ticketIdsCovered: string[]; // Liste des IDs de tickets couverts par cette remise
-  ticketsCount: number; // Nombre équivalent de tickets
+  status?: string;
+  ticketIdsCovered: string[];
+  ticketsCount: number;
   isCorrected?: boolean;
   history: RemiseHistoryEntry[];
 }
@@ -270,16 +315,18 @@ export type ExpenseCategory =
   | 'TRANSPORT'
   | 'AUTRE';
 
-export type ExpenseStatus = 'PENDING' | 'VALIDATED' | 'REJECTED' | 'CANCELLED';
+export type ExpenseStatus = 'PENDING' | 'VALIDATED' | 'VALIDEE' | 'REJECTED' | 'CANCELLED' | 'PAYEE';
 
 export interface Expense {
-  id: string; // UUID interne
-  expenseNumber: string; // Ex: EXP-2026-000001
-  amount: number; // en FCFA > 0
+  id: string;
+  expenseNumber: string;
+  amount: number;
   category: ExpenseCategory;
-  description: string; // motif / description
-  expenseDate: string; // ISO / YYYY-MM-DD
-  receiptUrl?: string | null; // Justificatif photo optionnel
+  description: string;
+  beneficiary?: string | null;
+  paymentMethod?: string;
+  expenseDate: string;
+  receiptUrl?: string | null;
   status: ExpenseStatus;
   createdBy: string;
   createdByName: string;
@@ -318,6 +365,7 @@ export type AuditAction =
   | 'TICKETS_ASSIGNED_AGENT'
   | 'TICKETS_REASSIGNED'
   | 'TICKET_SOLD'
+  | 'TICKET_REPRINTED'
   | 'SALE_SYNCED'
   | 'PLATE_CORRECTED'
   | 'TICKET_CANCELLED'
@@ -337,6 +385,8 @@ export type AuditAction =
   | 'EXPENSE_CORRECTED'
   | 'EXPENSE_CANCELLED'
   | 'EXPENSE_SYNCED'
+  | 'DAILY_CLOSING_SUBMITTED'
+  | 'DAILY_CLOSING_CONFIRMED'
   | 'DATABASE_EXPORTED'
   | 'DATABASE_RESET'
   | 'CONFIG_UPDATE';
@@ -354,7 +404,7 @@ export interface AuditLog {
   newValue?: string | number | Record<string, unknown> | null;
   gpsLatitude?: number | null;
   gpsLongitude?: number | null;
-  details?: string;
+  details?: any;
 }
 
 export interface FinancialAlert {
@@ -365,47 +415,9 @@ export interface FinancialAlert {
   sectorName?: string;
   unremittedTicketsCount: number;
   unremittedAmount: number;
-  thresholdPassed: number; // 10, 15, 20...
+  thresholdPassed: number;
   level: 'WARNING' | 'CRITICAL';
   createdAt: string;
-}
-
-export interface TicketAssignment {
-  id: string;
-  ticketId: string;
-  carnetId?: string;
-  fromProfileId?: string;
-  toProfileId: string;
-  assignedBy: string;
-  assignmentType: 'RESPONSABLE_ASSIGNMENT' | 'AGENT_ASSIGNMENT' | 'REASSIGNMENT' | 'RETURN';
-  notes?: string;
-  assignedAt: string;
-}
-
-export interface RemittanceAdjustment {
-  id: string;
-  remittanceId: string;
-  adminId: string;
-  reason: string;
-  oldAmount: number;
-  newAmount: number;
-  oldNote?: string;
-  newNote?: string;
-  adjustedAt: string;
-}
-
-export interface SyncQueueRecord {
-  id: string;
-  clientMutationId: string;
-  agentId: string;
-  entityType: 'SALE' | 'CONTROL' | 'FRAUD_REPORT' | 'REMITTANCE';
-  operation: 'INSERT' | 'UPDATE';
-  payload: Record<string, unknown>;
-  status: 'PENDING' | 'PROCESSING' | 'SYNCED' | 'FAILED' | 'CONFLICT';
-  retryCount: number;
-  errorMessage?: string | null;
-  clientTimestamp: string;
-  processedAt?: string | null;
 }
 
 export interface NotificationRecord {
@@ -422,21 +434,121 @@ export interface NotificationRecord {
   createdAt: string;
 }
 
-export interface LoginAttempt {
+// --------------------------------------------------------------------------
+// NOUVELLES INTERFACES OPÉRATIONNELLES (VEHICULES, CAISSE, CLÔTURE, RÉIMPRESSION)
+// --------------------------------------------------------------------------
+
+export type VehicleType =
+  | 'CAMION_CITERNE'
+  | 'CONTENEUR'
+  | 'PLATEAU'
+  | 'BENNE'
+  | 'MARCHANDISES'
+  | 'AUTRE_POIDS_LOURD';
+
+export interface Vehicle {
   id: string;
-  username: string;
-  profileId?: string;
-  ipAddress?: string;
-  userAgent?: string;
-  isSuccessful: boolean;
-  failureReason?: string;
-  attemptedAt: string;
+  plateNumber: string;
+  vehicleType: VehicleType;
+  makeModel?: string;
+  driverName?: string;
+  driverPhone?: string;
+  companyName?: string;
+  isFlaggedFraud: boolean;
+  flagReason?: string;
+  lastSeenAt?: string;
+  totalTicketsCount: number;
+  totalControlsCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface AppSetting {
-  key: string;
-  value: unknown;
-  description?: string;
-  updatedBy?: string;
+export interface TicketReprint {
+  id: string;
+  ticketId: string;
+  ticketNumber: string;
+  requestedBy: string;
+  requestedByName: string;
+  reason: string;
+  reprintCount: number;
+  isSuspicious: boolean;
+  approvedBy?: string;
+  reprintedAt: string;
+}
+
+export interface DailyClosing {
+  id: string;
+  closingReference: string;
+  closingDate: string;
+  date?: string;
+  cashierId: string;
+  cashierName: string;
+  sectorId?: string;
+  sectorName?: string;
+  openingBalance: number;
+  cashSalesAmount: number;
+  digitalSalesAmount: number;
+  refundsAmount: number;
+  expensesAmount: number;
+  expectedBalance: number;
+  declaredBalance: number;
+  declaredCash?: number;
+  difference?: number;
+  discrepancy: number; // declaredBalance - expectedBalance
+  totalSales?: number;
+  totalExpenses?: number;
+  totalRemises?: number;
+  ticketCount?: number;
+  closedById?: string;
+  closedByName?: string;
+  closedAt?: string;
+  notes?: string;
+  status: 'DRAFT' | 'SUBMITTED' | 'CONFIRMED' | 'DISPUTED' | 'LOCKED' | 'CLOSED';
+  confirmedBy?: string;
+  confirmedByName?: string;
+  confirmedAt?: string;
+  isLocked: boolean;
+  createdAt: string;
   updatedAt: string;
+}
+
+export interface CashManagementSummary {
+  openingBalance: number;
+  cashSales: number;
+  digitalPayments: number;
+  refunds: number;
+  expenses: number;
+  expectedBalance: number;
+  declaredBalance: number;
+  difference: number; // declared - expected
+  salesCount: number;
+  ticketsSoldList: string[];
+}
+
+export interface FinancialReconciliation {
+  periodLabel: string;
+  totalTicketsSold: number;
+  grossSalesExpected: number;
+  totalExpensesValidated: number;
+  netRevenueExpected: number;
+  totalRemittancesReceived: number;
+  declaredCashTotal: number;
+  unremittedBalance: number;
+  discrepancy: number;
+  status: 'BALANCED' | 'DEFICIT' | 'SURPLUS';
+}
+
+export interface QRVerificationLog {
+  id: string;
+  ticketId?: string;
+  ticketNumber: string;
+  controllerId?: string;
+  plateNumber?: string;
+  isValid: boolean;
+  signatureValid: boolean;
+  isReplay: boolean;
+  verificationCount: number;
+  deviceInfo?: string;
+  location?: string;
+  verifiedAt: string;
 }

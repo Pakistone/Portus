@@ -15,6 +15,7 @@ import { getDB } from '../db/indexedDb';
 import { SupabaseDataLayer } from '../db/supabaseService';
 import { getSupabase } from '../db/supabaseClient';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateSecureToken } from '../utils/uuid';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -57,7 +58,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const db = await getDB();
       const attempt: LoginAttempt = {
-        id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: generateSecureToken('att', 12),
         username: params.username,
         profileId: params.profileId,
         isSuccessful: params.isSuccessful,
@@ -88,7 +89,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const db = await getDB();
         await db.put('audit_logs', {
-          id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: generateSecureToken('aud', 12),
           actorId: userToLog.id,
           actorName: userToLog.fullName,
           actorRole: userToLog.role,
@@ -158,7 +159,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
           }
 
-          const VALID_ROLES: Role[] = ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'];
+          const VALID_ROLES: Role[] = [
+            'ADMINISTRATEUR',
+            'RESPONSABLE',
+            'AGENT',
+            'CONTROLEUR',
+            'CAISSIER',
+            'FINANCE',
+            'AUDITEUR',
+          ];
           if (profile && profile.is_active && VALID_ROLES.includes(profile.role as Role)) {
             const formattedUser: User = {
               id: profile.id,
@@ -188,9 +197,27 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setCurrentUser(null);
           }
         } else {
-          // Aucun token Supabase actif
-          sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
-          setCurrentUser(null);
+          // Aucun token Supabase actif directement : vérifier si une session locale valide existe dans sessionStorage et IndexedDB
+          const cachedUserId = sessionStorage.getItem(CURRENT_USER_SESSION_KEY);
+          if (cachedUserId) {
+            try {
+              const db = await getDB();
+              const cachedUser = await db.get('users', cachedUserId);
+              if (cachedUser && cachedUser.isActive) {
+                setCurrentUser(cachedUser);
+                touchActivity();
+              } else {
+                sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+                setCurrentUser(null);
+              }
+            } catch {
+              sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+              setCurrentUser(null);
+            }
+          } else {
+            sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            setCurrentUser(null);
+          }
         }
 
         // Écouter les changements d'état d'authentification Supabase en temps réel
@@ -303,13 +330,72 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       return false;
     }
 
+    // 1. TENTATIVE PRIORITAIRE VIA LE PROXY BACKEND EXPRESS /api/auth/login
+    // Résout définitivement les blocages iframe, CORS, CSP et restrictions réseau
+    try {
+      const proxyRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: cleanInput,
+          password: passwordRaw,
+        }),
+      });
+
+      const proxyData = await proxyRes.json().catch(() => null);
+
+      if (proxyRes.ok && proxyData?.user) {
+        const loggedUser: User = proxyData.user;
+        setCurrentUser(loggedUser);
+        sessionStorage.setItem(CURRENT_USER_SESSION_KEY, loggedUser.id);
+        sessionStorage.setItem(SESSION_START_KEY, Date.now().toString());
+        sessionStorage.setItem(SESSION_LAST_ACTIVE_KEY, Date.now().toString());
+
+        // Initialiser la session Supabase côté client si un token a été retourné
+        const clientSupabase = getSupabase();
+        if (proxyData.session && clientSupabase) {
+          try {
+            await clientSupabase.auth.setSession({
+              access_token: proxyData.session.access_token,
+              refresh_token: proxyData.session.refresh_token,
+            });
+          } catch (e) {
+            console.warn('[PORTUS Auth] Erreur setSession client:', e);
+          }
+        }
+
+        // Cache local IndexedDB
+        try {
+          const db = await getDB();
+          await db.put('users', loggedUser);
+        } catch {}
+
+        return true;
+      }
+
+      // Si le serveur backend a retourné un statut d'erreur explicite
+      if (proxyRes.status === 423) {
+        setLockoutRemainingSeconds(proxyData?.remainingSeconds || 900);
+        setLoginError(proxyData?.error || 'Compte temporairement bloqué suite à plusieurs tentatives erronées.');
+        return false;
+      }
+
+      if (proxyRes.status === 401 || proxyRes.status === 403 || proxyRes.status === 400) {
+        setLoginError(proxyData?.error || 'Identifiant ou mot de passe incorrect.');
+        return false;
+      }
+    } catch (proxyErr) {
+      console.warn('[PORTUS Auth] Proxy /api/auth/login injoignable, bascule vers appel direct Supabase:', proxyErr);
+    }
+
+    // 2. REPLI SUR APPEL DIRECT SUPABASE (Si proxy indisponible)
     const supabase = getSupabase();
     if (!supabase) {
-      setLoginError('Supabase n’est pas configuré. Veuillez vérifier la connexion au serveur.');
+      setLoginError('Serveur d’authentification indisponible. Veuillez vérifier votre connexion.');
       return false;
     }
 
-    // 1. Vérification du verrouillage de compte (serveur Supabase)
+    // Vérification du verrouillage de compte (serveur Supabase)
     try {
       const lockStatus = await SupabaseDataLayer.getAccountLockoutStatus(cleanInput);
       if (lockStatus.isLocked && lockStatus.remainingSeconds > 0) {
@@ -459,7 +545,15 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         return false;
       }
 
-      const VALID_ROLES: Role[] = ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'];
+      const VALID_ROLES: Role[] = [
+        'ADMINISTRATEUR',
+        'RESPONSABLE',
+        'AGENT',
+        'CONTROLEUR',
+        'CAISSIER',
+        'FINANCE',
+        'AUDITEUR',
+      ];
       if (!profile.role || !VALID_ROLES.includes(profile.role as Role)) {
         setLoginError('Accès refusé. Aucun profil professionnel U.J.S.R.V. n’est associé à ce compte.');
         await supabase.auth.signOut();
@@ -540,7 +634,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const db = await getDB();
         await db.put('audit_logs', {
-          id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          id: generateSecureToken('aud', 12),
           actorId: currentUser.id,
           actorName: currentUser.fullName,
           actorRole: currentUser.role,

@@ -19,6 +19,9 @@ import type {
   AuditLog,
   FinancialAlert,
   Expense,
+  DailyClosing,
+  Vehicle,
+  TicketReprint,
 } from '../types';
 
 const DEFAULT_ADMIN_UUID = 'db2145a8-bdd8-492c-a2b4-f20126881b30';
@@ -106,39 +109,32 @@ export const SupabaseDataLayer = {
   // 1. PROFILS & UTILISATEURS
   // ------------------------------------------------------------------
   async fetchProfiles(): Promise<User[]> {
-    const supabase = getSupabase();
-    if (!supabase) return [];
-
-    // Tenter d'abord l'API backend admin si authentifié
+    // 1. Tenter d'abord l'API backend /api/users (contourne RLS sans restriction)
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        const resp = await fetch('/api/admin/users', {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        });
-        if (resp.ok) {
-          const json = await resp.json();
-          if (Array.isArray(json.users) && json.users.length > 0) {
-            return json.users.map((row: any) => ({
-              id: row.id,
-              username: row.username,
-              fullName: row.full_name,
-              role: row.role,
-              sectorId: row.sector_id,
-              sectorName: row.sector?.name || row.sectors?.name,
-              phone: row.phone,
-              isActive: row.is_active,
-              failedAttempts: row.failed_attempts || 0,
-              lockedUntil: row.locked_until,
-              createdAt: row.created_at,
-              updatedAt: row.updated_at,
-            }));
-          }
+      const resp = await fetch('/api/users');
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.users) && json.users.length > 0) {
+          return json.users.map((row: any) => ({
+            id: row.id,
+            username: row.username,
+            fullName: row.full_name,
+            role: row.role,
+            sectorId: row.sector_id,
+            sectorName: row.sector?.name || row.sectors?.name,
+            phone: row.phone,
+            isActive: row.is_active,
+            failedAttempts: row.failed_attempts || 0,
+            lockedUntil: row.locked_until,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          }));
         }
       }
     } catch {}
+
+    const supabase = getSupabase();
+    if (!supabase) return [];
 
     const { data, error } = await supabase
       .from('profiles')
@@ -466,6 +462,64 @@ export const SupabaseDataLayer = {
     }
 
     return true;
+  },
+
+  async assignCarnet(carnetId: string, responsableId: string, sectorId: string): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase) return false;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`/api/carnets/${encodeURIComponent(carnetId)}/assign`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ responsableId, sectorId }),
+      });
+
+      if (res.ok) {
+        return true;
+      }
+    } catch (err) {
+      console.error('[SupabaseDataLayer] assignCarnet API error:', err);
+    }
+
+    // Fallback: Direct client-side update
+    try {
+      const { error: carnetErr } = await supabase
+        .from('carnets')
+        .update({
+          assigned_to_responsable: sanitizeUuidOrNull(responsableId),
+          sector_id: sanitizeUuidOrNull(sectorId),
+          status: responsableId ? 'ASSIGNED_TO_RESPONSIBLE' : 'GENERATED',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', carnetId);
+
+      if (carnetErr) throw carnetErr;
+
+      const { error: ticketErr } = await supabase
+        .from('tickets')
+        .update({
+          assigned_responsable_id: sanitizeUuidOrNull(responsableId),
+          sector_id: sanitizeUuidOrNull(sectorId),
+          status: responsableId ? 'ASSIGNED_TO_RESPONSIBLE' : 'GENERATED',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('carnet_id', carnetId)
+        .in('status', ['GENERATED', 'AVAILABLE']);
+
+      if (ticketErr) throw ticketErr;
+
+      return true;
+    } catch (err: any) {
+      console.warn('Supabase fallback assignCarnet error:', err.message);
+      return false;
+    }
   },
 
   async syncCarnetsBatch(carnets: Carnet[], tickets: Ticket[]): Promise<{ success: boolean; syncedCarnets: number; syncedTickets: number }> {
@@ -1614,5 +1668,230 @@ export const SupabaseDataLayer = {
       settings[row.key] = row.value;
     });
     return settings;
+  },
+
+  // ------------------------------------------------------------------
+  // 14. DÉPENSES (EXPENSES)
+  // ------------------------------------------------------------------
+  async fetchExpenses(): Promise<Expense[]> {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*, creator:profiles!created_by(full_name, role), approver:profiles!approved_by(full_name), resp:profiles!responsible_id(full_name), sectors(name)')
+        .order('expense_date', { ascending: false });
+
+      if (error) {
+        console.warn('Supabase fetchExpenses error:', error.message);
+        return [];
+      }
+
+      return (data || []).map((r: any) => ({
+        id: r.id,
+        expenseNumber: r.expense_number,
+        amount: r.amount,
+        category: r.category,
+        description: r.description,
+        beneficiary: r.beneficiary,
+        paymentMethod: r.payment_method,
+        expenseDate: r.expense_date,
+        receiptUrl: r.receipt_url,
+        status: r.status,
+        createdBy: r.created_by,
+        createdByName: r.creator?.full_name || 'Utilisateur',
+        createdByRole: r.creator?.role || 'AGENT',
+        responsibleId: r.responsible_id,
+        responsibleName: r.resp?.full_name,
+        sectorId: r.sector_id,
+        sectorName: r.sectors?.name,
+        approvedBy: r.approved_by,
+        approvedByName: r.approver?.full_name,
+        approvedAt: r.approved_at,
+        rejectionReason: r.rejection_reason,
+        cancellationReason: r.cancellation_reason,
+        correctionReason: r.correction_reason,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        syncedAt: r.updated_at,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  async insertExpense(expense: Expense): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    await supabase.from('expenses').upsert({
+      id: sanitizeUuid(expense.id),
+      expense_number: expense.expenseNumber,
+      amount: expense.amount,
+      category: expense.category,
+      description: expense.description,
+      beneficiary: expense.beneficiary || null,
+      payment_method: expense.paymentMethod || 'ESPECES',
+      expense_date: expense.expenseDate,
+      receipt_url: expense.receiptUrl || null,
+      status: expense.status,
+      created_by: sanitizeUuid(expense.createdBy),
+      responsible_id: sanitizeUuidOrNull(expense.responsibleId),
+      sector_id: sanitizeUuidOrNull(expense.sectorId),
+      created_at: expense.createdAt,
+      updated_at: expense.updatedAt,
+    }, { onConflict: 'id' });
+  },
+
+  async updateExpenseStatus(params: {
+    expenseId: string;
+    status: Expense['status'];
+    approvedBy?: string;
+    reason?: string;
+  }): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    const updates: Record<string, any> = {
+      status: params.status,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (params.approvedBy) {
+      updates.approved_by = sanitizeUuid(params.approvedBy);
+      updates.approved_at = new Date().toISOString();
+    }
+    if (params.status === 'REJECTED') {
+      updates.rejection_reason = params.reason;
+    } else if (params.status === 'CANCELLED') {
+      updates.cancellation_reason = params.reason;
+    }
+
+    await supabase.from('expenses').update(updates).eq('id', sanitizeUuid(params.expenseId));
+  },
+
+  // ------------------------------------------------------------------
+  // 15. CLÔTURES JOURNALIÈRES (DAILY CLOSINGS)
+  // ------------------------------------------------------------------
+  async fetchDailyClosings(): Promise<DailyClosing[]> {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('daily_closings')
+        .select('*, cashier:profiles!cashier_id(full_name), confirm:profiles!confirmed_by(full_name), sectors(name)')
+        .order('closing_date', { ascending: false });
+
+      if (error) {
+        console.warn('Supabase fetchDailyClosings error:', error.message);
+        return [];
+      }
+
+      return (data || []).map((r: any) => ({
+        id: r.id,
+        closingReference: r.closing_reference,
+        closingDate: r.closing_date,
+        cashierId: r.cashier_id,
+        cashierName: r.cashier?.full_name || 'Caissier',
+        sectorId: r.sector_id,
+        sectorName: r.sectors?.name,
+        openingBalance: r.opening_balance,
+        cashSalesAmount: r.cash_sales_amount,
+        digitalSalesAmount: r.digital_sales_amount,
+        refundsAmount: r.refunds_amount,
+        expensesAmount: r.expenses_amount,
+        expectedBalance: r.expected_balance,
+        declaredBalance: r.declared_balance,
+        discrepancy: r.discrepancy,
+        notes: r.notes,
+        status: r.status,
+        confirmedBy: r.confirmed_by,
+        confirmedByName: r.confirm?.full_name,
+        confirmedAt: r.confirmed_at,
+        isLocked: r.is_locked,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  async insertDailyClosing(closing: DailyClosing): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    await supabase.from('daily_closings').upsert({
+      id: sanitizeUuid(closing.id),
+      closing_reference: closing.closingReference,
+      closing_date: closing.closingDate,
+      cashier_id: sanitizeUuid(closing.cashierId),
+      sector_id: sanitizeUuidOrNull(closing.sectorId),
+      opening_balance: closing.openingBalance,
+      cash_sales_amount: closing.cashSalesAmount,
+      digital_sales_amount: closing.digitalSalesAmount,
+      refunds_amount: closing.refundsAmount,
+      expenses_amount: closing.expensesAmount,
+      expected_balance: closing.expectedBalance,
+      declared_balance: closing.declaredBalance,
+      discrepancy: closing.discrepancy,
+      notes: closing.notes || null,
+      status: closing.status,
+      is_locked: closing.isLocked,
+      created_at: closing.createdAt,
+      updated_at: closing.updatedAt,
+    }, { onConflict: 'id' });
+  },
+
+  // ------------------------------------------------------------------
+  // 16. VÉHICULES (VEHICLES REGISTRY)
+  // ------------------------------------------------------------------
+  async fetchVehicles(): Promise<Vehicle[]> {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase.from('vehicles').select('*').order('last_seen_at', { ascending: false });
+      if (error) return [];
+      return (data || []).map((r: any) => ({
+        id: r.id,
+        plateNumber: r.plate_number,
+        vehicleType: r.vehicle_type,
+        makeModel: r.make_model,
+        driverName: r.driver_name,
+        driverPhone: r.driver_phone,
+        companyName: r.company_name,
+        isFlaggedFraud: r.is_flagged_fraud,
+        flagReason: r.flag_reason,
+        lastSeenAt: r.last_seen_at,
+        totalTicketsCount: r.total_tickets_count || 0,
+        totalControlsCount: r.total_controls_count || 0,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  async upsertVehicle(vehicle: Vehicle): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    await supabase.from('vehicles').upsert({
+      id: sanitizeUuid(vehicle.id),
+      plate_number: vehicle.plateNumber.toUpperCase().trim(),
+      vehicle_type: vehicle.vehicleType,
+      make_model: vehicle.makeModel || null,
+      driver_name: vehicle.driverName || null,
+      driver_phone: vehicle.driverPhone || null,
+      company_name: vehicle.companyName || null,
+      is_flagged_fraud: vehicle.isFlaggedFraud,
+      flag_reason: vehicle.flagReason || null,
+      last_seen_at: vehicle.lastSeenAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'plate_number' });
   },
 };

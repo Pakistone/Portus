@@ -80,6 +80,13 @@ export function resolveEnvConfig(): { url: string; key: string; source: string }
     }
   }
 
+  // 3. Fallback résilient PORTUS
+  if (!url || !key || url.includes('xyvdmqvwqlpypsbqpkru')) {
+    url = 'https://wbbpaebrhobuaoherwmg.supabase.co';
+    key = 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727';
+    source = 'Configuration intégrée PORTUS-UJSRV';
+  }
+
   return { url, key, source };
 }
 
@@ -96,14 +103,6 @@ export async function testConnection(
 
   let sanitizedUrl = sanitizeUrl(rawUrl);
   let sanitizedKey = sanitizeApiKey(rawKey);
-
-  // Sécurité de production PORTUS : garantir la cible sur le projet wbbpaebrhobuaoherwmg
-  if (!sanitizedUrl || sanitizedUrl.includes('xyvdmqvwqlpypsbqpkru')) {
-    sanitizedUrl = 'https://wbbpaebrhobuaoherwmg.supabase.co';
-    if (!sanitizedKey) {
-      sanitizedKey = 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727';
-    }
-  }
 
   const hadEnclosingChevrons = Boolean(rawKey.trim().startsWith('<') && rawKey.trim().endsWith('>'));
   const hadQuotes = Boolean(

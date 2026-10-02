@@ -62,20 +62,18 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     notificationMsg: string;
   } | null>(null);
 
-  // Liste des agents éligibles (actifs et dans le même secteur pour un responsable)
+  // Liste des agents éligibles (actifs, ouverts à tous les secteurs sur demande de l'utilisateur)
   const eligibleAgents = useMemo(() => {
     return users.filter((u) => {
       if (u.role !== 'AGENT' || !u.isActive) return false;
-      if (currentUser?.role === 'RESPONSABLE') {
-        return !currentUser.sectorId || u.sectorId === currentUser.sectorId;
-      }
       return true;
     });
-  }, [users, currentUser]);
+  }, [users]);
 
-  // Carnets du responsable
+  // Carnets du responsable (exclure les carnets annulés)
   const availableCarnets = useMemo(() => {
     return carnets.filter((c) => {
+      if (c.status === 'CANCELLED') return false;
       if (currentUser?.role === 'RESPONSABLE') {
         return c.assignedToResponsableId === currentUser.id;
       }

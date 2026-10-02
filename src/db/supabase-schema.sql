@@ -607,16 +607,19 @@ ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.login_attempts ENABLE ROW LEVEL SECURITY;
 
 -- Fonctions utilitaires SECURITY DEFINER pour évaluer les privilèges sans contournement
+DROP FUNCTION IF EXISTS public.get_current_role() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_current_role()
 RETURNS user_role AS $$
   SELECT role FROM public.profiles WHERE id = auth.uid();
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+DROP FUNCTION IF EXISTS public.get_current_sector_id() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_current_sector_id()
 RETURNS UUID AS $$
   SELECT sector_id FROM public.profiles WHERE id = auth.uid();
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+DROP FUNCTION IF EXISTS public.is_admin() CASCADE;
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
   SELECT EXISTS (
@@ -625,6 +628,7 @@ RETURNS BOOLEAN AS $$
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+DROP FUNCTION IF EXISTS public.is_responsable() CASCADE;
 CREATE OR REPLACE FUNCTION public.is_responsable()
 RETURNS BOOLEAN AS $$
   SELECT EXISTS (
@@ -637,29 +641,38 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 -- A. POLITIQUES POUR 'roles', 'sectors' ET 'app_settings'
 -- --------------------------------------------------------------------
 -- Tout utilisateur authentifié peut lire les rôles et secteurs actifs
+DROP POLICY IF EXISTS "Read roles authenticated" ON public.roles;
 CREATE POLICY "Read roles authenticated" ON public.roles FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Read sectors authenticated" ON public.sectors;
 CREATE POLICY "Read sectors authenticated" ON public.sectors FOR SELECT TO authenticated USING (is_active = true OR public.is_admin());
+DROP POLICY IF EXISTS "Admin manage sectors" ON public.sectors;
 CREATE POLICY "Admin manage sectors" ON public.sectors FOR ALL TO authenticated USING (public.is_admin());
 -- Paramètres généraux de l'application :
 -- Les utilisateurs authentifiés ont accès en lecture à l'exception stricte de la clé HMAC serveur
+DROP POLICY IF EXISTS "Read app settings authenticated" ON public.app_settings;
 CREATE POLICY "Read app settings authenticated" ON public.app_settings FOR SELECT TO authenticated 
   USING (key != 'server_hmac_signing_key' OR public.is_admin());
+DROP POLICY IF EXISTS "Admin update app settings" ON public.app_settings;
 CREATE POLICY "Admin update app settings" ON public.app_settings FOR ALL TO authenticated USING (public.is_admin());
 
 -- --------------------------------------------------------------------
 -- B. POLITIQUES POUR 'profiles'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access profiles" ON public.profiles;
 CREATE POLICY "Admin full access profiles" ON public.profiles FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Responsable read sector profiles" ON public.profiles;
 CREATE POLICY "Responsable read sector profiles" ON public.profiles FOR SELECT TO authenticated
   USING (
     public.is_admin() OR 
     (public.is_responsable() AND (sector_id = public.get_current_sector_id() OR id = auth.uid()))
   );
 
+DROP POLICY IF EXISTS "User read own profile" ON public.profiles;
 CREATE POLICY "User read own profile" ON public.profiles FOR SELECT TO authenticated
   USING (id = auth.uid());
 
+DROP POLICY IF EXISTS "User update own phone" ON public.profiles;
 CREATE POLICY "User update own phone" ON public.profiles FOR UPDATE TO authenticated
   USING (id = auth.uid())
   WITH CHECK (id = auth.uid());
@@ -667,8 +680,10 @@ CREATE POLICY "User update own phone" ON public.profiles FOR UPDATE TO authentic
 -- --------------------------------------------------------------------
 -- C. POLITIQUES POUR 'carnets'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access carnets" ON public.carnets;
 CREATE POLICY "Admin full access carnets" ON public.carnets FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Responsable read sector carnets" ON public.carnets;
 CREATE POLICY "Responsable read sector carnets" ON public.carnets FOR SELECT TO authenticated
   USING (
     public.is_responsable() AND 
@@ -679,9 +694,11 @@ CREATE POLICY "Responsable read sector carnets" ON public.carnets FOR SELECT TO 
 -- D. POLITIQUES POUR 'tickets' (MUTATIONS VIA RPC SÉCURISÉES SEULEMENT)
 -- --------------------------------------------------------------------
 -- 1. Administrateur : accès global
+DROP POLICY IF EXISTS "Admin full access tickets" ON public.tickets;
 CREATE POLICY "Admin full access tickets" ON public.tickets FOR ALL TO authenticated USING (public.is_admin());
 
 -- 2. Responsable : uniquement son secteur et ses agents
+DROP POLICY IF EXISTS "Responsable read sector tickets" ON public.tickets;
 CREATE POLICY "Responsable read sector tickets" ON public.tickets FOR SELECT TO authenticated
   USING (
     public.is_responsable() AND 
@@ -689,6 +706,7 @@ CREATE POLICY "Responsable read sector tickets" ON public.tickets FOR SELECT TO 
   );
 
 -- 3. Agent : uniquement ses tickets attribués
+DROP POLICY IF EXISTS "Agent read assigned tickets" ON public.tickets;
 CREATE POLICY "Agent read assigned tickets" ON public.tickets FOR SELECT TO authenticated
   USING (
     public.get_current_role() = 'AGENT' AND 
@@ -696,6 +714,7 @@ CREATE POLICY "Agent read assigned tickets" ON public.tickets FOR SELECT TO auth
   );
 
 -- 4. Contrôleur : lecture des tickets pour vérification de validité
+DROP POLICY IF EXISTS "Controleur verify tickets" ON public.tickets;
 CREATE POLICY "Controleur verify tickets" ON public.tickets FOR SELECT TO authenticated
   USING (
     public.get_current_role() = 'CONTROLEUR' OR
@@ -706,8 +725,10 @@ CREATE POLICY "Controleur verify tickets" ON public.tickets FOR SELECT TO authen
 -- --------------------------------------------------------------------
 -- E. POLITIQUES POUR 'sales' (VENTES - MUTATIONS VIA RPC 'sell_ticket_secure')
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access sales" ON public.sales;
 CREATE POLICY "Admin full access sales" ON public.sales FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Responsable read sector sales" ON public.sales;
 CREATE POLICY "Responsable read sector sales" ON public.sales FOR SELECT TO authenticated
   USING (
     public.is_responsable() AND 
@@ -716,33 +737,40 @@ CREATE POLICY "Responsable read sector sales" ON public.sales FOR SELECT TO auth
     ))
   );
 
+DROP POLICY IF EXISTS "Agent read own sales" ON public.sales;
 CREATE POLICY "Agent read own sales" ON public.sales FOR SELECT TO authenticated
   USING (public.get_current_role() = 'AGENT' AND agent_id = auth.uid());
 
 -- --------------------------------------------------------------------
 -- F. POLITIQUES POUR 'remittances' & 'remittance_adjustments'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access remittances" ON public.remittances;
 CREATE POLICY "Admin full access remittances" ON public.remittances FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Responsable read sector remittances" ON public.remittances;
 CREATE POLICY "Responsable read sector remittances" ON public.remittances FOR SELECT TO authenticated
   USING (
     public.is_responsable() AND 
     (responsable_id = auth.uid() OR sector_id = public.get_current_sector_id())
   );
 
+DROP POLICY IF EXISTS "Responsable insert remittance" ON public.remittances;
 CREATE POLICY "Responsable insert remittance" ON public.remittances FOR INSERT TO authenticated
   WITH CHECK (
     public.is_responsable() AND 
     responsable_id = auth.uid()
   );
 
+DROP POLICY IF EXISTS "Agent read own remittances" ON public.remittances;
 CREATE POLICY "Agent read own remittances" ON public.remittances FOR SELECT TO authenticated
   USING (agent_id = auth.uid());
 
 -- Corrections de remise (table d'ajustements : admin uniquement)
+DROP POLICY IF EXISTS "Admin full access remittance adjustments" ON public.remittance_adjustments;
 CREATE POLICY "Admin full access remittance adjustments" ON public.remittance_adjustments 
   FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Responsable view remittance adjustments" ON public.remittance_adjustments;
 CREATE POLICY "Responsable view remittance adjustments" ON public.remittance_adjustments 
   FOR SELECT TO authenticated USING (public.is_responsable());
 
@@ -750,47 +778,60 @@ CREATE POLICY "Responsable view remittance adjustments" ON public.remittance_adj
 -- G. POLITIQUES POUR 'controls' & 'fraud_reports'
 -- (LES CONTRÔLES SONT ENREGISTRÉS PAR LA RPC 'record_control_secure')
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access controls" ON public.controls;
 CREATE POLICY "Admin full access controls" ON public.controls FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access fraud reports" ON public.fraud_reports;
 CREATE POLICY "Admin full access fraud reports" ON public.fraud_reports FOR ALL TO authenticated USING (public.is_admin());
 
+DROP POLICY IF EXISTS "Controleur read own controls" ON public.controls;
 CREATE POLICY "Controleur read own controls" ON public.controls FOR SELECT TO authenticated
   USING (public.get_current_role() = 'CONTROLEUR' AND controleur_id = auth.uid());
 
+DROP POLICY IF EXISTS "Controleur read own fraud reports" ON public.fraud_reports;
 CREATE POLICY "Controleur read own fraud reports" ON public.fraud_reports FOR SELECT TO authenticated
   USING (public.get_current_role() = 'CONTROLEUR' AND controleur_id = auth.uid());
 
+DROP POLICY IF EXISTS "Controleur insert fraud report" ON public.fraud_reports;
 CREATE POLICY "Controleur insert fraud report" ON public.fraud_reports FOR INSERT TO authenticated
   WITH CHECK (
     public.get_current_role() = 'CONTROLEUR' AND 
     controleur_id = auth.uid()
   );
 
+DROP POLICY IF EXISTS "Responsable read sector fraud reports" ON public.fraud_reports;
 CREATE POLICY "Responsable read sector fraud reports" ON public.fraud_reports FOR SELECT TO authenticated
   USING (public.is_responsable());
 
 -- --------------------------------------------------------------------
 -- H. POLITIQUES POUR 'audit_logs' (APPEND-ONLY VIA TRIGGER & RLS)
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin read all audit logs" ON public.audit_logs;
 CREATE POLICY "Admin read all audit logs" ON public.audit_logs FOR SELECT TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Authenticated insert audit logs" ON public.audit_logs;
 CREATE POLICY "Authenticated insert audit logs" ON public.audit_logs FOR INSERT TO authenticated WITH CHECK (actor_id = auth.uid());
 
 -- --------------------------------------------------------------------
 -- I. POLITIQUES POUR 'notifications'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "User read own notifications" ON public.notifications;
 CREATE POLICY "User read own notifications" ON public.notifications FOR SELECT TO authenticated
   USING (recipient_id = auth.uid() OR public.is_admin());
 
+DROP POLICY IF EXISTS "User update own notifications read status" ON public.notifications;
 CREATE POLICY "User update own notifications read status" ON public.notifications FOR UPDATE TO authenticated
   USING (recipient_id = auth.uid())
   WITH CHECK (recipient_id = auth.uid());
 
+DROP POLICY IF EXISTS "System insert notifications" ON public.notifications;
 CREATE POLICY "System insert notifications" ON public.notifications FOR INSERT TO authenticated
   WITH CHECK (true);
 
 -- --------------------------------------------------------------------
 -- J. POLITIQUES POUR 'sync_queue'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access sync queue" ON public.sync_queue;
 CREATE POLICY "Admin full access sync queue" ON public.sync_queue FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Agent manage own sync queue" ON public.sync_queue;
 CREATE POLICY "Agent manage own sync queue" ON public.sync_queue FOR ALL TO authenticated
   USING (agent_id = auth.uid())
   WITH CHECK (agent_id = auth.uid());
@@ -798,11 +839,16 @@ CREATE POLICY "Agent manage own sync queue" ON public.sync_queue FOR ALL TO auth
 -- --------------------------------------------------------------------
 -- K. POLITIQUES POUR 'ticket_assignments' & 'ticket_status_history'
 -- --------------------------------------------------------------------
+DROP POLICY IF EXISTS "Admin full access assignments" ON public.ticket_assignments;
 CREATE POLICY "Admin full access assignments" ON public.ticket_assignments FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Responsable read assignments" ON public.ticket_assignments;
 CREATE POLICY "Responsable read assignments" ON public.ticket_assignments FOR SELECT TO authenticated USING (public.is_responsable());
+DROP POLICY IF EXISTS "Responsable insert assignments" ON public.ticket_assignments;
 CREATE POLICY "Responsable insert assignments" ON public.ticket_assignments FOR INSERT TO authenticated WITH CHECK (assigned_by = auth.uid());
 
+DROP POLICY IF EXISTS "Admin read status history" ON public.ticket_status_history;
 CREATE POLICY "Admin read status history" ON public.ticket_status_history FOR SELECT TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Responsable read status history" ON public.ticket_status_history;
 CREATE POLICY "Responsable read status history" ON public.ticket_status_history FOR SELECT TO authenticated USING (public.is_responsable());
 
 -- ====================================================================

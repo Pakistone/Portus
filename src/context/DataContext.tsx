@@ -23,6 +23,9 @@ import type {
   Role,
   TicketStatus,
   NotificationRecord,
+  Vehicle,
+  DailyClosing,
+  TicketReprint,
 } from '../types';
 import {
   TICKET_PRICE_FCFA,
@@ -44,7 +47,7 @@ import {
   formatPlateDisplay,
 } from '../utils/normalization';
 import { getCurrentCoordinates } from '../utils/geolocation';
-import { generateUUID } from '../utils/uuid';
+import { generateUUID, generateSecureToken } from '../utils/uuid';
 import { useAuth } from './AuthContext';
 import { useOnlineStatus } from '../components/pwa/usePWAInstall';
 import { SupabaseDataLayer } from '../db/supabaseService';
@@ -55,6 +58,7 @@ import {
   verifyTicketSecurityToken,
   assertTicketStatusTransition,
 } from '../utils/ticketSecurity';
+import { recordTicketReprint as recordTicketReprintDomain } from '../services/ticketService';
 
 export type VerificationStatus =
   | 'VALID'
@@ -97,6 +101,9 @@ interface DataContextType {
   auditLogs: AuditLog[];
   alerts: FinancialAlert[];
   notifications: NotificationRecord[];
+  dailyClosings: DailyClosing[];
+  vehicles: Vehicle[];
+  ticketReprints: TicketReprint[];
   sectors: typeof DEFAULT_SECTORS;
   ticketPrice: number;
   updateTicketPrice: (newPrice: number) => Promise<void>;
@@ -114,6 +121,20 @@ interface DataContextType {
   rejectExpense: (expenseId: string, reason: string) => Promise<Expense>;
   cancelExpense: (expenseId: string, reason: string) => Promise<Expense>;
   correctExpense: (expenseId: string, newAmount: number, reason: string) => Promise<Expense>;
+
+  // Actions Clôture, Véhicules & Réimpressions
+  submitDailyClosing: (params: {
+    openingBalance: number;
+    cashSalesAmount: number;
+    digitalSalesAmount: number;
+    refundsAmount: number;
+    expensesAmount: number;
+    expectedBalance: number;
+    declaredBalance: number;
+    notes?: string;
+  }) => Promise<DailyClosing>;
+  upsertVehicle: (vehicleData: Partial<Vehicle> & { plateNumber: string }) => Promise<Vehicle>;
+  recordTicketReprint: (ticketId: string, reason: string) => Promise<{ reprint: TicketReprint; isSuspicious: boolean }>;
 
   // Notifications
   markNotificationAsRead: (notificationId: string) => Promise<void>;
@@ -265,6 +286,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [alerts, setAlerts] = useState<FinancialAlert[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [dailyClosings, setDailyClosings] = useState<DailyClosing[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [ticketReprints, setTicketReprints] = useState<TicketReprint[]>([]);
 
   // Alertes Realtime Sécurité Routière
   const [latestRealtimeIncident, setLatestRealtimeIncident] = useState<FraudReport | null>(null);
@@ -310,46 +334,89 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Synchroniser les données depuis Supabase
       if (SupabaseDataLayer.isAvailable()) {
         try {
-          const [remoteProfiles, remoteCarnets, remoteTickets, remoteSales, remoteRemises] = await Promise.all([
+          const [
+            remoteProfiles,
+            remoteCarnets,
+            remoteTickets,
+            remoteSales,
+            remoteRemises,
+            remoteExpenses,
+            remoteClosings,
+            remoteVehicles,
+          ] = await Promise.all([
             SupabaseDataLayer.fetchProfiles(),
             SupabaseDataLayer.fetchCarnets(),
             SupabaseDataLayer.fetchTickets(),
             SupabaseDataLayer.fetchSales(),
             SupabaseDataLayer.fetchRemittances(),
+            SupabaseDataLayer.fetchExpenses(),
+            SupabaseDataLayer.fetchDailyClosings(),
+            SupabaseDataLayer.fetchVehicles(),
           ]);
           if (remoteProfiles && remoteProfiles.length > 0) {
+            const tx = db.transaction('users', 'readwrite');
             for (const p of remoteProfiles) {
-              await db.put('users', p);
+              await tx.store.put(p);
             }
+            await tx.done;
           }
           if (remoteCarnets && remoteCarnets.length > 0) {
             const remoteCarnetIds = new Set(remoteCarnets.map((c) => c.id));
             const currentLocalCarnets = await db.getAll('carnets');
+            const tx = db.transaction('carnets', 'readwrite');
             for (const lc of currentLocalCarnets) {
-              if (!remoteCarnetIds.has(lc.id) && lc.id === 'c0000000-0000-0000-0000-000000000001') {
-                await db.delete('carnets', lc.id);
+              if (!remoteCarnetIds.has(lc.id)) {
+                await tx.store.delete(lc.id);
               }
             }
             for (const c of remoteCarnets) {
-              await db.put('carnets', c);
+              await tx.store.put(c);
             }
+            await tx.done;
           }
           if (remoteTickets && remoteTickets.length > 0) {
             const remoteTicketIds = new Set(remoteTickets.map((t) => t.id));
             const currentLocalTickets = await db.getAll('tickets');
+            const tx = db.transaction('tickets', 'readwrite');
             for (const lt of currentLocalTickets) {
-              if (!remoteTicketIds.has(lt.id) && (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' || lt.id?.startsWith('f0000000-'))) {
-                await db.delete('tickets', lt.id);
+              if (!remoteTicketIds.has(lt.id)) {
+                await tx.store.delete(lt.id);
               }
             }
             for (const t of remoteTickets) {
-              await db.put('tickets', t);
+              await tx.store.put(t);
             }
+            await tx.done;
+          }
+
+          if (remoteExpenses && remoteExpenses.length > 0) {
+            const tx = db.transaction('expenses', 'readwrite');
+            for (const exp of remoteExpenses) {
+              await tx.store.put(exp);
+            }
+            await tx.done;
+          }
+
+          if (remoteClosings && remoteClosings.length > 0 && db.objectStoreNames.contains('daily_closings')) {
+            const tx = db.transaction('daily_closings', 'readwrite');
+            for (const cl of remoteClosings) {
+              await tx.store.put(cl);
+            }
+            await tx.done;
+          }
+
+          if (remoteVehicles && remoteVehicles.length > 0 && db.objectStoreNames.contains('vehicles')) {
+            const tx = db.transaction('vehicles', 'readwrite');
+            for (const v of remoteVehicles) {
+              await tx.store.put(v);
+            }
+            await tx.done;
           }
 
           // Nettoyage de sécurité : retirer tout ticket de test synthétique (f0000000-...)
           // ou ticket anormal (> 3) accidentellement associé au carnet démo initial
           const allLocalTicketsBefore = await db.getAll('tickets');
+          const txClean = db.transaction('tickets', 'readwrite');
           for (const lt of allLocalTicketsBefore) {
             if (
               lt.id?.startsWith('f0000000-') ||
@@ -357,9 +424,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                lt.ticketNumber &&
                !['VRD-000001', 'VRD-000002', 'VRD-000003'].includes(lt.ticketNumber))
             ) {
-              await db.delete('tickets', lt.id);
+              await txClean.store.delete(lt.id);
             }
           }
+          await txClean.done;
 
           // Synchronisation automatique des tickets locaux réels vers Supabase
           // (permet de propager immédiatement les carnets créés localement vers l'app publiée)
@@ -375,14 +443,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
 
           if (remoteSales && remoteSales.length > 0) {
+            const tx = db.transaction('sales', 'readwrite');
             for (const s of remoteSales) {
-              await db.put('sales', s);
+              await tx.store.put(s);
             }
+            await tx.done;
           }
           if (remoteRemises && remoteRemises.length > 0) {
+            const tx = db.transaction('remises', 'readwrite');
             for (const r of remoteRemises) {
-              await db.put('remises', r);
+              await tx.store.put(r);
             }
+            await tx.done;
           }
         } catch (syncErr) {
           console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
@@ -494,6 +566,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       setNotifications(allNotifications.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
 
+      let allClosings: DailyClosing[] = [];
+      if (db.objectStoreNames.contains('daily_closings')) {
+        allClosings = await db.getAll('daily_closings');
+      }
+      setDailyClosings(allClosings.sort((a, b) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || '')));
+
+      let allVehicles: Vehicle[] = [];
+      if (db.objectStoreNames.contains('vehicles')) {
+        allVehicles = await db.getAll('vehicles');
+      }
+      setVehicles(allVehicles);
+
+      let allReprints: TicketReprint[] = [];
+      if (db.objectStoreNames.contains('ticket_reprints')) {
+        allReprints = await db.getAll('ticket_reprints');
+      }
+      setTicketReprints(allReprints);
+
       // Compter les ventes, contrôles et signalements de fraude en attente de synchro
       const pendingSales = allSales.filter((s) => s.syncStatus === 'PENDING_SYNC');
       const pendingControls = allControls.filter((c) => c.syncStatus === 'PENDING_SYNC');
@@ -566,7 +656,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     refreshData();
-  }, [refreshData]);
+  }, [currentUser, refreshData]);
 
   // Notification obligatoire Responsables et Administrateurs après synchronisation d'une vente
   const notifySaleSynced = useCallback(async (sale: Sale, database: any) => {
@@ -953,6 +1043,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         syncedAt: now.toISOString(),
       };
 
+      // Déclencher instantanément l'alerte sonore et le bandeau d'alerte visuel en local
+      playIncidentAlertSound();
+      setLatestRealtimeIncident(testIncident);
+      window.dispatchEvent(new CustomEvent('portus-road-safety-alert', { detail: testIncident }));
+
       if (SupabaseDataLayer.isAvailable()) {
         await SupabaseDataLayer.broadcastIncident(testIncident);
         await SupabaseDataLayer.insertFraudReport(testIncident);
@@ -973,7 +1068,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const db = await getDB();
       const log: AuditLog = {
-        id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: generateSecureToken('aud', 12),
         actorId: currentUser?.id || 'system',
         actorName: currentUser?.fullName || 'SYSTÈME',
         actorRole: currentUser?.role || 'ADMINISTRATEUR',
@@ -1187,7 +1282,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
           if (db.objectStoreNames.contains('ticket_assignments')) {
             await db.put('ticket_assignments', {
-              id: `asg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              id: generateSecureToken('asg', 12),
               ticketId: tkt.id,
               carnetId: tkt.carnetId,
               fromProfileId: user.id,
@@ -1244,7 +1339,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
           if (db.objectStoreNames.contains('ticket_assignments')) {
             await db.put('ticket_assignments', {
-              id: `asg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              id: generateSecureToken('asg', 12),
               ticketId: tkt.id,
               carnetId: tkt.carnetId,
               fromProfileId: user.id,
@@ -1468,10 +1563,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const carnetIndex = allCarnets.length + 1;
     const carnetNumber = `C-${currentYear}-${String(carnetIndex).padStart(3, '0')}`;
     
-    // Identifiant UUID du carnet
-    const carnetId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
-      ? crypto.randomUUID() 
-      : `carnet-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    // Identifiant UUID du carnet (cryptographiquement sécurisé)
+    const carnetId = generateUUID();
 
     let responsableName: string | undefined = undefined;
     let sectorId: string | undefined = undefined;
@@ -1524,10 +1617,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const createdTickets: Ticket[] = [];
 
     for (let i = startNum; i <= endNum; i++) {
-      // UUID interne unique
-      const ticketId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : `tkt-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`;
+      // UUID interne unique cryptographiquement sécurisé
+      const ticketId = generateUUID();
 
       // Numéro physique clairement visible (ex: VRD-000001 ou VRD-001)
       const ticketPhysicalNumber = `${cleanPrefix}-${String(i).padStart(6, '0')}`;
@@ -1694,7 +1785,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     );
 
     if (SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.insertCarnet(carnet).catch(() => {});
+      SupabaseDataLayer.assignCarnet(carnet.id, responsable.id, responsable.sectorId || '').catch((err) => {
+        console.warn('Erreur synchro attribution carnet Supabase:', err);
+      });
     }
 
     await refreshData();
@@ -1702,7 +1795,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   /**
-   * ANNULATION D'UN CARNET PAR L'ADMINISTRATEUR
+   * ANNULATION D'UN CARNET PAR L'ADMINISTRATEUR (SYNCHRONISÉE SUPABASE)
    */
   const cancelCarnet = async (carnetId: string, reason: string): Promise<Carnet> => {
     if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
@@ -1713,14 +1806,38 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error('Un motif d’annulation est obligatoire.');
     }
 
+    // 1. Appel du backend synchronisé (qui met à jour Supabase avec les bons rôles/règles)
+    try {
+      const supabase = (await import('../db/supabaseClient')).getSupabase();
+      const session = (await supabase?.auth.getSession())?.data.session;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`/api/carnets/${encodeURIComponent(carnetId)}/cancel`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: cleanReason }),
+      });
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({ error: 'Échec de la requête de cancellation.' }));
+        throw new Error(json.error || 'Erreur lors de la communication avec le serveur PORTUS.');
+      }
+    } catch (err: any) {
+      console.error('[DataContext] cancelCarnet error:', err);
+      throw new Error(err.message || 'Impossible d’annuler le carnet sur le serveur.');
+    }
+
+    // 2. Mise à jour de la base de données locale après succès de la mise à jour serveur
     const db = await getDB();
     const carnet = await db.get('carnets', carnetId);
-    if (!carnet) throw new Error('Carnet introuvable.');
+    if (!carnet) throw new Error('Carnet introuvable localement.');
 
     carnet.status = 'CANCELLED';
     await db.put('carnets', carnet);
 
-    // Annuler tous les tickets non vendus de ce carnet
     const allTickets = await db.getAll('tickets');
     const carnetTickets = allTickets.filter((t) => t.carnetId === carnet.id);
 
@@ -1800,15 +1917,45 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
       throw new Error('Violation de privilège : Un responsable ou agent ne peut jamais annuler un ticket. Seul l’administrateur général est habilité.');
     }
+    const cleanReason = normalizeText(reason);
+    if (!cleanReason) {
+      throw new Error('Un motif d’annulation est obligatoire.');
+    }
+
+    // 1. Appel du backend synchronisé (qui met à jour Supabase avec les bons rôles/règles)
+    try {
+      const supabase = (await import('../db/supabaseClient')).getSupabase();
+      const session = (await supabase?.auth.getSession())?.data.session;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(`/api/tickets/${encodeURIComponent(ticketId)}/cancel`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: cleanReason }),
+      });
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({ error: 'Échec de la requête de cancellation.' }));
+        throw new Error(json.error || 'Erreur lors de la communication avec le serveur PORTUS.');
+      }
+    } catch (err: any) {
+      console.error('[DataContext] cancelTicket error:', err);
+      throw new Error(err.message || 'Impossible d’annuler le ticket sur le serveur.');
+    }
+
+    // 2. Mise à jour de la base de données locale
     const db = await getDB();
     const ticket = await db.get('tickets', ticketId);
-    if (!ticket) throw new Error('Ticket introuvable');
+    if (!ticket) throw new Error('Ticket introuvable localement');
 
     const previousStatus = ticket.status;
     ticket.status = 'CANCELLED';
     ticket.cancelledAt = new Date().toISOString();
     ticket.cancelledBy = currentUser?.fullName;
-    ticket.cancellationReason = normalizeText(reason);
+    ticket.cancellationReason = cleanReason;
     await db.put('tickets', ticket);
 
     await recordAudit(
@@ -1936,9 +2083,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     if (currentUser && currentUser.role === 'RESPONSABLE') {
-      if (currentUser.sectorId && agent.sectorId && agent.sectorId !== currentUser.sectorId) {
-        throw new Error("Accès refusé : Vous ne pouvez pas attribuer de tickets à un agent d'un autre secteur.");
-      }
+      // Relaxed to allow ticket distribution to any agent regardless of their sector as requested
     }
 
     // Contrôles préalables stricts de sécurité :
@@ -1950,9 +2095,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!ticket) throw new Error(`Ticket introuvable (ID: ${tId}).`);
 
       if (currentUser && currentUser.role === 'RESPONSABLE' && currentUser.sectorId) {
-        if (ticket.sectorId && ticket.sectorId !== currentUser.sectorId) {
-          throw new Error(`Accès refusé : Le ticket ${ticket.ticketNumber} n'appartient pas à votre secteur.`);
-        }
+        // Relaxed sector restriction so any assigned booklet's tickets can be distributed regardless of sector
       }
 
       if (ticket.status === 'SOLD' || ticket.status === 'CONTROLLED') {
@@ -2003,7 +2146,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       updatedTickets.push(ticket);
 
       const assignmentRecord: any = {
-        id: `asg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: generateSecureToken('asg', 12),
         ticketId: ticket.id,
         carnetId: ticket.carnetId,
         fromProfileId: oldAgentId || currentUser?.id,
@@ -2051,7 +2194,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // La notification doit être persistante et synchronisable.
     const notifMessage = `${count} NOUVEAUX TICKETS VOUS ONT ÉTÉ ATTRIBUÉS`;
     const notif: NotificationRecord = {
-      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: generateSecureToken('notif', 12),
       recipientId: agent.id,
       senderId: currentUser?.id,
       title: 'ATTRIBUTION DE TICKETS',
@@ -2076,13 +2219,30 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (SupabaseDataLayer.isAvailable()) {
       SupabaseDataLayer.insertNotification(notif).catch(() => {});
-      for (const t of updatedTickets) {
-        SupabaseDataLayer.updateTicketStatus({
-          ticketId: t.id,
-          status: 'ASSIGNED_TO_AGENT',
-          assignedAgentId: agent.id,
-          assignedResponsableId: t.assignedResponsableId,
-        }).catch(() => {});
+      try {
+        const supabase = (await import('../db/supabaseClient')).getSupabase();
+        const session = (await supabase?.auth.getSession())?.data.session;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`;
+        }
+
+        const res = await fetch('/api/tickets/assign', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            ticketIds,
+            agentId: agent.id,
+            responsibleId: currentUser?.id,
+          }),
+        });
+
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({ error: 'Échec de l’attribution sur le serveur.' }));
+          console.warn('[DataContext] Erreur serveur lors de l’attribution:', json.error);
+        }
+      } catch (err) {
+        console.warn('[DataContext] Erreur réseau lors de l’attribution:', err);
       }
     }
 
@@ -2316,7 +2476,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const db = await getDB();
     const allExpenses = await db.getAll('expenses');
     const expenseNumber = `EXP-2026-${String(allExpenses.length + 1).padStart(6, '0')}`;
-    const expenseId = `exp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const expenseId = generateUUID();
     const nowIso = new Date().toISOString();
 
     const expense: Expense = {
@@ -2341,6 +2501,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     await db.put('expenses', expense);
+
+    // Persistance dans Supabase si connecté
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.insertExpense(expense).catch((err) =>
+        console.warn('Supabase insertExpense warning:', err)
+      );
+    }
 
     // Notifier l'administrateur
     const admins = (await db.getAll('users')).filter((u) => u.role === 'ADMINISTRATEUR' && u.isActive);
@@ -2392,6 +2559,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     expense.updatedAt = nowIso;
 
     await db.put('expenses', expense);
+
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.updateExpenseStatus({
+        expenseId: expense.id,
+        status: 'VALIDATED',
+        approvedBy: currentUser.id,
+      }).catch((err) => console.warn('Supabase validateExpense warning:', err));
+    }
 
     if (expense.createdBy && expense.createdBy !== currentUser.id) {
       const notif: NotificationRecord = {
@@ -2446,6 +2621,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await db.put('expenses', expense);
 
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.updateExpenseStatus({
+        expenseId: expense.id,
+        status: 'REJECTED',
+        approvedBy: currentUser.id,
+        reason: normalizeText(reason),
+      }).catch((err) => console.warn('Supabase rejectExpense warning:', err));
+    }
+
     if (expense.createdBy && expense.createdBy !== currentUser.id) {
       const notif: NotificationRecord = {
         id: `notif-exp-rej-${expenseId}-${Date.now()}`,
@@ -2493,6 +2677,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await db.put('expenses', expense);
 
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.updateExpenseStatus({
+        expenseId: expense.id,
+        status: 'CANCELLED',
+        approvedBy: currentUser.id,
+        reason: normalizeText(reason),
+      }).catch((err) => console.warn('Supabase cancelExpense warning:', err));
+    }
+
     await recordAudit(
       'EXPENSE_CANCELLED',
       'Expense',
@@ -2526,6 +2719,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await db.put('expenses', expense);
 
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.insertExpense(expense).catch((err) =>
+        console.warn('Supabase correctExpense warning:', err)
+      );
+    }
+
     await recordAudit(
       'EXPENSE_CORRECTED',
       'Expense',
@@ -2535,6 +2734,155 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await refreshData();
     return expense;
+  };
+
+  // ----------------------------------------------------
+  // ACTIONS CLÔTURES DE CAISSE, VÉHICULES & RÉIMPRESSIONS
+  // ----------------------------------------------------
+  const submitDailyClosing = async (params: {
+    openingBalance: number;
+    cashSalesAmount: number;
+    digitalSalesAmount: number;
+    refundsAmount: number;
+    expensesAmount: number;
+    expectedBalance: number;
+    declaredBalance: number;
+    notes?: string;
+  }): Promise<DailyClosing> => {
+    if (!currentUser) throw new Error('Authentification requise');
+    const nowIso = new Date().toISOString();
+    const today = nowIso.slice(0, 10);
+    const difference = params.declaredBalance - params.expectedBalance;
+
+    const closing: DailyClosing = {
+      id: generateUUID(),
+      closingReference: `CLO-${today.replace(/-/g, '')}`,
+      closingDate: today,
+      date: today,
+      cashierId: currentUser.id,
+      cashierName: currentUser.fullName,
+      sectorId: currentUser.sectorId,
+      sectorName: currentUser.sectorName,
+      openingBalance: params.openingBalance,
+      cashSalesAmount: params.cashSalesAmount,
+      digitalSalesAmount: params.digitalSalesAmount,
+      refundsAmount: params.refundsAmount,
+      expensesAmount: params.expensesAmount,
+      expectedBalance: params.expectedBalance,
+      declaredBalance: params.declaredBalance,
+      declaredCash: params.declaredBalance,
+      discrepancy: difference,
+      difference,
+      notes: params.notes,
+      status: 'CONFIRMED',
+      confirmedBy: currentUser.id,
+      confirmedByName: currentUser.fullName,
+      confirmedAt: nowIso,
+      closedById: currentUser.id,
+      closedByName: currentUser.fullName,
+      closedAt: nowIso,
+      isLocked: true,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    const db = await getDB();
+    if (db.objectStoreNames.contains('daily_closings')) {
+      await db.put('daily_closings', closing);
+    }
+
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.insertDailyClosing(closing).catch((err: any) =>
+        console.warn('Supabase submitDailyClosing error:', err)
+      );
+    }
+
+    await recordAudit(
+      'DAILY_CLOSING_SUBMITTED',
+      'DailyClosing',
+      closing.id,
+      `Clôture de caisse du ${today} validée par ${currentUser.fullName} (Écart: ${formatFCFA(difference)})`
+    );
+
+    await refreshData();
+    return closing;
+  };
+
+  const upsertVehicle = async (
+    vehicleData: Partial<Vehicle> & { plateNumber: string }
+  ): Promise<Vehicle> => {
+    const cleanPlate = normalizePlate(vehicleData.plateNumber);
+    const nowIso = new Date().toISOString();
+    const db = await getDB();
+
+    let existing: Vehicle | undefined;
+    if (db.objectStoreNames.contains('vehicles')) {
+      const all = await db.getAll('vehicles');
+      existing = all.find((v) => v.plateNumber === cleanPlate);
+    }
+
+    const vehicle: Vehicle = {
+      id: existing?.id || generateUUID(),
+      plateNumber: cleanPlate,
+      vehicleType: vehicleData.vehicleType || existing?.vehicleType || 'CAMION_CITERNE',
+      makeModel: vehicleData.makeModel || existing?.makeModel,
+      driverName: vehicleData.driverName || existing?.driverName,
+      driverPhone: vehicleData.driverPhone || existing?.driverPhone,
+      companyName: vehicleData.companyName || existing?.companyName,
+      isFlaggedFraud: vehicleData.isFlaggedFraud ?? existing?.isFlaggedFraud ?? false,
+      flagReason: vehicleData.flagReason || existing?.flagReason,
+      lastSeenAt: nowIso,
+      totalTicketsCount:
+        (existing?.totalTicketsCount || 0) + (vehicleData.totalTicketsCount ? 1 : 0),
+      totalControlsCount:
+        (existing?.totalControlsCount || 0) + (vehicleData.totalControlsCount ? 1 : 0),
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
+    };
+
+    if (db.objectStoreNames.contains('vehicles')) {
+      await db.put('vehicles', vehicle);
+    }
+
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.upsertVehicle(vehicle).catch((err) =>
+        console.warn('Supabase upsertVehicle error:', err)
+      );
+    }
+
+    await refreshData();
+    return vehicle;
+  };
+
+  const recordTicketReprint = async (
+    ticketId: string,
+    reason: string
+  ): Promise<{ reprint: TicketReprint; isSuspicious: boolean }> => {
+    if (!currentUser) throw new Error('Authentification requise');
+    const db = await getDB();
+    const ticket = await db.get('tickets', ticketId);
+    if (!ticket) throw new Error('Ticket introuvable');
+
+    const updated = await recordTicketReprintDomain({
+      ticket,
+      actor: currentUser,
+      reason,
+    });
+
+    const reprint: TicketReprint = {
+      id: generateUUID(),
+      ticketId: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      requestedBy: currentUser.id,
+      requestedByName: currentUser.fullName,
+      reason,
+      reprintCount: updated.reprintCount || 1,
+      isSuspicious: (updated.reprintCount || 1) > 2,
+      reprintedAt: new Date().toISOString(),
+    };
+
+    await refreshData();
+    return { reprint, isSuspicious: reprint.isSuspicious };
   };
 
   // ----------------------------------------------------
@@ -2883,16 +3231,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // il s'agit d'une contrefaçon / tentative de falsification.
     // ====================================================================
     if (parsedQR && foundTicket) {
-      const tokenVerification = verifyTicketSecurityToken(foundTicket.qrPayload, parsedQR.tok);
+      const scannedToken = parsedQR.sig || parsedQR.signature || parsedQR.tok;
+      const tokenVerification = verifyTicketSecurityToken(foundTicket.qrPayload, scannedToken);
       if (!tokenVerification.isAuthentic && tokenVerification.forgeryDetected) {
         return {
           status: 'INVALID_UNKNOWN',
-          bannerTitle: '🚨 FALSIFICATION DÉTECTÉE — JETON QR NON AUTHENTIQUE',
+          bannerTitle: '🚨 FALSIFICATION DÉTECTÉE — SIGNATURE OU JETON NON AUTHENTIQUE',
           ticket: foundTicket,
           agentName: null,
           agentPhone: null,
           verifiedVia,
-          message: `ALERTE SÉCURITÉ : Le numéro physique [${foundTicket.ticketNumber}] existe, mais le jeton cryptographique interne est absent ou non conforme. Ticket contrefait. (${tokenVerification.reason})`,
+          message: `ALERTE SÉCURITÉ : Le numéro physique [${foundTicket.ticketNumber}] existe, mais la signature ou le jeton cryptographique est non conforme. Ticket contrefait. (${tokenVerification.reason})`,
           isRepeatedControl: false,
           previousControlCount: foundTicket.controlCount || 0,
         };
@@ -3366,6 +3715,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         auditLogs,
         alerts,
         notifications,
+        dailyClosings,
+        vehicles,
+        ticketReprints,
         sectors: DEFAULT_SECTORS,
         ticketPrice,
         updateTicketPrice,
@@ -3403,6 +3755,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         rejectExpense,
         cancelExpense,
         correctExpense,
+        submitDailyClosing,
+        upsertVehicle,
+        recordTicketReprint,
         checkDuplicatePlate,
         sellTicket,
         getAgentStats,

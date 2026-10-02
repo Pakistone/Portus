@@ -85,6 +85,9 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     return carnets.filter((c) => {
       if (statusFilter !== 'ALL') {
         if (c.status !== statusFilter) return false;
+      } else {
+        // Masquer les carnets annulés par défaut dans la liste générale "Tous les statuts"
+        if (c.status === 'CANCELLED') return false;
       }
       if (searchTerm.trim()) {
         const term = searchTerm.toLowerCase();

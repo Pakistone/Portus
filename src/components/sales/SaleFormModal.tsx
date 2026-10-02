@@ -342,7 +342,7 @@ export const SaleFormModal: React.FC<Props> = ({
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs font-semibold text-slate-200 focus:border-emerald-500 focus:outline-hidden"
                   >
                     <option value="ALL">Tous les carnets actifs ({tickets.filter(t => t.status !== 'SOLD' && t.status !== 'CANCELLED').length} tickets disponibles)</option>
-                    {carnets.map((c) => {
+                    {carnets.filter(c => c.status !== 'CANCELLED').map((c) => {
                       const cAvail = tickets.filter(t => (t.carnetId === c.id || t.carnetNumber === c.carnetNumber) && t.status !== 'SOLD' && t.status !== 'CANCELLED').length;
                       return (
                         <option key={c.id} value={c.id}>

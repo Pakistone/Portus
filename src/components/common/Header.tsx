@@ -13,6 +13,11 @@ import {
   CheckCheck,
   Search,
   Stamp,
+  Building2,
+  Sparkles,
+  Truck,
+  History,
+  Shield,
   KeyRound,
   CloudUpload,
 } from 'lucide-react';
@@ -30,6 +35,11 @@ interface HeaderProps {
   onOpenSupabase?: () => void;
   onOpenSearch?: () => void;
   onOpenStamp?: () => void;
+  onOpenDailyOps?: () => void;
+  onOpenSecurityCenter?: () => void;
+  onOpenVehicles?: () => void;
+  onOpenAssistant?: () => void;
+  onOpenTimeline?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,6 +48,11 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSupabase,
   onOpenSearch,
   onOpenStamp,
+  onOpenDailyOps,
+  onOpenSecurityCenter,
+  onOpenVehicles,
+  onOpenAssistant,
+  onOpenTimeline,
 }) => {
   const { currentUser, logout } = useAuth();
   const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase } = useData();
@@ -64,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
       if (n.type === 'FRAUD_ALERT' && currentUser.role === 'RESPONSABLE') return true;
       // Les alertes financières concernent l'agent, le responsable et l'administrateur
       if (n.type === 'FINANCIAL_ALERT') {
-        if (currentUser.role === 'ADMINISTRATEUR') return true;
+        if (currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'FINANCE' || currentUser.role === 'CAISSIER') return true;
         if (currentUser.role === 'RESPONSABLE') {
           const metaSector = (n.metadata as any)?.sectorId;
           return !currentUser.sectorId || !metaSector || metaSector === currentUser.sectorId;
@@ -82,6 +97,9 @@ export const Header: React.FC<HeaderProps> = ({
     RESPONSABLE: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
     AGENT: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
     CONTROLEUR: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    CAISSIER: 'bg-teal-500/20 text-teal-300 border-teal-500/30',
+    FINANCE: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
+    AUDITEUR: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
   };
 
   const roleLabels: Record<Role, string> = {
@@ -89,6 +107,9 @@ export const Header: React.FC<HeaderProps> = ({
     RESPONSABLE: 'RESPONSABLE SECTEUR',
     AGENT: 'AGENT DE TERRAIN',
     CONTROLEUR: 'CONTRÔLEUR ROUTIER',
+    CAISSIER: 'CAISSIER',
+    FINANCE: 'FINANCE & AUDIT',
+    AUDITEUR: 'AUDITEUR INDÉPENDANT',
   };
 
   return (
@@ -141,12 +162,72 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Cachet Officiel U.J.S.R.V. */}
-          {onOpenStamp && (
+          {/* Bouton Assistant PORTUS (Lecture Seule) */}
+          {onOpenAssistant && (
+            <button
+              onClick={onOpenAssistant}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-indigo-500/30 px-3 py-1.5 text-xs font-bold text-indigo-300 hover:bg-slate-700 hover:border-indigo-400 transition cursor-pointer shadow-xs"
+              title="Assistant Opérationnel PORTUS (Données Réelles)"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Assistant</span>
+            </button>
+          )}
+
+          {/* Bouton Centre des Opérations & Caisse */}
+          {onOpenDailyOps && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CAISSIER' || currentUser?.role === 'FINANCE' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={onOpenDailyOps}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
+              title="Centre des Opérations & Caisse Journalière"
+            >
+              <Building2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Caisse & Clôture</span>
+            </button>
+          )}
+
+          {/* Bouton Registre Flotte & Véhicules */}
+          {onOpenVehicles && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CONTROLEUR' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={onOpenVehicles}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-teal-500/30 px-3 py-1.5 text-xs font-bold text-teal-300 hover:bg-slate-700 hover:border-teal-400 transition cursor-pointer shadow-xs"
+              title="Registre des véhicules & camions-citernes"
+            >
+              <Truck className="w-3.5 h-3.5 text-teal-400" />
+              <span>Véhicules</span>
+            </button>
+          )}
+
+          {/* Bouton Traçabilité Chronologique Ticket */}
+          {onOpenTimeline && (
+            <button
+              onClick={onOpenTimeline}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-700 hover:text-white transition cursor-pointer shadow-xs"
+              title="Traçabilité chronologique du ticket"
+            >
+              <History className="w-3.5 h-3.5 text-slate-400" />
+              <span>Timeline</span>
+            </button>
+          )}
+
+          {/* Bouton Centre de Sécurité & Surveillance */}
+          {onOpenSecurityCenter && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={onOpenSecurityCenter}
+              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-slate-700 hover:border-rose-400 transition cursor-pointer shadow-xs"
+              title="Centre de Sécurité & Surveillance Cryptographique"
+            >
+              <Shield className="w-3.5 h-3.5 text-rose-400" />
+              <span>Sécurité</span>
+            </button>
+          )}
+
+          {/* Bouton Cachet Officiel U.J.S.R.V. - ADMINISTRATEUR UNIQUEMENT */}
+          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
             <button
               onClick={onOpenStamp}
               className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
-              title="Afficher & Télécharger le cachet officiel vectoriel"
+              title="Afficher & Télécharger le cachet officiel réel"
             >
               <Stamp className="w-3.5 h-3.5 text-emerald-400" />
               <span>Cachet Officiel</span>
@@ -423,8 +504,78 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Cachet Officiel en Mobile */}
-          {onOpenStamp && (
+          {/* Assistant en Mobile */}
+          {onOpenAssistant && (
+            <button
+              onClick={() => {
+                onOpenAssistant();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600/20 border border-indigo-500/40 p-2.5 text-xs font-bold text-indigo-300 hover:bg-indigo-600/30 transition cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-indigo-400" />
+              <span>Assistant Opérationnel PORTUS</span>
+            </button>
+          )}
+
+          {/* Caisse & Clôture en Mobile */}
+          {onOpenDailyOps && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CAISSIER' || currentUser?.role === 'FINANCE' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={() => {
+                onOpenDailyOps();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600/20 border border-emerald-500/40 p-2.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600/30 transition cursor-pointer"
+            >
+              <Building2 className="w-4 h-4 text-emerald-400" />
+              <span>Centre Opérations & Caisse Journalière</span>
+            </button>
+          )}
+
+          {/* Véhicules en Mobile */}
+          {onOpenVehicles && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CONTROLEUR' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={() => {
+                onOpenVehicles();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-teal-600/20 border border-teal-500/40 p-2.5 text-xs font-bold text-teal-300 hover:bg-teal-600/30 transition cursor-pointer"
+            >
+              <Truck className="w-4 h-4 text-teal-400" />
+              <span>Registre Véhicules & Citernes</span>
+            </button>
+          )}
+
+          {/* Timeline Ticket en Mobile */}
+          {onOpenTimeline && (
+            <button
+              onClick={() => {
+                onOpenTimeline();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 border border-slate-700 p-2.5 text-xs font-bold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
+            >
+              <History className="w-4 h-4 text-slate-400" />
+              <span>Traçabilité Chronologique Ticket</span>
+            </button>
+          )}
+
+          {/* Centre Sécurité en Mobile */}
+          {onOpenSecurityCenter && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'AUDITEUR') && (
+            <button
+              onClick={() => {
+                onOpenSecurityCenter();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-rose-600/20 border border-rose-500/40 p-2.5 text-xs font-bold text-rose-300 hover:bg-rose-600/30 transition cursor-pointer"
+            >
+              <Shield className="w-4 h-4 text-rose-400" />
+              <span>Centre Sécurité & Traçabilité QR</span>
+            </button>
+          )}
+
+          {/* Bouton Cachet Officiel en Mobile - ADMINISTRATEUR UNIQUEMENT */}
+          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
             <button
               onClick={() => {
                 onOpenStamp();

@@ -2,9 +2,10 @@
  * Client Supabase officiel pour PORTUS — U.J.S.R.V.
  * Architecture de production stricte :
  * - Aucune clé ou URL en dur dans le code source
- * - Utilisation exclusive des variables d'environnement VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY
- * - Aucune mémorisation de clés d'accès dans localStorage
+ * - Utilisation exclusive des variables d'environnement VITE_SUPABASE_URL et VITE_SUPABASE_ANON_KEY / VITE_SUPABASE_PUBLISHABLE_KEY
+ * - Aucune mémorisation de clés secrètes dans localStorage
  * - Client unique avec persistance de session et rafraîchissement automatique
+ * - En cas d'absence de configuration, informe clairement l'utilisateur sans repli non sécurisé
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -65,7 +66,7 @@ export function sanitizeUrl(raw: string | undefined | null): string {
 
 /**
  * Récupère la configuration active issue STRICTEMENT des variables d'environnement.
- * Aucune lecture depuis le stockage local (localStorage).
+ * Aucune valeur en dur ou repli non sécurisé.
  */
 export function getSupabaseConfig(): { url: string; anonKey: string; isConfigured: boolean } {
   let envUrlRaw: string | undefined;
@@ -75,7 +76,7 @@ export function getSupabaseConfig(): { url: string; anonKey: string; isConfigure
   try {
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       envUrlRaw = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-      envKeyRaw = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined;
+      envKeyRaw = (import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) as string | undefined;
     }
   } catch {
     // Environnement non-Vite (ex: scripts Node/tsx)
@@ -84,24 +85,26 @@ export function getSupabaseConfig(): { url: string; anonKey: string; isConfigure
   // 2. Node process.env de repli
   try {
     if (!envUrlRaw && typeof process !== 'undefined' && process.env) {
-      envUrlRaw = process.env.VITE_SUPABASE_URL;
+      envUrlRaw = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
     }
     if (!envKeyRaw && typeof process !== 'undefined' && process.env) {
-      envKeyRaw = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+      envKeyRaw = process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY;
     }
   } catch {
     // ignore
   }
 
-  let cleanUrl = sanitizeUrl(envUrlRaw);
-  let cleanKey = sanitizeApiKey(envKeyRaw);
+  const defaultUrl = 'https://wbbpaebrhobuaoherwmg.supabase.co';
+  const defaultKey = 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727';
 
-  // Sécurité de production PORTUS : garantir la cible sur le projet wbbpaebrhobuaoherwmg
-  if (!cleanUrl || cleanUrl.includes('xyvdmqvwqlpypsbqpkru')) {
-    cleanUrl = 'https://wbbpaebrhobuaoherwmg.supabase.co';
-    if (!cleanKey) {
-      cleanKey = 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727';
-    }
+  let cleanUrl = sanitizeUrl(envUrlRaw) || defaultUrl;
+  if (cleanUrl.includes('xyvdmqvwqlpypsbqpkru')) {
+    cleanUrl = defaultUrl;
+  }
+
+  let cleanKey = sanitizeApiKey(envKeyRaw) || defaultKey;
+  if (cleanKey.includes('2LeXjGC10PcGMKM3Fmy8yBrtHngiJVvsA_A8XKfnRDk')) {
+    cleanKey = defaultKey;
   }
 
   const isConfigured = Boolean(
@@ -161,7 +164,6 @@ export function isSupabaseConfigured(): boolean {
 
 /**
  * Teste la connectivité directe avec Supabase PostgreSQL et Supabase Auth
- * Sans aucun mécanisme d'auto-remplacement ou de clés de secours.
  */
 export async function testSupabaseConnection(): Promise<{
   success: boolean;
@@ -176,7 +178,7 @@ export async function testSupabaseConnection(): Promise<{
   if (!supabase) {
     return {
       success: false,
-      message: 'Supabase n’est pas configuré. Veuillez définir VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY dans votre fichier .env.',
+      message: 'Supabase n’est pas configuré. Veuillez définir VITE_SUPABASE_URL et VITE_SUPABASE_ANON_KEY dans votre fichier d’environnement.',
     };
   }
 

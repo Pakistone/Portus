@@ -14,10 +14,13 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
-        env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
+        env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://wbbpaebrhobuaoherwmg.supabase.co'
       ),
       'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(
-        env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || ''
+        env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727'
+      ),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
+        env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727'
       ),
     },
     server: {

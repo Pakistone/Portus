@@ -185,7 +185,7 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
             <option value="ALL">Tous les carnets</option>
             {carnets.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.carnetNumber} ({c.size} tickets)
+                {c.carnetNumber} ({c.size} tickets){c.status === 'CANCELLED' ? ' — [ANNULÉ]' : ''}
               </option>
             ))}
           </select>
