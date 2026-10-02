@@ -8,7 +8,7 @@ import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Augmentation de la limite du corps de requête (50mb) pour les lots de carnets, tickets et photos de preuve
 app.use(express.json({ limit: '50mb' }));

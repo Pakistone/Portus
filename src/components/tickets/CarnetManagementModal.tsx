@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Clock,
   User,
+  CloudUpload,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -44,7 +45,11 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     cancelCarnet,
     cancelTicket,
     updateTicketStatus,
+    syncAllToSupabase,
+    refreshData,
   } = useData();
+
+  const [syncingCloud, setSyncingCloud] = useState(false);
 
   // Navigation interne
   const [activeTab, setActiveTab] = useState<'LIST' | 'HISTORY'>('LIST');
@@ -324,6 +329,28 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   >
                     <History className="w-3.5 h-3.5" />
                     <span>Historique Attributions</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      setSyncingCloud(true);
+                      setActionError(null);
+                      try {
+                        const res = await syncAllToSupabase();
+                        await refreshData();
+                        setActionSuccess(res.message || 'Synchronisation terminée avec succès.');
+                        setTimeout(() => setActionSuccess(null), 4000);
+                      } catch (err: any) {
+                        setActionError(err?.message || 'Erreur lors de la synchronisation.');
+                      } finally {
+                        setSyncingCloud(false);
+                      }
+                    }}
+                    disabled={syncingCloud}
+                    title="Envoyer et synchroniser tous les carnets et tickets locaux vers Supabase Cloud"
+                    className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition disabled:opacity-50"
+                  >
+                    <CloudUpload className={`w-3.5 h-3.5 text-emerald-400 ${syncingCloud ? 'animate-spin' : ''}`} />
+                    <span>{syncingCloud ? 'Synchro en cours...' : 'Synchroniser Cloud'}</span>
                   </button>
                   <button
                     onClick={() => setGeneratorModalOpen(true)}

@@ -323,15 +323,57 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
           }
           if (remoteCarnets && remoteCarnets.length > 0) {
+            const remoteCarnetIds = new Set(remoteCarnets.map((c) => c.id));
+            const currentLocalCarnets = await db.getAll('carnets');
+            for (const lc of currentLocalCarnets) {
+              if (!remoteCarnetIds.has(lc.id) && lc.id === 'c0000000-0000-0000-0000-000000000001') {
+                await db.delete('carnets', lc.id);
+              }
+            }
             for (const c of remoteCarnets) {
               await db.put('carnets', c);
             }
           }
           if (remoteTickets && remoteTickets.length > 0) {
+            const remoteTicketIds = new Set(remoteTickets.map((t) => t.id));
+            const currentLocalTickets = await db.getAll('tickets');
+            for (const lt of currentLocalTickets) {
+              if (!remoteTicketIds.has(lt.id) && (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' || lt.id?.startsWith('f0000000-'))) {
+                await db.delete('tickets', lt.id);
+              }
+            }
             for (const t of remoteTickets) {
               await db.put('tickets', t);
             }
           }
+
+          // Nettoyage de sécurité : retirer tout ticket de test synthétique (f0000000-...)
+          // ou ticket anormal (> 3) accidentellement associé au carnet démo initial
+          const allLocalTicketsBefore = await db.getAll('tickets');
+          for (const lt of allLocalTicketsBefore) {
+            if (
+              lt.id?.startsWith('f0000000-') ||
+              (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' &&
+               lt.ticketNumber &&
+               !['VRD-000001', 'VRD-000002', 'VRD-000003'].includes(lt.ticketNumber))
+            ) {
+              await db.delete('tickets', lt.id);
+            }
+          }
+
+          // Synchronisation automatique des tickets locaux réels vers Supabase
+          // (permet de propager immédiatement les carnets créés localement vers l'app publiée)
+          const allLocalTktsAfter = await db.getAll('tickets');
+          const remoteTicketIds = new Set((remoteTickets || []).map((t) => t.id));
+          const unsyncedTkts = allLocalTktsAfter.filter((t) => !remoteTicketIds.has(t.id));
+          if (unsyncedTkts.length > 0) {
+            const allLocalCarnets = await db.getAll('carnets');
+            console.log(`[PORTUS AutoSync] Synchronisation de ${unsyncedTkts.length} tickets locaux vers Supabase...`);
+            await SupabaseDataLayer.syncCarnetsBatch(allLocalCarnets, unsyncedTkts).catch((e) =>
+              console.warn('[PORTUS AutoSync] Erreur synchro tickets:', e)
+            );
+          }
+
           if (remoteSales && remoteSales.length > 0) {
             for (const s of remoteSales) {
               await db.put('sales', s);
@@ -2137,7 +2179,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const db = await getDB();
     const agent = await db.get('users', params.agentId);
-    if (!agent) throw new Error('Agent introuvable');
+    if (!agent) throw new Error('Utilisateur (Agent ou Responsable) introuvable');
 
     if (currentUser && currentUser.role === 'RESPONSABLE') {
       if (currentUser.sectorId && agent.sectorId && agent.sectorId !== currentUser.sectorId) {
@@ -2154,23 +2196,28 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const ticketsCount = Math.floor(params.amount / ticketPrice);
 
-    // Récupérer les tickets vendus par cet agent non encore couverts par une remise
+    // Récupérer les tickets vendus par cet agent ou ce responsable non encore couverts par une remise
     const allTickets = await db.getAll('tickets');
     const uncoveredSoldTickets = allTickets
-      .filter((t) => t.assignedAgentId === params.agentId && (t.status === 'SOLD' || t.status === 'CONTROLLED') && !t.coveredByRemiseId)
+      .filter((t) => {
+        const matchesPayer =
+          t.assignedAgentId === params.agentId ||
+          (agent.role === 'RESPONSABLE' && (t.assignedResponsableId === params.agentId || (agent.sectorId && t.sectorId === agent.sectorId)));
+        return matchesPayer && (t.status === 'SOLD' || t.status === 'CONTROLLED') && !t.coveredByRemiseId;
+      })
       .sort((a, b) => (a.soldAt || '').localeCompare(b.soldAt || ''));
 
     // Couvrir les N plus anciens tickets correspondants au montant
     const ticketsToCover = uncoveredSoldTickets.slice(0, ticketsCount);
     const ticketIdsCovered = ticketsToCover.map((t) => t.id);
 
-    const responsableName = currentUser?.fullName || 'RESPONSABLE';
+    const responsableName = currentUser?.fullName || (currentUser?.role === 'ADMINISTRATEUR' ? 'ADMINISTRATEUR GÉNÉRAL' : 'RESPONSABLE');
     const remise: Remise = {
       id: remiseId,
       reference: ref,
       agentId: agent.id,
       agentName: agent.fullName,
-      responsableId: currentUser?.id || 'resp',
+      responsableId: currentUser?.id || 'admin',
       responsableName,
       sectorId: agent.sectorId || currentUser?.sectorId || 'sec-vridi-port',
       sectorName: agent.sectorName || currentUser?.sectorName || 'VRIDI PORT',
@@ -2540,8 +2587,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const db = await getDB();
     const ticket = await db.get('tickets', params.ticketId);
     if (!ticket) throw new Error('Ticket introuvable');
-    if (ticket.status !== 'ASSIGNED_TO_AGENT') {
+
+    const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+    if (!isAdmin && ticket.status !== 'ASSIGNED_TO_AGENT') {
       throw new Error(`Ce ticket n'est pas disponible pour la vente (Statut: ${ticket.status})`);
+    }
+    if (ticket.status === 'SOLD') {
+      throw new Error('Ce ticket a déjà été vendu.');
+    }
+    if (ticket.status === 'CANCELLED') {
+      throw new Error('Ce ticket a été annulé par l’administration.');
     }
 
     if (currentUser && currentUser.role === 'AGENT') {
@@ -2604,8 +2659,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       id: saleId,
       ticketId: ticket.id,
       ticketNumber: ticket.ticketNumber,
-      agentId: ticket.assignedAgentId || currentUser?.id || 'agent',
-      agentName: ticket.assignedAgentName || currentUser?.fullName || 'AGENT',
+      agentId: ticket.assignedAgentId || currentUser?.id || 'admin',
+      agentName: ticket.assignedAgentName || (isAdmin ? `${currentUser?.fullName || 'ADMINISTRATEUR'} (Admin)` : currentUser?.fullName || 'AGENT'),
       sectorId: ticket.sectorId,
       sectorName: ticket.sectorName,
       plateNumber: cleanPlate,
@@ -2675,13 +2730,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const getAgentStats = (agentId: string) => {
-    const agentTickets = tickets.filter((t) => t.assignedAgentId === agentId);
+    const userObj = users.find((u) => u.id === agentId);
+    let agentTickets = tickets.filter((t) => t.assignedAgentId === agentId);
+    if (userObj?.role === 'RESPONSABLE') {
+      agentTickets = tickets.filter(
+        (t) => t.assignedResponsableId === agentId || (userObj.sectorId && t.sectorId === userObj.sectorId)
+      );
+    }
     const assignedCount = agentTickets.length;
-    const availableCount = agentTickets.filter((t) => t.status === 'ASSIGNED_TO_AGENT').length;
+    const availableCount = agentTickets.filter(
+      (t) => t.status === 'ASSIGNED_TO_AGENT' || t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE'
+    ).length;
     const soldCount = agentTickets.filter((t) => t.status === 'SOLD' || t.status === 'CONTROLLED').length;
     const expectedAmount = soldCount * ticketPrice;
 
-    const agentRemises = remises.filter((r) => r.agentId === agentId);
+    const agentRemises = remises.filter((r) => r.agentId === agentId || (userObj?.role === 'RESPONSABLE' && r.responsableId === agentId));
     const remittedAmount = agentRemises.reduce((sum, r) => sum + r.amount, 0);
     const remainingBalance = Math.max(0, expectedAmount - remittedAmount);
     const ecart = Math.max(0, remittedAmount - expectedAmount);

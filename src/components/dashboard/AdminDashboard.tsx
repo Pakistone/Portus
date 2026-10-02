@@ -22,6 +22,7 @@ import {
   FileText,
   Settings,
   CloudUpload,
+  ShoppingCart,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -51,6 +52,7 @@ import { CarnetGeneratorModal } from '../tickets/CarnetGeneratorModal';
 import { CarnetManagementModal } from '../tickets/CarnetManagementModal';
 import { TicketListModal } from '../tickets/TicketListModal';
 import { SalesListModal } from '../sales/SalesListModal';
+import { SaleFormModal } from '../sales/SaleFormModal';
 import { RemisesListModal } from '../remises/RemisesListModal';
 import { ControlsListModal } from '../controls/ControlsListModal';
 import { AuditTrailModal } from '../audit/AuditTrailModal';
@@ -91,6 +93,7 @@ export const AdminDashboard: React.FC = () => {
   const [carnetManagementModalOpen, setCarnetManagementModalOpen] = useState(false);
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
   const [salesModalOpen, setSalesModalOpen] = useState(false);
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
   const [remisesModalOpen, setRemisesModalOpen] = useState(false);
   const [newRemiseModalOpen, setNewRemiseModalOpen] = useState(false);
   const [selectedAgentForRemise, setSelectedAgentForRemise] = useState<string | undefined>();
@@ -344,6 +347,29 @@ export const AdminDashboard: React.FC = () => {
 
         {/* Actions d'administration */}
         <div className="flex flex-wrap items-center gap-2 pt-1 md:pt-0">
+          {/* Bouton Enregistrer Vente Directe */}
+          <button
+            onClick={() => setSaleModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-950 hover:bg-emerald-500 transition cursor-pointer"
+            title="Enregistrer directement une vente de ticket poids lourd"
+          >
+            <ShoppingCart className="w-4 h-4" />
+            <span>Enregistrer Vente</span>
+          </button>
+
+          {/* Bouton Enregistrer Remise de Fonds */}
+          <button
+            onClick={() => {
+              setSelectedAgentForRemise(undefined);
+              setNewRemiseModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-blue-950 hover:bg-blue-500 transition cursor-pointer"
+            title="Enregistrer un versement / remise de fonds (Agent ou Responsable)"
+          >
+            <HandCoins className="w-4 h-4" />
+            <span>Enregistrer Remise</span>
+          </button>
+
           <button
             onClick={() => setCarnetManagementModalOpen(true)}
             className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition cursor-pointer"
@@ -898,6 +924,14 @@ export const AdminDashboard: React.FC = () => {
       <SalesListModal
         isOpen={salesModalOpen}
         onClose={() => setSalesModalOpen(false)}
+        onOpenNewSale={() => {
+          setSalesModalOpen(false);
+          setSaleModalOpen(true);
+        }}
+      />
+      <SaleFormModal
+        isOpen={saleModalOpen}
+        onClose={() => setSaleModalOpen(false)}
       />
       <RemisesListModal
         isOpen={remisesModalOpen}

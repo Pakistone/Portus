@@ -30,12 +30,17 @@ export const RemiseFormModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
+  const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+
   const eligibleAgents = users.filter((u) => {
-    if (u.role !== 'AGENT' || !u.isActive) return false;
+    if (!u.isActive) return false;
     if (currentUser?.role === 'RESPONSABLE') {
-      return u.sectorId === currentUser.sectorId;
+      return u.role === 'AGENT' && u.sectorId === currentUser.sectorId;
     }
-    return true;
+    if (isAdmin) {
+      return u.role === 'AGENT' || u.role === 'RESPONSABLE';
+    }
+    return u.role === 'AGENT';
   });
 
   const agentStats = selectedAgentId ? getAgentStats(selectedAgentId) : null;
@@ -56,7 +61,7 @@ export const RemiseFormModal: React.FC<Props> = ({
 
     const numAmount = Number(amount || 0);
     if (!selectedAgentId) {
-      setError('Veuillez sélectionner un agent.');
+      setError('Veuillez sélectionner un agent ou un responsable.');
       return;
     }
     if (numAmount <= 0) {
@@ -156,10 +161,10 @@ export const RemiseFormModal: React.FC<Props> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-            {/* Choix de l'Agent */}
+            {/* Choix de l'Agent ou Responsable */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Sélectionner l’Agent
+                {isAdmin ? 'Sélectionner l’Agent ou le Responsable (Versant les fonds)' : 'Sélectionner l’Agent'}
               </label>
               <select
                 required
@@ -167,10 +172,10 @@ export const RemiseFormModal: React.FC<Props> = ({
                 onChange={(e) => handleAgentChange(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-sm text-white focus:border-blue-500 focus:outline-hidden"
               >
-                <option value="">-- Choisir un agent --</option>
+                <option value="">{isAdmin ? '-- Choisir un agent ou un responsable --' : '-- Choisir un agent --'}</option>
                 {eligibleAgents.map((ag) => (
                   <option key={ag.id} value={ag.id}>
-                    {ag.fullName} ({ag.sectorName || 'Secteur'})
+                    {ag.fullName} • [{ag.role}] ({ag.sectorName || 'Secteur non assigné'})
                   </option>
                 ))}
               </select>

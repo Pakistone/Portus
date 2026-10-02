@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock } from 'lucide-react';
+import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { exportSalesToExcel } from '../../utils/excelExport';
@@ -8,9 +8,10 @@ import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/norm
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  onOpenNewSale?: () => void;
 }
 
-export const SalesListModal: React.FC<Props> = ({ isOpen, onClose }) => {
+export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale }) => {
   const { currentUser } = useAuth();
   const { sales } = useData();
   const [searchTerm, setSearchTerm] = useState('');
@@ -47,6 +48,15 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {onOpenNewSale && (
+              <button
+                onClick={onOpenNewSale}
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-md hover:bg-emerald-500 transition"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Nouvelle Vente</span>
+              </button>
+            )}
             <button
               onClick={() => exportSalesToExcel(visibleSales)}
               className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600/30 transition"

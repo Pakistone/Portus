@@ -442,6 +442,29 @@ export const SupabaseDataLayer = {
       console.warn('Supabase insertCarnet error:', error.message);
       return false;
     }
+
+    if (tickets && tickets.length > 0) {
+      const formatted = tickets.map((t) => ({
+        id: sanitizeUuid(t.id),
+        ticket_number: t.ticketNumber,
+        carnet_id: sanitizeUuid(t.carnetId),
+        generation_batch: 'GEN-1',
+        qr_payload: t.qrPayload || t.ticketNumber,
+        status: t.status || 'GENERATED',
+        price: Number(t.price) || 5000,
+        assigned_responsable_id: sanitizeUuidOrNull(t.assignedResponsableId),
+        assigned_agent_id: sanitizeUuidOrNull(t.assignedAgentId),
+        sector_id: sanitizeUuidOrNull(t.sectorId),
+        created_at: t.createdAt || new Date().toISOString(),
+      }));
+
+      for (let i = 0; i < formatted.length; i += 50) {
+        const chunk = formatted.slice(i, i + 50);
+        const { error: tktErr } = await supabase.from('tickets').upsert(chunk, { onConflict: 'id' });
+        if (tktErr) console.warn('Supabase insert tickets fallback error:', tktErr.message);
+      }
+    }
+
     return true;
   },
 
