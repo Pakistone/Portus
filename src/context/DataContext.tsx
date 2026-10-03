@@ -362,7 +362,28 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             await tx.done;
           }
           if (remoteCarnets && remoteCarnets.length > 0) {
-            const remoteCarnetIds = new Set(remoteCarnets.map((c) => c.id));
+            // Dé-duplication stricte des carnets distants avant injection
+            const uniqueRemoteCarnets: Carnet[] = [];
+            const seenCarnetIds = new Set<string>();
+            const seenCarnetNums = new Set<string>();
+            for (const c of remoteCarnets) {
+              if (c && c.id && !seenCarnetIds.has(c.id)) {
+                seenCarnetIds.add(c.id);
+                let safeNum = c.carnetNumber;
+                if (!safeNum) {
+                  safeNum = `C-REC-${c.id.slice(0, 6)}`;
+                } else if (seenCarnetNums.has(safeNum)) {
+                  safeNum = `${safeNum}-${c.id.slice(0, 4)}`;
+                }
+                seenCarnetNums.add(safeNum);
+                uniqueRemoteCarnets.push({
+                  ...c,
+                  carnetNumber: safeNum,
+                });
+              }
+            }
+
+            const remoteCarnetIds = new Set(uniqueRemoteCarnets.map((c) => c.id));
             const currentLocalCarnets = await db.getAll('carnets');
             const tx = db.transaction('carnets', 'readwrite');
             for (const lc of currentLocalCarnets) {
@@ -370,7 +391,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 await tx.store.delete(lc.id);
               }
             }
-            for (const c of remoteCarnets) {
+            for (const c of uniqueRemoteCarnets) {
               await tx.store.put(c);
             }
             await tx.done;
@@ -1561,8 +1582,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Référence unique du carnet : C-YYYY-XXX (Exemple explicite utilisateur: C-2026-001)
     const allCarnets = await db.getAll('carnets');
     const currentYear = new Date().getFullYear();
-    const carnetIndex = allCarnets.length + 1;
-    const carnetNumber = `C-${currentYear}-${String(carnetIndex).padStart(3, '0')}`;
+    let maxIdx = 0;
+    const pattern = new RegExp(`^C-${currentYear}-(\\d+)$`);
+    for (const c of allCarnets) {
+      if (c.carnetNumber) {
+        const match = c.carnetNumber.match(pattern);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxIdx) maxIdx = num;
+        }
+      }
+    }
+    let carnetIndex = Math.max(maxIdx + 1, allCarnets.length + 1);
+    let carnetNumber = `C-${currentYear}-${String(carnetIndex).padStart(3, '0')}`;
+    const existingCarnetNumbers = new Set(allCarnets.map((c) => c.carnetNumber));
+    while (existingCarnetNumbers.has(carnetNumber)) {
+      carnetIndex++;
+      carnetNumber = `C-${currentYear}-${String(carnetIndex).padStart(3, '0')}`;
+    }
     
     // Identifiant UUID du carnet (cryptographiquement sécurisé)
     const carnetId = generateUUID();

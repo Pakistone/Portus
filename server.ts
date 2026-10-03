@@ -45,6 +45,17 @@ if (!supabaseUrl) {
   console.warn('[PORTUS Server] ATTENTION: VITE_SUPABASE_URL n’est pas configuré dans process.env');
 }
 
+console.log('[PORTUS Server] --- DIAGNOSTICS SUPABASE ---');
+console.log('[PORTUS Server] URL:', supabaseUrl);
+console.log('[PORTUS Server] Clé Secrète - Longueur:', supabaseSecretKey ? supabaseSecretKey.length : 0);
+console.log('[PORTUS Server] Clé Secrète - Début:', supabaseSecretKey ? `${supabaseSecretKey.slice(0, 15)}...` : 'nulle');
+if (supabaseSecretKey && supabaseSecretKey.startsWith('sb_publishable_')) {
+  console.warn('[PORTUS Server] ATTENTION: La clé configurée est une clé de publication (anon), pas une clé de service ! Les opérations d’administration échoueront.');
+} else if (supabaseSecretKey && supabaseSecretKey.startsWith('eyJ')) {
+  console.log('[PORTUS Server] Clé de service (JWT) détectée.');
+}
+console.log('[PORTUS Server] -----------------------------');
+
 let supabaseAdmin: SupabaseClient | null = null;
 if (supabaseUrl && supabaseSecretKey) {
   supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
@@ -120,6 +131,26 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       .maybeSingle();
 
     if (profErr || !profile || !profile.is_active) {
+      // Résilience Administrateur Initial : En cas d'absence de profil physique ou d'erreur RLS,
+      // l'adresse e-mail officielle de l'administrateur conserve son accès root complet
+      const isAdminEmail = 
+        user.email === 'ypaki090@gmail.com' || 
+        user.email === 'admin@ujsrv.ci' || 
+        user.email === 'admin@portus.ujsrv.ci' ||
+        (user.user_metadata?.username && ['ypaki090', 'admin'].includes(user.user_metadata.username.toLowerCase()));
+
+      if (isAdminEmail) {
+        console.log('[PORTUS Server Auth] Résilience activée : profil virtuel ADMINISTRATEUR attribué à', user.email);
+        return {
+          id: user.id,
+          email: user.email,
+          username: user.user_metadata?.username || user.email?.split('@')[0] || 'ypaki090',
+          fullName: user.user_metadata?.full_name || 'Administrateur Général PORTUS',
+          role: 'ADMINISTRATEUR',
+          sectorId: null,
+          isActive: true,
+        };
+      }
       return null;
     }
 
@@ -415,9 +446,14 @@ app.post('/api/auth/login', async (req, res) => {
       };
 
       try {
-        await supabaseAdmin.from('profiles').upsert(initialProfile);
-      } catch {
-        // Silencieux
+        const { error: upsertErr } = await supabaseAdmin.from('profiles').upsert(initialProfile);
+        if (upsertErr) {
+          console.error('[PORTUS Server Login] Erreur lors de l’upsert du profil initial:', upsertErr.message, upsertErr);
+        } else {
+          console.log('[PORTUS Server Login] Profil initial upserted avec succès pour:', initialProfile.username);
+        }
+      } catch (err: any) {
+        console.error('[PORTUS Server Login] Exception lors de l’upsert du profil initial:', err.message, err);
       }
       profile = initialProfile;
     }

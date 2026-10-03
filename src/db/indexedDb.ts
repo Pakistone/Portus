@@ -3,7 +3,7 @@
  * Utilise 'idb' avec gestion résiliente des connexions et reconnexion automatique en cas d'interruption ou d'AbortError.
  */
 
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type {
   User,
   Carnet,
@@ -121,7 +121,7 @@ interface PortusDB extends DBSchema {
 }
 
 const DB_NAME = 'portus_ujsrv_db_v1';
-const DB_VERSION = 5;
+const DB_VERSION = 8;
 
 let dbPromise: Promise<IDBPDatabase<PortusDB>> | null = null;
 
@@ -139,30 +139,54 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
 
   if (!dbPromise) {
     dbPromise = openDB<PortusDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      upgrade(db, oldVersion, newVersion, transaction) {
         // Users store
         if (!db.objectStoreNames.contains('users')) {
           const userStore = db.createObjectStore('users', { keyPath: 'id' });
-          userStore.createIndex('by-username', 'username', { unique: true });
+          userStore.createIndex('by-username', 'username', { unique: false });
           userStore.createIndex('by-role', 'role');
+        } else {
+          try {
+            const userStore = transaction.objectStore('users');
+            if (userStore.indexNames.contains('by-username')) {
+              userStore.deleteIndex('by-username');
+            }
+            userStore.createIndex('by-username', 'username', { unique: false });
+          } catch {}
         }
 
-        // Carnets store
+        // Carnets store - Remplacement de l'index unique par un index non-unique résilient
         if (!db.objectStoreNames.contains('carnets')) {
           const carnetStore = db.createObjectStore('carnets', { keyPath: 'id' });
           carnetStore.createIndex('by-responsable', 'assignedToResponsableId');
-          carnetStore.createIndex('by-carnet-number', 'carnetNumber', { unique: true });
+          carnetStore.createIndex('by-carnet-number', 'carnetNumber', { unique: false });
+        } else {
+          try {
+            const carnetStore = transaction.objectStore('carnets');
+            if (carnetStore.indexNames.contains('by-carnet-number')) {
+              carnetStore.deleteIndex('by-carnet-number');
+            }
+            carnetStore.createIndex('by-carnet-number', 'carnetNumber', { unique: false });
+          } catch {}
         }
 
-        // Tickets store
+        // Tickets store - Remplacement de l'index unique par un index non-unique résilient
         if (!db.objectStoreNames.contains('tickets')) {
           const ticketStore = db.createObjectStore('tickets', { keyPath: 'id' });
-          ticketStore.createIndex('by-ticket-number', 'ticketNumber', { unique: true });
+          ticketStore.createIndex('by-ticket-number', 'ticketNumber', { unique: false });
           ticketStore.createIndex('by-carnet', 'carnetId');
           ticketStore.createIndex('by-agent', 'assignedAgentId');
           ticketStore.createIndex('by-responsable', 'assignedResponsableId');
           ticketStore.createIndex('by-status', 'status');
           ticketStore.createIndex('by-plate', 'plateNumber');
+        } else {
+          try {
+            const ticketStore = transaction.objectStore('tickets');
+            if (ticketStore.indexNames.contains('by-ticket-number')) {
+              ticketStore.deleteIndex('by-ticket-number');
+            }
+            ticketStore.createIndex('by-ticket-number', 'ticketNumber', { unique: false });
+          } catch {}
         }
 
         // Sales store
@@ -196,17 +220,33 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
           const remisesStore = db.createObjectStore('remises', { keyPath: 'id' });
           remisesStore.createIndex('by-agent', 'agentId');
           remisesStore.createIndex('by-responsable', 'responsableId');
-          remisesStore.createIndex('by-reference', 'reference', { unique: true });
+          remisesStore.createIndex('by-reference', 'reference', { unique: false });
+        } else {
+          try {
+            const remisesStore = transaction.objectStore('remises');
+            if (remisesStore.indexNames.contains('by-reference')) {
+              remisesStore.deleteIndex('by-reference');
+            }
+            remisesStore.createIndex('by-reference', 'reference', { unique: false });
+          } catch {}
         }
 
         // Expenses store
         if (!db.objectStoreNames.contains('expenses')) {
           const expenseStore = db.createObjectStore('expenses', { keyPath: 'id' });
-          expenseStore.createIndex('by-expense-number', 'expenseNumber', { unique: true });
+          expenseStore.createIndex('by-expense-number', 'expenseNumber', { unique: false });
           expenseStore.createIndex('by-status', 'status');
           expenseStore.createIndex('by-sector', 'sectorId');
           expenseStore.createIndex('by-responsable', 'responsibleId');
           expenseStore.createIndex('by-created-by', 'createdBy');
+        } else {
+          try {
+            const expenseStore = transaction.objectStore('expenses');
+            if (expenseStore.indexNames.contains('by-expense-number')) {
+              expenseStore.deleteIndex('by-expense-number');
+            }
+            expenseStore.createIndex('by-expense-number', 'expenseNumber', { unique: false });
+          } catch {}
         }
 
         // Audit store
@@ -242,8 +282,16 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
         // Vehicles store
         if (!db.objectStoreNames.contains('vehicles')) {
           const vehicleStore = db.createObjectStore('vehicles', { keyPath: 'id' });
-          vehicleStore.createIndex('by-plate', 'plateNumber', { unique: true });
+          vehicleStore.createIndex('by-plate', 'plateNumber', { unique: false });
           vehicleStore.createIndex('by-type', 'vehicleType');
+        } else {
+          try {
+            const vehicleStore = transaction.objectStore('vehicles');
+            if (vehicleStore.indexNames.contains('by-plate')) {
+              vehicleStore.deleteIndex('by-plate');
+            }
+            vehicleStore.createIndex('by-plate', 'plateNumber', { unique: false });
+          } catch {}
         }
 
         // Daily closings store
@@ -286,12 +334,54 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
     if (
       err?.message?.includes('closing') ||
       err?.name === 'AbortError' ||
-      err?.message?.includes('aborted')
+      err?.message?.includes('aborted') ||
+      err?.message?.includes('uniqueness') ||
+      err?.name === 'ConstraintError'
     ) {
+      console.warn('[PORTUS IndexedDB] Erreur de contrainte ou blocage détecté, réinitialisation résiliente du cache...', err);
       dbPromise = null;
-      return openDB<PortusDB>(DB_NAME, DB_VERSION);
+      try {
+        await deleteDB(DB_NAME);
+      } catch (delErr) {
+        console.warn('[PORTUS IndexedDB] Erreur suppression DB:', delErr);
+      }
+      return getDB();
     }
     throw err;
+  }
+}
+
+/**
+ * Nettoyage et assainissement des doublons résiduels de carnets dans IndexedDB.
+ */
+export async function cleanDuplicateCarnets(db: IDBPDatabase<PortusDB>): Promise<void> {
+  try {
+    const allCarnets = await db.getAll('carnets');
+    const seenCarnetNumbers = new Map<string, string>();
+    const idsToDelete: string[] = [];
+
+    for (const c of allCarnets) {
+      if (!c.carnetNumber) {
+        idsToDelete.push(c.id);
+        continue;
+      }
+      if (seenCarnetNumbers.has(c.carnetNumber)) {
+        idsToDelete.push(c.id);
+      } else {
+        seenCarnetNumbers.set(c.carnetNumber, c.id);
+      }
+    }
+
+    if (idsToDelete.length > 0) {
+      console.log(`[PORTUS IndexedDB] Nettoyage de ${idsToDelete.length} carnet(s) dupliqué(s)...`);
+      const tx = db.transaction('carnets', 'readwrite');
+      for (const id of idsToDelete) {
+        await tx.store.delete(id);
+      }
+      await tx.done;
+    }
+  } catch (err) {
+    console.warn('[PORTUS IndexedDB] Erreur nettoyage carnets dupliqués:', err);
   }
 }
 
@@ -303,6 +393,9 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
  */
 export async function initializeDatabase(): Promise<void> {
   const db = await getDB();
+
+  // Assainissement proactif de tout doublon dans le cache local
+  await cleanDuplicateCarnets(db);
 
   // Purge de sécurité de tout mot de passe résiduel stocké localement
   try {
