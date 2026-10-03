@@ -699,7 +699,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
     const { id } = req.params;
-    const { fullName, phone, sectorId, role, isActive } = req.body;
+    const { username, fullName, phone, sectorId, role, isActive } = req.body;
 
     const updates: Record<string, any> = { updated_at: new Date().toISOString() };
     if (fullName !== undefined) updates.full_name = fullName.trim();
@@ -708,16 +708,124 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
     if (role !== undefined) updates.role = role;
     if (isActive !== undefined) updates.is_active = isActive;
 
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update(updates)
-      .eq('id', id)
-      .select('*, sector:sectors(name)')
-      .single();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let targetProfile: any = null;
 
-    if (error) throw error;
-    res.json({ user: data });
+    // 1. Recherche par UUID si l'ID transmis est un UUID valide
+    if (uuidRegex.test(id)) {
+      const { data: p } = await supabaseAdmin
+        .from('profiles')
+        .select('*, sector:sectors(name)')
+        .eq('id', id)
+        .maybeSingle();
+      if (p) targetProfile = p;
+    }
+
+    // 2. Recherche par nom d'utilisateur (username fourni dans body ou id)
+    if (!targetProfile) {
+      const searchUsername = (username || id).toLowerCase();
+      const { data: p } = await supabaseAdmin
+        .from('profiles')
+        .select('*, sector:sectors(name)')
+        .eq('username', searchUsername)
+        .maybeSingle();
+      if (p) targetProfile = p;
+    }
+
+    // 3. Recherche dans Supabase Auth (auth.users) pour synchronisation de profil
+    if (!targetProfile) {
+      let authUser: any = null;
+      if (uuidRegex.test(id)) {
+        const { data: u } = await supabaseAdmin.auth.admin.getUserById(id);
+        authUser = u?.user;
+      }
+      if (!authUser) {
+        const { data: list } = await supabaseAdmin.auth.admin.listUsers();
+        const searchVal = (username || id).toLowerCase();
+        authUser = list?.users?.find(
+          (u) =>
+            u.id === id ||
+            u.user_metadata?.username?.toLowerCase() === searchVal ||
+            u.email?.toLowerCase().startsWith(searchVal + '@') ||
+            u.email?.toLowerCase() === searchVal
+        );
+      }
+
+      if (authUser) {
+        const targetUsername = authUser.user_metadata?.username || authUser.email?.split('@')[0] || username || id;
+        const initialData = {
+          id: authUser.id,
+          username: targetUsername.toLowerCase(),
+          full_name: updates.full_name || authUser.user_metadata?.full_name || 'Utilisateur',
+          role: updates.role || authUser.user_metadata?.role || 'AGENT',
+          sector_id: updates.sector_id,
+          phone: updates.phone || null,
+          is_active: updates.is_active !== undefined ? updates.is_active : true,
+          failed_attempts: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data: created, error: createErr } = await supabaseAdmin
+          .from('profiles')
+          .upsert(initialData)
+          .select('*, sector:sectors(name)')
+          .maybeSingle();
+
+        if (!createErr && created) {
+          targetProfile = created;
+        }
+      }
+    }
+
+    // 4. Si le profil existe dans Supabase, appliquer la mise à jour
+    if (targetProfile) {
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('profiles')
+        .update(updates)
+        .eq('id', targetProfile.id)
+        .select('*, sector:sectors(name)')
+        .maybeSingle();
+
+      if (updateErr) throw updateErr;
+      targetProfile = updated || { ...targetProfile, ...updates };
+
+      // Synchroniser également dans auth.users (métadonnées & blocage)
+      try {
+        const authUpdates: Record<string, any> = {};
+        if (role !== undefined) authUpdates.role = role;
+        if (fullName !== undefined) authUpdates.full_name = fullName.trim();
+        if (isActive !== undefined) authUpdates.is_active = isActive;
+        if (Object.keys(authUpdates).length > 0) {
+          await supabaseAdmin.auth.admin.updateUserById(targetProfile.id, {
+            user_metadata: authUpdates,
+            ban_duration: isActive === false ? '876600h' : 'none',
+          });
+        } else if (isActive !== undefined) {
+          await supabaseAdmin.auth.admin.updateUserById(targetProfile.id, {
+            ban_duration: isActive === false ? '876600h' : 'none',
+          });
+        }
+      } catch (authMetaErr) {
+        console.warn('[API Admin] Synchro user_metadata warning:', authMetaErr);
+      }
+    } else {
+      // Profil purement local (IndexedDB)
+      targetProfile = {
+        id,
+        username: username || id,
+        full_name: updates.full_name || 'Utilisateur',
+        role: updates.role || 'AGENT',
+        sector_id: updates.sector_id,
+        phone: updates.phone,
+        is_active: updates.is_active !== undefined ? updates.is_active : true,
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    res.json({ user: targetProfile });
   } catch (err: any) {
+    console.error('[API Admin Users PATCH] Erreur:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -732,13 +840,46 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
       return res.status(400).json({ error: 'Le nouveau mot de passe doit comporter au moins 6 caractères.' });
     }
 
-    const { error } = await supabaseAdmin.auth.admin.updateUserById(id, {
-      password: newPasswordRaw,
-    });
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let targetAuthUserId: string | null = null;
 
-    if (error) throw error;
+    if (uuidRegex.test(id)) {
+      targetAuthUserId = id;
+    } else {
+      // Rechercher l'UUID du profil via username
+      const { data: p } = await supabaseAdmin.from('profiles').select('id').eq('username', id.toLowerCase()).maybeSingle();
+      if (p) {
+        targetAuthUserId = p.id;
+      } else {
+        const { data: list } = await supabaseAdmin.auth.admin.listUsers();
+        const found = list?.users?.find(
+          (u) =>
+            u.id === id ||
+            u.user_metadata?.username?.toLowerCase() === id.toLowerCase() ||
+            u.email?.toLowerCase().startsWith(id.toLowerCase() + '@')
+        );
+        if (found) targetAuthUserId = found.id;
+      }
+    }
+
+    if (targetAuthUserId) {
+      const { error } = await supabaseAdmin.auth.admin.updateUserById(targetAuthUserId, {
+        password: newPasswordRaw,
+        ban_duration: 'none',
+      });
+      if (error) throw error;
+
+      await supabaseAdmin.from('profiles').update({
+        failed_attempts: 0,
+        locked_until: null,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }).eq('id', targetAuthUserId);
+    }
+
     res.json({ success: true, message: 'Mot de passe mis à jour avec succès.' });
   } catch (err: any) {
+    console.error('[API Admin Users Reset Password] Erreur:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1424,4 +1565,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Ne pas démarrer le serveur autonome sous environnement Serverless Vercel
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export { app };
+export default app;

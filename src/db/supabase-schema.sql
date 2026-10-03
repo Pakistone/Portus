@@ -637,6 +637,38 @@ RETURNS BOOLEAN AS $$
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- Autorisations d'exécution indispensables pour évaluer les politiques RLS sans erreur PostgreSQL
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public.get_current_role() TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.get_current_sector_id() TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.is_responsable() TO authenticated, anon, service_role;
+
+-- Fonction autoritaire get_my_profile pour récupération immédiate de profil sans blocage RLS
+CREATE OR REPLACE FUNCTION public.get_my_profile()
+RETURNS JSONB AS $$
+DECLARE
+  v_prof RECORD;
+BEGIN
+  SELECT p.*, s.name as sector_name
+  INTO v_prof
+  FROM public.profiles p
+  LEFT JOIN public.sectors s ON s.id = p.sector_id
+  WHERE p.id = auth.uid();
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN to_jsonb(v_prof);
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, service_role;
+
 -- --------------------------------------------------------------------
 -- A. POLITIQUES POUR 'roles', 'sectors' ET 'app_settings'
 -- --------------------------------------------------------------------

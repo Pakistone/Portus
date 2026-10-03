@@ -27,10 +27,11 @@ interface Props {
 }
 
 export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
-  const { syncAllToSupabase } = useData();
+  const { syncAllToSupabase, isRlsPermissionIssue, lastRlsError, refreshData } = useData();
 
-  const [activeTab, setActiveTab] = useState<'schema' | 'config' | 'tables'>('schema');
+  const [activeTab, setActiveTab] = useState<'permissions' | 'schema' | 'config' | 'tables'>('permissions');
   const [copied, setCopied] = useState(false);
+  const [copiedFix, setCopiedFix] = useState(false);
 
   // Configuration live (lecture seule depuis l'environnement)
   const [config, setConfig] = useState<{ url: string; anonKey: string; isConfigured: boolean }>({
@@ -57,8 +58,11 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
     if (isOpen) {
       const cfg = getSupabaseConfig();
       setConfig(cfg);
+      if (isRlsPermissionIssue) {
+        setActiveTab('permissions');
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, isRlsPermissionIssue]);
 
   if (!isOpen) return null;
 
@@ -589,10 +593,83 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, pg_temp;
 GRANT EXECUTE ON FUNCTION public.record_login_attempt(TEXT, BOOLEAN, UUID, TEXT, TEXT) TO anon, authenticated;
 `;
 
+  const sqlPermissionsFix = `-- ====================================================================
+-- CORRECTIF D'ACCÈS RLS ET FONCTIONS SUPABASE POUR VERCEL & PORTUS
+-- À exécuter dans Supabase Dashboard > SQL Editor
+-- (Résout l'erreur 'permission denied for function is_admin' / tickets & utilisateurs masqués)
+-- ====================================================================
+
+-- 1. Accorder les droits d'usage du schéma public
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- 2. Accorder l'exécution de toutes les fonctions RLS aux utilisateurs authentifiés et anon
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+
+-- 3. Fonctions critiques garanties
+CREATE OR REPLACE FUNCTION public.get_current_role()
+RETURNS user_role AS $$
+  SELECT role FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.get_current_role() TO authenticated, anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_current_sector_id()
+RETURNS UUID AS $$
+  SELECT sector_id FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.get_current_sector_id() TO authenticated, anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles 
+    WHERE id = auth.uid() AND role = 'ADMINISTRATEUR' AND is_active = TRUE
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.is_responsable()
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles 
+    WHERE id = auth.uid() AND role = 'RESPONSABLE' AND is_active = TRUE
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.is_responsable() TO authenticated, anon, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_my_profile()
+RETURNS JSONB AS $$
+DECLARE
+  v_prof RECORD;
+BEGIN
+  SELECT p.*, s.name as sector_name
+  INTO v_prof
+  FROM public.profiles p
+  LEFT JOIN public.sectors s ON s.id = p.sector_id
+  WHERE p.id = auth.uid();
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN to_jsonb(v_prof);
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, service_role;
+`;
+
   const handleCopy = () => {
     navigator.clipboard.writeText(sqlCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyFix = () => {
+    navigator.clipboard.writeText(sqlPermissionsFix);
+    setCopiedFix(true);
+    setTimeout(() => setCopiedFix(false), 2000);
   };
 
   const tablesList = [
@@ -647,6 +724,24 @@ GRANT EXECUTE ON FUNCTION public.record_login_attempt(TEXT, BOOLEAN, UUID, TEXT,
         {/* Navigation Onglets */}
         <div className="flex items-center gap-2 border-b border-slate-800 pt-3 pb-2 text-xs font-medium">
           <button
+            onClick={() => setActiveTab('permissions')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition relative ${
+              activeTab === 'permissions'
+                ? 'bg-amber-600 text-white font-bold shadow-lg shadow-amber-950/40'
+                : 'text-amber-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            <span>Correctif Permissions RLS (1 Clic)</span>
+            {isRlsPermissionIssue && (
+              <span className="flex h-2 w-2 relative ml-1">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setActiveTab('schema')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition ${
               activeTab === 'schema'
@@ -682,6 +777,66 @@ GRANT EXECUTE ON FUNCTION public.record_login_attempt(TEXT, BOOLEAN, UUID, TEXT,
             <span>Connexion & Synchronisation Active</span>
           </button>
         </div>
+
+        {/* CONTENU ONGLET 0 : CORRECTIF PERMISSIONS RLS (1 CLIC) */}
+        {activeTab === 'permissions' && (
+          <div className="flex-1 flex flex-col min-h-0 pt-3">
+            <div className={`rounded-xl border p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+              isRlsPermissionIssue 
+                ? 'border-rose-500/50 bg-rose-500/10 text-rose-200' 
+                : 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+            }`}>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 font-bold text-sm text-white">
+                  <AlertTriangle className={`w-4 h-4 ${isRlsPermissionIssue ? 'text-rose-400' : 'text-amber-400'}`} />
+                  <span>
+                    {isRlsPermissionIssue 
+                      ? 'Action requise : Permissions PostgreSQL RLS manquantes dans Supabase' 
+                      : 'Script correctif des autorisations PostgreSQL (GRANT EXECUTE)'}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-slate-300">
+                  {isRlsPermissionIssue ? (
+                    <>
+                      PostgreSQL a retourné : <code className="bg-slate-950 px-1 py-0.5 rounded text-rose-300 font-mono font-bold">{lastRlsError || 'permission denied for function is_admin'}</code>. 
+                      C'est pourquoi vos tickets et utilisateurs ne s'affichent pas.
+                    </>
+                  ) : (
+                    'Ce script accorde à vos utilisateurs authentifiés le droit d’exécuter les fonctions de sécurité RLS (is_admin, get_current_sector_id) nécessaires pour lire et afficher les tickets, carnets et utilisateurs.'
+                  )}
+                </p>
+                <div className="flex items-center gap-2 pt-1 text-[11px] text-amber-300/90 font-medium">
+                  <span>Étapes : 1. Copier le script ci-dessous ➔ 2. Ouvrir le <strong>SQL Editor</strong> Supabase ➔ 3. Coller & Exécuter ("Run")</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleCopyFix}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 px-3.5 py-2 text-xs font-bold text-white transition shadow-md shrink-0 cursor-pointer"
+                >
+                  {copiedFix ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedFix ? 'Copié !' : 'Copier Script Correctif'}</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    await refreshData();
+                    handleTestConnection();
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 border border-slate-700 transition"
+                  title="Rafraîchir les données après exécution du script SQL"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Rafraîchir</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 p-4 font-mono text-[11px] text-amber-300/95 leading-relaxed shadow-inner">
+              <pre>{sqlPermissionsFix}</pre>
+            </div>
+          </div>
+        )}
 
         {/* CONTENU ONGLET 1 : SCRIPT SQL */}
         {activeTab === 'schema' && (

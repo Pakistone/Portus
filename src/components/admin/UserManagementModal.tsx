@@ -159,6 +159,20 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleActivate = async (u: User) => {
+    setLoading(true);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await toggleUserActive(u.id);
+      setSuccessMessage(`Compte "${u.fullName}" réactivé avec succès.`);
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de la réactivation.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleConfirmDeactivation = async () => {
     if (!deactivateTargetUser) return;
     setLoading(true);
@@ -393,8 +407,9 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                               </button>
                             ) : (
                               <button
-                                onClick={() => toggleUserActive(u.id)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition cursor-pointer"
+                                onClick={() => handleActivate(u)}
+                                disabled={loading}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition cursor-pointer disabled:opacity-50"
                                 title="Réactiver le compte"
                               >
                                 <UserCheck className="w-3.5 h-3.5 text-emerald-400" />

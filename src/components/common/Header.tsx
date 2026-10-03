@@ -55,7 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTimeline,
 }) => {
   const { currentUser, logout } = useAuth();
-  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase } = useData();
+  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase, isRlsPermissionIssue, lastRlsError } = useData();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
@@ -114,6 +114,27 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md">
+      {isRlsPermissionIssue && currentUser?.role === 'ADMINISTRATEUR' && (
+        <div className="bg-rose-950/95 border-b border-rose-500/50 px-4 py-2.5 text-xs text-rose-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-2.5 w-2.5 relative shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+            </span>
+            <span>
+              <strong>Base Supabase (Vercel) :</strong> Permissions PostgreSQL (RLS) manquantes ({lastRlsError || 'permission denied for function is_admin'}). Vos tickets et utilisateurs sont masqués.
+            </span>
+          </div>
+          {onOpenSupabase && (
+            <button
+              onClick={onOpenSupabase}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold transition shadow shrink-0 cursor-pointer"
+            >
+              <span>Corriger en 1 clic (Script SQL)</span>
+            </button>
+          )}
+        </div>
+      )}
       <div className="mx-auto flex max-w-7xl items-center justify-between px-3 py-2.5 sm:px-6">
         {/* Logo & Titre */}
         <div className="flex items-center gap-3">

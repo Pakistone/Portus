@@ -7,6 +7,7 @@
  */
 
 import { getSupabase } from './supabaseClient';
+import { safeFetchJson } from '../utils/safeApi';
 import type {
   User,
   Carnet,
@@ -23,6 +24,22 @@ import type {
   Vehicle,
   TicketReprint,
 } from '../types';
+
+let rlsPermissionIssueDetected = false;
+let lastRlsErrorMessage = '';
+
+export function isRlsPermissionIssueDetected(): boolean {
+  return rlsPermissionIssueDetected;
+}
+
+export function getLastRlsErrorMessage(): string {
+  return lastRlsErrorMessage;
+}
+
+export function resetRlsPermissionIssue(): void {
+  rlsPermissionIssueDetected = false;
+  lastRlsErrorMessage = '';
+}
 
 const DEFAULT_ADMIN_UUID = 'db2145a8-bdd8-492c-a2b4-f20126881b30';
 
@@ -109,30 +126,28 @@ export const SupabaseDataLayer = {
   // 1. PROFILS & UTILISATEURS
   // ------------------------------------------------------------------
   async fetchProfiles(): Promise<User[]> {
-    // 1. Tenter d'abord l'API backend /api/users (contourne RLS sans restriction)
+    // 1. Tenter d'abord l'API backend /api/users (contourne RLS sans restriction via Express/Vercel Serverless)
     try {
-      const resp = await fetch('/api/users');
-      if (resp.ok) {
-        const json = await resp.json();
-        if (Array.isArray(json.users) && json.users.length > 0) {
-          return json.users.map((row: any) => ({
-            id: row.id,
-            username: row.username,
-            fullName: row.full_name,
-            role: row.role,
-            sectorId: row.sector_id,
-            sectorName: row.sector?.name || row.sectors?.name,
-            phone: row.phone,
-            isActive: row.is_active,
-            failedAttempts: row.failed_attempts || 0,
-            lockedUntil: row.locked_until,
-            createdAt: row.created_at,
-            updatedAt: row.updated_at,
-          }));
-        }
+      const { ok, data } = await safeFetchJson<{ users: any[] }>('/api/users');
+      if (ok && data && Array.isArray(data.users) && data.users.length > 0) {
+        return data.users.map((row: any) => ({
+          id: row.id,
+          username: row.username,
+          fullName: row.full_name,
+          role: row.role,
+          sectorId: row.sector_id,
+          sectorName: row.sector?.name || row.sectors?.name,
+          phone: row.phone,
+          isActive: row.is_active,
+          failedAttempts: row.failed_attempts || 0,
+          lockedUntil: row.locked_until,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
       }
     } catch {}
 
+    // 2. Repli direct Supabase client
     const supabase = getSupabase();
     if (!supabase) return [];
 
@@ -143,6 +158,31 @@ export const SupabaseDataLayer = {
 
     if (error) {
       console.warn('Supabase fetchProfiles error:', error.message);
+      if (error.message?.includes('permission denied')) {
+        rlsPermissionIssueDetected = true;
+        lastRlsErrorMessage = error.message;
+      }
+
+      // Repli d'urgence pour le profil courant si RLS bloque SELECT *
+      try {
+        const { data: myProf } = await supabase.rpc('get_my_profile');
+        if (myProf && typeof myProf === 'object') {
+          return [{
+            id: myProf.id,
+            username: myProf.username,
+            fullName: myProf.full_name,
+            role: myProf.role,
+            sectorId: myProf.sector_id,
+            sectorName: myProf.sector_name,
+            phone: myProf.phone,
+            isActive: myProf.is_active,
+            failedAttempts: myProf.failed_attempts || 0,
+            createdAt: myProf.created_at,
+            updatedAt: myProf.updated_at,
+          }];
+        }
+      } catch {}
+
       return [];
     }
 
@@ -174,50 +214,111 @@ export const SupabaseDataLayer = {
     passwordRaw: string;
   }): Promise<User> {
     const supabase = getSupabase();
-    if (!supabase) {
-      throw new Error('Supabase n’est pas configuré.');
+    let token: string | null = null;
+    if (supabase) {
+      const { data: { session } } = await supabase.auth.getSession();
+      token = session?.access_token || null;
+    }
+    if (!token && typeof sessionStorage !== 'undefined') {
+      token = sessionStorage.getItem('portus_access_token');
+    }
+    if (!token && typeof localStorage !== 'undefined') {
+      token = localStorage.getItem('portus_access_token');
     }
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) {
-      throw new Error('Session administrateur expirée. Veuillez vous reconnecter.');
+    // 1. Tenter via API backend autoritaire (Express / Vercel Serverless)
+    if (token) {
+      const { ok, data } = await safeFetchJson<{ user: any; error?: string }>('/api/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(userData),
+      });
+
+      if (ok && data?.user) {
+        const row = data.user;
+        return {
+          id: row.id,
+          username: row.username,
+          fullName: row.full_name,
+          role: row.role,
+          sectorId: row.sector_id,
+          sectorName: row.sector?.name,
+          phone: row.phone,
+          isActive: row.is_active,
+          failedAttempts: row.failed_attempts || 0,
+          lockedUntil: row.locked_until,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
     }
 
-    const res = await fetch('/api/admin/users', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify(userData),
-    });
+    // 2. Repli direct client Supabase (si l'API serveur est non joignable)
+    if (supabase) {
+      const cleanUsername = userData.username.trim().toLowerCase();
+      const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus.ujsrv.ci`;
 
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.error || 'Erreur lors de la création de l’utilisateur dans Supabase.');
+      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
+        email,
+        password: userData.passwordRaw,
+        options: {
+          data: {
+            username: cleanUsername,
+            full_name: userData.fullName.trim(),
+            role: userData.role,
+          },
+        },
+      });
+
+      if (signUpErr) {
+        throw new Error(signUpErr.message);
+      }
+
+      if (signUpData?.user) {
+        const newUserId = signUpData.user.id;
+        const newProf: User = {
+          id: newUserId,
+          username: cleanUsername,
+          fullName: userData.fullName.trim(),
+          role: userData.role as any,
+          sectorId: (userData.sectorId ? sanitizeUuidOrNull(userData.sectorId) : null) || undefined,
+          phone: userData.phone?.trim() || undefined,
+          isActive: true,
+          failedAttempts: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        await supabase.from('profiles').upsert({
+          id: newProf.id,
+          username: newProf.username,
+          full_name: newProf.fullName,
+          role: newProf.role,
+          sector_id: newProf.sectorId,
+          phone: newProf.phone || null,
+          is_active: true,
+          failed_attempts: 0,
+          created_at: newProf.createdAt,
+          updated_at: newProf.updatedAt,
+        });
+
+        return newProf;
+      }
     }
 
-    const row = json.user;
-    return {
-      id: row.id,
-      username: row.username,
-      fullName: row.full_name,
-      role: row.role,
-      sectorId: row.sector_id,
-      sectorName: row.sector?.name,
-      phone: row.phone,
-      isActive: row.is_active,
-      failedAttempts: row.failed_attempts || 0,
-      lockedUntil: row.locked_until,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    throw new Error('Erreur lors de la création de l’utilisateur dans Supabase.');
   },
 
   /**
    * Modifie un utilisateur dans Supabase profiles
    */
   async updateAdminUser(userId: string, updates: {
+    username?: string;
     fullName?: string;
     phone?: string;
     sectorId?: string;
@@ -225,44 +326,85 @@ export const SupabaseDataLayer = {
     isActive?: boolean;
   }): Promise<User> {
     const supabase = getSupabase();
-    if (!supabase) {
-      throw new Error('Supabase n’est pas configuré.');
+    let token: string | null = null;
+    if (supabase) {
+      const { data: { session } } = await supabase.auth.getSession();
+      token = session?.access_token || null;
+    }
+    if (!token && typeof sessionStorage !== 'undefined') {
+      token = sessionStorage.getItem('portus_access_token');
+    }
+    if (!token && typeof localStorage !== 'undefined') {
+      token = localStorage.getItem('portus_access_token');
     }
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) {
-      throw new Error('Session administrateur expirée.');
+    // 1. Tenter via API backend autoritaire
+    if (token) {
+      const { ok, data } = await safeFetchJson<{ user: any; error?: string }>(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(updates),
+      });
+
+      if (ok && data?.user) {
+        const row = data.user;
+        return {
+          id: row.id,
+          username: row.username,
+          fullName: row.full_name,
+          role: row.role,
+          sectorId: row.sector_id,
+          sectorName: row.sector?.name,
+          phone: row.phone,
+          isActive: row.is_active,
+          failedAttempts: row.failed_attempts || 0,
+          lockedUntil: row.locked_until,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      } else if (data?.error) {
+        throw new Error(data.error);
+      }
     }
 
-    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify(updates),
-    });
+    // 2. Repli direct client Supabase
+    if (supabase) {
+      const dbUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (updates.fullName !== undefined) dbUpdates.full_name = updates.fullName.trim();
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim() || null;
+      if (updates.sectorId !== undefined) dbUpdates.sector_id = sanitizeUuidOrNull(updates.sectorId);
+      if (updates.role !== undefined) dbUpdates.role = updates.role;
+      if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
 
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.error || 'Erreur lors de la mise à jour de l’utilisateur.');
+      const { data: prof, error: updateErr } = await supabase
+        .from('profiles')
+        .update(dbUpdates)
+        .eq('id', userId)
+        .select('*, sectors(name)')
+        .maybeSingle();
+
+      if (!updateErr && prof) {
+        return {
+          id: prof.id,
+          username: prof.username,
+          fullName: prof.full_name,
+          role: prof.role,
+          sectorId: prof.sector_id,
+          sectorName: prof.sectors?.name,
+          phone: prof.phone,
+          isActive: prof.is_active,
+          failedAttempts: prof.failed_attempts || 0,
+          lockedUntil: prof.locked_until,
+          createdAt: prof.created_at,
+          updatedAt: prof.updated_at,
+        };
+      }
     }
 
-    const row = json.user;
-    return {
-      id: row.id,
-      username: row.username,
-      fullName: row.full_name,
-      role: row.role,
-      sectorId: row.sector_id,
-      sectorName: row.sector?.name,
-      phone: row.phone,
-      isActive: row.is_active,
-      failedAttempts: row.failed_attempts || 0,
-      lockedUntil: row.locked_until,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    throw new Error('Erreur lors de la mise à jour de l’utilisateur.');
   },
 
   /**
@@ -270,30 +412,44 @@ export const SupabaseDataLayer = {
    */
   async resetAdminUserPassword(userId: string, newPasswordRaw: string): Promise<boolean> {
     const supabase = getSupabase();
-    if (!supabase) {
-      throw new Error('Supabase n’est pas configuré.');
+    let token: string | null = null;
+    if (supabase) {
+      const { data: { session } } = await supabase.auth.getSession();
+      token = session?.access_token || null;
+    }
+    if (!token && typeof sessionStorage !== 'undefined') {
+      token = sessionStorage.getItem('portus_access_token');
+    }
+    if (!token && typeof localStorage !== 'undefined') {
+      token = localStorage.getItem('portus_access_token');
     }
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) {
-      throw new Error('Session administrateur expirée.');
+    // 1. Tenter via API backend autoritaire
+    if (token) {
+      const { ok, data } = await safeFetchJson<{ success?: boolean; error?: string }>(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ newPasswordRaw }),
+      });
+
+      if (ok && data?.success) return true;
+      if (data?.error) throw new Error(data.error);
     }
 
-    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ newPasswordRaw }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      throw new Error(json.error || 'Erreur lors de la réinitialisation du mot de passe.');
+    // 2. Repli si mot de passe de l'utilisateur connecté lui-même
+    if (supabase) {
+      const { data: currentUser } = await supabase.auth.getUser();
+      if (currentUser?.user?.id === userId) {
+        const { error } = await supabase.auth.updateUser({ password: newPasswordRaw });
+        if (error) throw new Error(error.message);
+        return true;
+      }
     }
 
-    return true;
+    throw new Error("La réinitialisation directe du mot de passe d'un tiers requiert le serveur backend avec privilèges de service.");
   },
 
   async upsertProfile(user: User): Promise<boolean> {
@@ -358,14 +514,11 @@ export const SupabaseDataLayer = {
   // 3. CARNETS
   // ------------------------------------------------------------------
   async fetchCarnets(): Promise<Carnet[]> {
-    // 1. Priorité API backend autoritaire (contourne les restrictions RLS)
+    // 1. Priorité API backend autoritaire (Express / Vercel Serverless)
     try {
-      const res = await fetch('/api/carnets');
-      if (res.ok) {
-        const json = await res.json();
-        if (Array.isArray(json.carnets)) {
-          return json.carnets;
-        }
+      const { ok, data } = await safeFetchJson<{ carnets: Carnet[] }>('/api/carnets');
+      if (ok && data && Array.isArray(data.carnets)) {
+        return data.carnets;
       }
     } catch {}
 
@@ -380,6 +533,10 @@ export const SupabaseDataLayer = {
 
     if (error) {
       console.warn('Supabase fetchCarnets error:', error.message);
+      if (error.message?.includes('permission denied')) {
+        rlsPermissionIssueDetected = true;
+        lastRlsErrorMessage = error.message;
+      }
       return [];
     }
 
@@ -404,12 +561,12 @@ export const SupabaseDataLayer = {
   async insertCarnet(carnet: Carnet, tickets?: Ticket[]): Promise<boolean> {
     // 1. Envoi prioritaire via le proxy serveur autoritaire
     try {
-      const res = await fetch('/api/carnets', {
+      const { ok } = await safeFetchJson('/api/carnets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ carnet, tickets: tickets || [] }),
       });
-      if (res.ok) return true;
+      if (ok) return true;
     } catch {}
 
     // 2. Repli client Supabase
@@ -475,13 +632,13 @@ export const SupabaseDataLayer = {
         headers['Authorization'] = `Bearer ${session.access_token}`;
       }
 
-      const res = await fetch(`/api/carnets/${encodeURIComponent(carnetId)}/assign`, {
+      const { ok } = await safeFetchJson(`/api/carnets/${encodeURIComponent(carnetId)}/assign`, {
         method: 'PATCH',
         headers,
         body: JSON.stringify({ responsableId, sectorId }),
       });
 
-      if (res.ok) {
+      if (ok) {
         return true;
       }
     } catch (err) {
@@ -529,14 +686,13 @@ export const SupabaseDataLayer = {
     try {
       // 1. Synchronisation des carnets
       if (carnets.length > 0) {
-        const resCarnets = await fetch('/api/carnets/sync', {
+        const { ok, data } = await safeFetchJson<{ syncedCarnets?: number }>('/api/carnets/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ carnets, tickets: [] }),
         });
-        if (resCarnets.ok) {
-          const json = await resCarnets.json();
-          totalSyncedCarnets = json.syncedCarnets || carnets.length;
+        if (ok && data) {
+          totalSyncedCarnets = data.syncedCarnets || carnets.length;
         }
       }
 
@@ -544,14 +700,13 @@ export const SupabaseDataLayer = {
       const CHUNK_SIZE = 150;
       for (let i = 0; i < tickets.length; i += CHUNK_SIZE) {
         const chunk = tickets.slice(i, i + CHUNK_SIZE);
-        const resTickets = await fetch('/api/carnets/sync', {
+        const { ok, data } = await safeFetchJson<{ syncedTickets?: number }>('/api/carnets/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ carnets: [], tickets: chunk }),
         });
-        if (resTickets.ok) {
-          const json = await resTickets.json();
-          totalSyncedTickets += json.syncedTickets || chunk.length;
+        if (ok && data) {
+          totalSyncedTickets += data.syncedTickets || chunk.length;
         }
       }
 
@@ -576,12 +731,9 @@ export const SupabaseDataLayer = {
   async fetchTickets(): Promise<Ticket[]> {
     // 1. Priorité API backend autoritaire
     try {
-      const res = await fetch('/api/carnets');
-      if (res.ok) {
-        const json = await res.json();
-        if (Array.isArray(json.tickets) && json.tickets.length > 0) {
-          return json.tickets;
-        }
+      const { ok, data } = await safeFetchJson<{ tickets: Ticket[] }>('/api/carnets');
+      if (ok && data && Array.isArray(data.tickets) && data.tickets.length > 0) {
+        return data.tickets;
       }
     } catch {}
 
@@ -596,6 +748,10 @@ export const SupabaseDataLayer = {
 
     if (error) {
       console.warn('Supabase fetchTickets error:', error.message);
+      if (error.message?.includes('permission denied')) {
+        rlsPermissionIssueDetected = true;
+        lastRlsErrorMessage = error.message;
+      }
       return [];
     }
 
