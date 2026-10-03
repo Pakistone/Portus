@@ -211,6 +211,7 @@ interface DataContextType {
     ticketId: string;
     plateNumber: string;
     driverPhone?: string;
+    driverName?: string;
     overrideOldTicketId?: string;
   }) => Promise<Sale>;
   getAgentStats: (agentId: string) => {
@@ -2930,6 +2931,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     ticketId: string;
     plateNumber: string;
     driverPhone?: string;
+    driverName?: string;
     overrideOldTicketId?: string;
   }): Promise<Sale> => {
     const db = await getDB();
@@ -2999,6 +3001,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     ticket.soldAt = originalSoldAt;
     ticket.plateNumber = cleanPlate;
     ticket.driverPhone = cleanPhone;
+    ticket.driverName = params.driverName;
     ticket.isSuperseded = false;
     await db.put('tickets', ticket);
 
@@ -3013,6 +3016,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       sectorName: ticket.sectorName,
       plateNumber: cleanPlate,
       driverPhone: cleanPhone,
+      driverName: params.driverName,
       soldAt: originalSoldAt, // Date originale (immuable)
       gpsLatitude: gps.latitude,
       gpsLongitude: gps.longitude,
@@ -3024,6 +3028,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     await db.put('sales', sale);
+
+    // Mettre à jour le registre des véhicules de façon transparente et asynchrone
+    upsertVehicle({
+      plateNumber: cleanPlate,
+      driverName: params.driverName,
+      driverPhone: cleanPhone,
+      totalTicketsCount: 1,
+    }).catch((err) => console.warn('[PORTUS DataContext] Erreur upsert véhicule vente:', err));
 
     // Si en ligne, réplication atomique et sécurisée via la RPC PostgreSQL
     if (isOnline && SupabaseDataLayer.isAvailable()) {

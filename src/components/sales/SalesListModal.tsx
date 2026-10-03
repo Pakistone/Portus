@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart } from 'lucide-react';
+import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart, Printer } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { exportSalesToExcel } from '../../utils/excelExport';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
+import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
 
 interface Props {
   isOpen: boolean;
@@ -13,8 +14,84 @@ interface Props {
 
 export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale }) => {
   const { currentUser } = useAuth();
-  const { sales } = useData();
+  const { sales, tickets } = useData();
   const [searchTerm, setSearchTerm] = useState('');
+  const [printingTicketId, setPrintingTicketId] = useState<string | null>(null);
+
+  const handlePrintReceipt = async (sale: any) => {
+    setPrintingTicketId(sale.id);
+    try {
+      const ticketObj = tickets.find((t) => t.id === sale.ticketId || t.ticketNumber === sale.ticketNumber);
+      const carnetNumber = ticketObj ? ticketObj.carnetNumber : undefined;
+
+      const blob = await generateReceiptImageBlob({
+        ticketNumber: sale.ticketNumber,
+        plateNumber: sale.plateNumber,
+        amount: sale.price,
+        agentName: sale.agentName,
+        dateStr: formatDateTime(sale.soldAt),
+        driverName: sale.driverName || 'Chauffeur non spécifié',
+        driverPhone: sale.driverPhone || 'Non renseigné',
+        carnetNumber: carnetNumber,
+        qrPayload: sale.ticketNumber,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.name = 'print-iframe';
+      
+      document.body.appendChild(iframe);
+      
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (doc) {
+        doc.write(`
+          <html>
+            <head>
+              <title>Impression Reçu PORTUS - ${sale.ticketNumber}</title>
+              <style>
+                body { margin: 0; padding: 10px; display: flex; justify-content: center; align-items: flex-start; background-color: white; }
+                img { max-width: 100%; height: auto; object-fit: contain; }
+                @page { size: auto; margin: 0; }
+                @media print {
+                  body { padding: 0; }
+                  img { width: 100%; }
+                }
+              </style>
+            </head>
+            <body>
+              <img src="${url}" />
+              <script>
+                const img = document.querySelector('img');
+                if (img.complete) {
+                  window.print();
+                } else {
+                  img.onload = function() {
+                    window.print();
+                  };
+                }
+              </script>
+            </body>
+          </html>
+        `);
+        doc.close();
+      }
+
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+        URL.revokeObjectURL(url);
+      }, 10000);
+    } catch (err) {
+      console.error('[PORTUS Print] Erreur lors de l’impression du reçu:', err);
+    } finally {
+      setPrintingTicketId(null);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -96,12 +173,13 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                 <th className="py-2.5 px-3">GPS</th>
                 <th className="py-2.5 px-3">Statut Synchro</th>
                 <th className="py-2.5 px-3 text-right">Montant</th>
+                <th className="py-2.5 px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {visibleSales.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                  <td colSpan={9} className="py-12 text-center text-slate-500">
                     Aucune vente enregistrée.
                   </td>
                 </tr>
@@ -146,6 +224,17 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                     </td>
                     <td className="py-2.5 px-3 text-right font-bold text-white whitespace-nowrap">
                       {formatFCFA(s.price)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => handlePrintReceipt(s)}
+                        disabled={!!printingTicketId}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                        title="Imprimer le ticket"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-[10px] font-bold">Imprimer</span>
+                      </button>
                     </td>
                   </tr>
                 ))

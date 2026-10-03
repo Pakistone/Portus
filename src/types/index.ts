@@ -131,6 +131,7 @@ export interface Ticket {
   soldAt?: string; // Date/heure originale de vente (ISO)
   plateNumber?: string; // Normalisé (ex: AB1234CD)
   driverPhone?: string; // Chiffres uniquement
+  driverName?: string; // Nom & Prénoms du chauffeur
   isSuperseded?: boolean; // Remplacé par un nouveau ticket actif pour la même immat
   supersededByTicketNumber?: string;
   coveredByRemiseId?: string;
@@ -180,6 +181,7 @@ export interface Sale {
   sectorName?: string;
   plateNumber: string; // Normalisé
   driverPhone?: string; // Chiffres uniquement ou vide
+  driverName?: string; // Nom & Prénoms du chauffeur
   vehicleCategory?: string;
   soldAt: string; // Date originale de vente (NE JAMAIS écraser par la synchro)
   gpsLatitude: number | null;

@@ -55,9 +55,8 @@ export function generateWhatsAppReceiptUrl(params: {
     `🎫 *Ticket N° :* ${params.ticketNumber} %0A` +
     `🚛 *Immatriculation :* ${params.plateNumber} %0A` +
     `💵 *Montant réglé :* ${params.amount.toLocaleString()} FCFA %0A` +
-    `👤 *Agent perceptteur :* ${params.agentName} %0A` +
+    `👤 *Agent percepteur :* ${params.agentName} %0A` +
     `📅 *Date & Heure :* ${params.dateStr} %0A%0A` +
-    `✅ *Validité :* 7 jours à compter de l'émission. %0A` +
     `📍 _Zone Portuaire & Industrielle de Vridi (Port Autonome d'Abidjan)_ %0A` +
     `📞 _Contacts : 07 77 91 78 04 / 01 03 31 37 68_`;
 

@@ -18,12 +18,14 @@ import {
   Calendar,
   Receipt,
   History,
+  Printer,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StatCard } from './StatCard';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
+import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
 import type { Ticket } from '../../types';
 
 // Modales
@@ -55,6 +57,82 @@ export const AgentDashboard: React.FC = () => {
   const [ventesModalOpen, setVentesModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [selectedTicketForSale, setSelectedTicketForSale] = useState<string | undefined>(undefined);
+  const [printingTicketId, setPrintingTicketId] = useState<string | null>(null);
+
+  const handlePrintReceipt = async (sale: any) => {
+    setPrintingTicketId(sale.id);
+    try {
+      const ticketObj = tickets.find((t) => t.id === sale.ticketId || t.ticketNumber === sale.ticketNumber);
+      const carnetNumber = ticketObj ? ticketObj.carnetNumber : undefined;
+
+      const blob = await generateReceiptImageBlob({
+        ticketNumber: sale.ticketNumber,
+        plateNumber: sale.plateNumber,
+        amount: sale.price,
+        agentName: sale.agentName,
+        dateStr: formatDateTime(sale.soldAt),
+        driverName: sale.driverName || 'Chauffeur non spécifié',
+        driverPhone: sale.driverPhone || 'Non renseigné',
+        carnetNumber: carnetNumber,
+        qrPayload: sale.ticketNumber,
+      });
+
+      const url = URL.createObjectURL(blob);
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.name = 'print-iframe';
+      
+      document.body.appendChild(iframe);
+      
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (doc) {
+        doc.write(`
+          <html>
+            <head>
+              <title>Impression Reçu PORTUS - ${sale.ticketNumber}</title>
+              <style>
+                body { margin: 0; padding: 10px; display: flex; justify-content: center; align-items: flex-start; background-color: white; }
+                img { max-width: 100%; height: auto; object-fit: contain; }
+                @page { size: auto; margin: 0; }
+                @media print {
+                  body { padding: 0; }
+                  img { width: 100%; }
+                }
+              </style>
+            </head>
+            <body>
+              <img src="${url}" />
+              <script>
+                const img = document.querySelector('img');
+                if (img.complete) {
+                  window.print();
+                } else {
+                  img.onload = function() {
+                    window.print();
+                  };
+                }
+              </script>
+            </body>
+          </html>
+        `);
+        doc.close();
+      }
+
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+        URL.revokeObjectURL(url);
+      }, 10000);
+    } catch (err) {
+      console.error('[PORTUS Print] Erreur lors de l’impression du reçu:', err);
+    } finally {
+      setPrintingTicketId(null);
+    }
+  };
 
   useEffect(() => {
     const handleNotificationClicked = (e: Event) => {
@@ -75,6 +153,13 @@ export const AgentDashboard: React.FC = () => {
   // RÈGLE STRICTE : L'agent ne voit QUE ses propres tickets !
   const [ticketFilterTab, setTicketFilterTab] = useState<'ALL' | 'AVAILABLE' | 'SOLD'>('ALL');
   const [ticketSearch, setTicketSearch] = useState('');
+
+  const handleSetFilterTab = (tab: 'ALL' | 'AVAILABLE' | 'SOLD') => {
+    setTicketFilterTab(tab);
+    setTimeout(() => {
+      document.getElementById('ticket-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  };
 
   const stats = currentUser
     ? getAgentStats(currentUser.id)
@@ -322,7 +407,7 @@ export const AgentDashboard: React.FC = () => {
           subtitle="Prêts à être vendus"
           icon={<TicketIcon className="w-4 h-4" />}
           variant="emerald"
-          onClick={() => setTicketFilterTab('AVAILABLE')}
+          onClick={() => handleSetFilterTab('AVAILABLE')}
         />
 
         {/* 2. Tickets Vendus */}
@@ -332,7 +417,7 @@ export const AgentDashboard: React.FC = () => {
           subtitle="Ventes enregistrées"
           icon={<CheckCircle2 className="w-4 h-4" />}
           variant="blue"
-          onClick={() => setTicketFilterTab('SOLD')}
+          onClick={() => handleSetFilterTab('SOLD')}
         />
 
         {/* 3. Valeur des Ventes */}
@@ -342,7 +427,7 @@ export const AgentDashboard: React.FC = () => {
           subtitle={`${soldTickets.length} × 5 000 FCFA`}
           icon={<Receipt className="w-4 h-4" />}
           variant="emerald"
-          onClick={() => setTicketFilterTab('SOLD')}
+          onClick={() => handleSetFilterTab('SOLD')}
         />
 
         {/* 4. Montant Remis */}
@@ -469,7 +554,7 @@ export const AgentDashboard: React.FC = () => {
       {/* SECTION DÉDIÉE : MES TICKETS CONFIÉS (NUMÉRO TICKET, STATUT, ACTIONS)     */}
       {/* L'AGENT NE VOIT QUE SES PROPRES TICKETS                                  */}
       {/* ========================================================================= */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 shadow-sm space-y-4">
+      <div id="ticket-section" className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -588,15 +673,30 @@ export const AgentDashboard: React.FC = () => {
                         <span>Vendre ce ticket</span>
                       </button>
                     ) : (
-                      <div className="text-right">
-                        <span className="font-mono font-bold text-white text-xs">
-                          {formatFCFA(t.price)}
-                        </span>
-                        {t.soldAt && (
-                          <p className="text-[10px] text-slate-400">
-                            {formatDateTime(t.soldAt)}
-                          </p>
-                        )}
+                      <div className="flex items-center gap-2 text-right">
+                        <div>
+                          <span className="font-mono font-bold text-white text-xs">
+                            {formatFCFA(t.price)}
+                          </span>
+                          {t.soldAt && (
+                            <p className="text-[10px] text-slate-400">
+                              {formatDateTime(t.soldAt)}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const linkedSale = sales.find(s => s.ticketId === t.id || s.ticketNumber === t.ticketNumber);
+                            if (linkedSale) {
+                              handlePrintReceipt(linkedSale);
+                            }
+                          }}
+                          disabled={!!printingTicketId}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
+                          title="Imprimer ce ticket"
+                        >
+                          <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                        </button>
                       </div>
                     )}
                   </div>
@@ -643,15 +743,25 @@ export const AgentDashboard: React.FC = () => {
                     {formatDateTime(s.soldAt)}
                   </p>
                 </div>
-                <div className="text-right">
-                  <span className="font-mono font-bold text-white">{formatFCFA(s.price)}</span>
-                  <div className="text-[10px] mt-0.5">
-                    {s.syncStatus === 'SYNCED' ? (
-                      <span className="text-emerald-400">Synchronisé</span>
-                    ) : (
-                      <span className="text-amber-400">En attente</span>
-                    )}
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <span className="font-mono font-bold text-white">{formatFCFA(s.price)}</span>
+                    <div className="text-[10px] mt-0.5">
+                      {s.syncStatus === 'SYNCED' ? (
+                        <span className="text-emerald-400">Synchronisé</span>
+                      ) : (
+                        <span className="text-amber-400">En attente</span>
+                      )}
+                    </div>
                   </div>
+                  <button
+                    onClick={() => handlePrintReceipt(s)}
+                    disabled={!!printingTicketId}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
+                    title="Imprimer ce ticket"
+                  >
+                    <Printer className="w-4 h-4 text-emerald-400" />
+                  </button>
                 </div>
               </div>
             ))}

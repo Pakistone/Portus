@@ -53,7 +53,22 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
     }
 
     if (selectedCarnetId !== 'ALL' && t.carnetId !== selectedCarnetId) return false;
-    if (statusFilter !== 'ALL' && t.status !== statusFilter) return false;
+    
+    if (statusFilter !== 'ALL') {
+      if (statusFilter === 'AVAILABLE') {
+        if (currentUser?.role === 'RESPONSABLE') {
+          if (t.status !== 'ASSIGNED_TO_RESPONSIBLE') return false;
+        } else if (currentUser?.role === 'AGENT') {
+          if (t.status !== 'ASSIGNED_TO_AGENT') return false;
+        } else {
+          if (t.status !== 'GENERATED' && t.status !== 'ASSIGNED_TO_RESPONSIBLE' && t.status !== 'ASSIGNED_TO_AGENT') return false;
+        }
+      } else if (statusFilter === 'SOLD') {
+        if (t.status !== 'SOLD' && t.status !== 'CONTROLLED') return false;
+      } else {
+        if (t.status !== statusFilter) return false;
+      }
+    }
 
     if (searchTerm) {
       const term = searchTerm.toLowerCase();

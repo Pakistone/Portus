@@ -11,6 +11,12 @@ import {
   MessageSquare,
   Shield,
   Layers,
+  User,
+  Share2,
+  Download,
+  Copy,
+  Check,
+  Printer,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -23,6 +29,7 @@ import {
   formatDateTime,
 } from '../../utils/normalization';
 import { CEDEAO_COUNTRIES, generateWhatsAppReceiptUrl } from '../../utils/cedeao';
+import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
 import type { Ticket, Sale } from '../../types';
 
 interface Props {
@@ -43,6 +50,7 @@ export const SaleFormModal: React.FC<Props> = ({
     tickets,
     carnets,
     sales,
+    vehicles,
     sellTicket,
     checkDuplicatePlate,
     getRecentPlates,
@@ -55,6 +63,7 @@ export const SaleFormModal: React.FC<Props> = ({
   const [plateInput, setPlateInput] = useState('');
   const [selectedDialCode, setSelectedDialCode] = useState('+225');
   const [phoneInput, setPhoneInput] = useState('');
+  const [driverNameInput, setDriverNameInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +75,11 @@ export const SaleFormModal: React.FC<Props> = ({
 
   // Vente réussie
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
+
+  // Gestion image reçu
+  const [receiptImgUrl, setReceiptImgUrl] = useState<string | null>(null);
+  const [isGeneratingImg, setIsGeneratingImg] = useState(false);
+  const [copiedImageSuccess, setCopiedImageSuccess] = useState(false);
 
   // Tickets disponibles à la vente (Tous pour l'admin, attribués pour l'agent)
   const availableTickets = useMemo(() => {
@@ -93,23 +107,201 @@ export const SaleFormModal: React.FC<Props> = ({
     }
   }, [defaultTicketId, availableTickets, selectedTicketId]);
 
-  // Auto-remplissage du téléphone du chauffeur si le camion a déjà été enregistré dans les ventes passées
+  // Auto-remplissage intelligent (téléphone & nom chauffeur) si le véhicule ou des ventes passées sont trouvés
   useEffect(() => {
     const cleanCurrent = normalizePlate(plateInput);
     if (cleanCurrent.length >= 3) {
-      const foundSale = sales.find((s) => normalizePlate(s.plateNumber) === cleanCurrent && s.driverPhone);
-      if (foundSale && foundSale.driverPhone && !phoneInput) {
-        const existingPhone = foundSale.driverPhone.trim();
-        const matchedCountry = CEDEAO_COUNTRIES.find((c) => existingPhone.startsWith(c.dialCode));
-        if (matchedCountry) {
-          setSelectedDialCode(matchedCountry.dialCode);
-          setPhoneInput(existingPhone.slice(matchedCountry.dialCode.length).trim());
-        } else {
-          setPhoneInput(existingPhone);
+      // 1. Rechercher d'abord dans le registre officiel des camions
+      const foundVehicle = vehicles?.find((v) => normalizePlate(v.plateNumber) === cleanCurrent);
+      if (foundVehicle) {
+        if (foundVehicle.driverPhone && !phoneInput) {
+          const existingPhone = foundVehicle.driverPhone.trim();
+          const matchedCountry = CEDEAO_COUNTRIES.find((c) => existingPhone.startsWith(c.dialCode));
+          if (matchedCountry) {
+            setSelectedDialCode(matchedCountry.dialCode);
+            setPhoneInput(existingPhone.slice(matchedCountry.dialCode.length).trim());
+          } else {
+            setPhoneInput(existingPhone);
+          }
+        }
+        if (foundVehicle.driverName && !driverNameInput) {
+          setDriverNameInput(foundVehicle.driverName);
+        }
+        return;
+      }
+
+      // 2. En repli, rechercher dans l'historique des ventes passées
+      const foundSale = sales.find((s) => normalizePlate(s.plateNumber) === cleanCurrent && (s.driverPhone || s.driverName));
+      if (foundSale) {
+        if (foundSale.driverPhone && !phoneInput) {
+          const existingPhone = foundSale.driverPhone.trim();
+          const matchedCountry = CEDEAO_COUNTRIES.find((c) => existingPhone.startsWith(c.dialCode));
+          if (matchedCountry) {
+            setSelectedDialCode(matchedCountry.dialCode);
+            setPhoneInput(existingPhone.slice(matchedCountry.dialCode.length).trim());
+          } else {
+            setPhoneInput(existingPhone);
+          }
+        }
+        if (foundSale.driverName && !driverNameInput) {
+          setDriverNameInput(foundSale.driverName);
         }
       }
     }
-  }, [plateInput, sales, phoneInput]);
+  }, [plateInput, vehicles, sales, phoneInput, driverNameInput]);
+
+  // Génération automatique du reçu électronique image lors du succès de la vente
+  useEffect(() => {
+    if (completedSale) {
+      const run = async () => {
+        setIsGeneratingImg(true);
+        try {
+          const ticketObj = tickets.find((t) => t.id === completedSale.ticketId || t.ticketNumber === completedSale.ticketNumber);
+          const carnetNumber = ticketObj ? ticketObj.carnetNumber : undefined;
+
+          const blob = await generateReceiptImageBlob({
+            ticketNumber: completedSale.ticketNumber,
+            plateNumber: completedSale.plateNumber,
+            amount: completedSale.price,
+            agentName: completedSale.agentName,
+            dateStr: formatDateTime(completedSale.soldAt),
+            driverName: completedSale.driverName || driverNameInput || 'Chauffeur non spécifié',
+            driverPhone: completedSale.driverPhone || phoneInput || 'Non renseigné',
+            carnetNumber: carnetNumber,
+            qrPayload: completedSale.ticketNumber,
+          });
+          const url = URL.createObjectURL(blob);
+          setReceiptImgUrl(url);
+        } catch (err) {
+          console.error('[PORTUS] Erreur génération image reçu:', err);
+        } finally {
+          setIsGeneratingImg(false);
+        }
+      };
+      run();
+    } else {
+      if (receiptImgUrl) {
+        URL.revokeObjectURL(receiptImgUrl);
+      }
+      setReceiptImgUrl(null);
+    }
+    return () => {
+      if (receiptImgUrl) {
+        URL.revokeObjectURL(receiptImgUrl);
+      }
+    };
+  }, [completedSale]);
+
+  const handleShareReceiptImage = async () => {
+    if (!receiptImgUrl || !completedSale) return;
+    try {
+      const response = await fetch(receiptImgUrl);
+      const blob = await response.blob();
+      const file = new File([blob], `Recu_PORTUS_${completedSale.ticketNumber}.png`, { type: 'image/png' });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Reçu PORTUS ${completedSale.ticketNumber}`,
+          text: `Reçu officiel de stationnement pour le véhicule ${completedSale.plateNumber}.`,
+        });
+      } else {
+        handleDownloadReceiptImage();
+      }
+    } catch (err) {
+      console.error('[PORTUS Share] Erreur lors du partage, repli téléchargement:', err);
+      handleDownloadReceiptImage();
+    }
+  };
+
+  const handleDownloadReceiptImage = () => {
+    if (!receiptImgUrl || !completedSale) return;
+    const a = document.createElement('a');
+    a.href = receiptImgUrl;
+    a.download = `Recu_PORTUS_${completedSale.ticketNumber}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleCopyReceiptImage = async () => {
+    if (!receiptImgUrl) return;
+    try {
+      const response = await fetch(receiptImgUrl);
+      const blob = await response.blob();
+      
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'image/png': blob
+          })
+        ]);
+        setCopiedImageSuccess(true);
+        setTimeout(() => setCopiedImageSuccess(false), 2000);
+      } else {
+        handleDownloadReceiptImage();
+      }
+    } catch (err) {
+      console.error('[PORTUS Copy] Échec de copie de l\'image, repli téléchargement:', err);
+      handleDownloadReceiptImage();
+    }
+  };
+
+  const handlePrintReceipt = () => {
+    if (!receiptImgUrl || !completedSale) return;
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.name = 'print-iframe';
+      
+      document.body.appendChild(iframe);
+      
+      const doc = iframe.contentDocument || iframe.contentWindow?.document;
+      if (doc) {
+        doc.write(`
+          <html>
+            <head>
+              <title>Impression Reçu PORTUS - ${completedSale.ticketNumber}</title>
+              <style>
+                body { margin: 0; padding: 10px; display: flex; justify-content: center; align-items: flex-start; background-color: white; }
+                img { max-width: 100%; height: auto; object-fit: contain; }
+                @page { size: auto; margin: 0; }
+                @media print {
+                  body { padding: 0; }
+                  img { width: 100%; }
+                }
+              </style>
+            </head>
+            <body>
+              <img src="${receiptImgUrl}" />
+              <script>
+                const img = document.querySelector('img');
+                if (img.complete) {
+                  window.print();
+                } else {
+                  img.onload = function() {
+                    window.print();
+                  };
+                }
+              </script>
+            </body>
+          </html>
+        `);
+        doc.close();
+      }
+
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 10000);
+    } catch (err) {
+      console.error('[PORTUS Print] Erreur lors de l’impression du reçu:', err);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -158,6 +350,7 @@ export const SaleFormModal: React.FC<Props> = ({
         ticketId: selectedTicketId,
         plateNumber: plateInput,
         driverPhone: finalDriverPhone,
+        driverName: driverNameInput.trim() || undefined,
         overrideOldTicketId,
       });
 
@@ -176,6 +369,7 @@ export const SaleFormModal: React.FC<Props> = ({
   const handleResetAndClose = () => {
     setPlateInput('');
     setPhoneInput('');
+    setDriverNameInput('');
     setDuplicateWarning(null);
     setCompletedSale(null);
     onClose();
@@ -246,45 +440,108 @@ export const SaleFormModal: React.FC<Props> = ({
 
         {/* Écran de succès de vente */}
         {completedSale && !duplicateWarning ? (
-          <div className="mt-4 space-y-4 text-center py-2 animate-fadeIn">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              <CheckCircle2 className="w-9 h-9" />
-            </div>
-
-            <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                Vente Encaissée avec Succès
-              </span>
-              <h4 className="text-xl font-black text-white mt-1">{completedSale.ticketNumber}</h4>
-              <p className="text-sm font-bold text-emerald-400 mt-1">
-                Véhicule : {formatPlateDisplay(completedSale.plateNumber)}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5 text-xs text-slate-300 text-left space-y-2 font-mono">
-              <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Montant réglé :</span>
-                <span className="font-bold text-white font-sans">{formatFCFA(completedSale.price)}</span>
+          <div className="mt-4 space-y-4 text-center py-1 animate-fadeIn flex-1 flex flex-col justify-between max-h-[85vh] overflow-y-auto pr-1">
+            <div className="space-y-3">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                <CheckCircle2 className="w-7 h-7 animate-pulse" />
               </div>
-              <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Date et Heure :</span>
-                <span className="text-emerald-300">{formatDateTime(completedSale.soldAt)}</span>
-              </div>
-              <div className="flex justify-between items-center border-b border-slate-800/80 pb-1">
-                <span className="text-slate-500 font-sans">Agent :</span>
-                <span className="text-white">{completedSale.agentName}</span>
-              </div>
-              {completedSale.driverPhone && (
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-sans">Téléphone Chauffeur :</span>
-                  <span className="text-white">{completedSale.driverPhone}</span>
-                </div>
-              )}
-            </div>
 
-            {/* Bouton Partage WhatsApp Reçu Électronique */}
-            {completedSale.driverPhone && (
               <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 block">
+                  Vente Encaissée avec Succès
+                </span>
+                <h4 className="text-lg font-black text-white mt-0.5">{completedSale.ticketNumber}</h4>
+                <p className="text-xs font-bold text-emerald-400">
+                  Véhicule : {formatPlateDisplay(completedSale.plateNumber)}
+                </p>
+              </div>
+
+              {/* Aperçu visuel officiel du reçu électronique (Image) */}
+              <div className="space-y-1.5 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                  Reçu Électronique Officiel (Image)
+                </span>
+                
+                {receiptImgUrl ? (
+                  <div className="relative mx-auto max-w-[250px] rounded-xl overflow-hidden border-2 border-emerald-500/40 shadow-2xl bg-white aspect-[500/770] transition-transform hover:scale-[1.02]">
+                    <img
+                      src={receiptImgUrl}
+                      alt="Reçu Officiel Portus"
+                      className="w-full h-auto object-contain cursor-pointer select-none"
+                      title="Maintenez appuyé pour enregistrer ou partager directement"
+                    />
+                  </div>
+                ) : (
+                  <div className="h-44 max-w-[250px] mx-auto flex flex-col items-center justify-center rounded-xl bg-slate-950 border border-slate-800 p-4">
+                    <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mb-2" />
+                    <span className="text-[11px] text-slate-400">Dessin du reçu image...</span>
+                  </div>
+                )}
+                <p className="text-[10px] text-slate-500 italic">
+                  Les chauffeurs étant pour la plupart illettrés, l'image ci-dessus contient tous les détails visuels.
+                </p>
+              </div>
+            </div>
+
+            {/* Actions de Partage & Téléchargement */}
+            <div className="space-y-2 pt-3 border-t border-slate-800/80">
+              {/* 🟢 Partager l'Image sur WhatsApp */}
+              <button
+                type="button"
+                onClick={handleShareReceiptImage}
+                disabled={isGeneratingImg || !receiptImgUrl}
+                className="flex items-center justify-center gap-2 w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 shadow-lg shadow-emerald-950 transition active:scale-98 disabled:opacity-50 cursor-pointer"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Partager Reçu (Image PNG) sur WhatsApp</span>
+              </button>
+
+              {/* 🖨️ Imprimer le Reçu */}
+              <button
+                type="button"
+                onClick={handlePrintReceipt}
+                disabled={!receiptImgUrl}
+                className="flex items-center justify-center gap-2 w-full rounded-xl bg-blue-600 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition active:scale-98 disabled:opacity-50 cursor-pointer shadow-md"
+              >
+                <Printer className="w-4 h-4 text-emerald-300" />
+                <span>Imprimer le Reçu (Thermique / Standard)</span>
+              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                {/* 📋 Copier l'Image */}
+                <button
+                  type="button"
+                  onClick={handleCopyReceiptImage}
+                  disabled={!receiptImgUrl}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition cursor-pointer"
+                >
+                  {copiedImageSuccess ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-400">Reçu Copié !</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Copier l'Image</span>
+                    </>
+                  )}
+                </button>
+
+                {/* ⬇️ Télécharger l'Image */}
+                <button
+                  type="button"
+                  onClick={handleDownloadReceiptImage}
+                  disabled={!receiptImgUrl}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800/80 py-2.5 text-[11px] font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Enregistrer l'Image</span>
+                </button>
+              </div>
+
+              {/* 💬 Fallback : WhatsApp Texte classique */}
+              {completedSale.driverPhone && (
                 <a
                   href={generateWhatsAppReceiptUrl({
                     dialCode: '',
@@ -297,22 +554,22 @@ export const SaleFormModal: React.FC<Props> = ({
                   })}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 w-full rounded-xl bg-emerald-700 py-3 text-xs font-bold text-white hover:bg-emerald-600 shadow-lg shadow-emerald-950 transition"
+                  className="flex items-center justify-center gap-1.5 w-full rounded-xl bg-slate-800/50 py-2 text-[11px] text-slate-400 hover:text-white transition border border-slate-800"
                 >
-                  <MessageSquare className="w-4 h-4" />
-                  <span>Partager Reçu WhatsApp Chauffeur</span>
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Envoyer aussi par message texte WhatsApp</span>
                 </a>
-              </div>
-            )}
+              )}
 
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={handleResetAndClose}
-                className="w-full rounded-xl bg-slate-800 py-3 text-xs font-bold text-slate-200 hover:bg-slate-700 transition"
-              >
-                Terminer / Vente suivante
-              </button>
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleResetAndClose}
+                  className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-bold text-slate-200 hover:bg-slate-700 transition cursor-pointer border border-slate-700/60"
+                >
+                  Suivant / Encaisser un autre camion
+                </button>
+              </div>
             </div>
           </div>
         ) : (
@@ -428,6 +685,23 @@ export const SaleFormModal: React.FC<Props> = ({
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Nom & Prénoms du Chauffeur */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Nom & Prénoms du Chauffeur
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 absolute left-3 top-3.5 text-slate-500" />
+                  <input
+                    type="text"
+                    value={driverNameInput}
+                    onChange={(e) => setDriverNameInput(e.target.value)}
+                    placeholder="ex: Kouassi Koffi Jean"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 pl-9 pr-3 text-sm text-white focus:border-emerald-500 focus:outline-hidden"
+                  />
+                </div>
               </div>
 
               {/* Téléphone du Chauffeur avec sélecteur d'indicatif CEDEAO */}

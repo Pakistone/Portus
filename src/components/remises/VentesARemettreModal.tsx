@@ -36,17 +36,6 @@ export const VentesARemettreModal: React.FC<Props> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [remiseModalAgentId, setRemiseModalAgentId] = useState<string | null>(null);
 
-  if (!isOpen) return null;
-
-  // Liste des agents éligibles selon le rôle de l'utilisateur
-  const eligibleAgents = users.filter((u) => {
-    if (u.role !== 'AGENT') return false;
-    if (currentUser?.role === 'RESPONSABLE') {
-      return !currentUser.sectorId || u.sectorId === currentUser.sectorId;
-    }
-    return true;
-  });
-
   // Ventes / tickets vendus non encore couverts par une remise
   const unremittedSales = useMemo(() => {
     // Retrouver tous les tickets vendus sans remise associée
@@ -102,6 +91,17 @@ export const VentesARemettreModal: React.FC<Props> = ({
       })
       .sort((a, b) => b.soldAt.localeCompare(a.soldAt));
   }, [tickets, sales, currentUser, selectedAgentFilter, selectedSectorFilter, searchTerm]);
+
+  if (!isOpen) return null;
+
+  // Liste des agents éligibles selon le rôle de l'utilisateur
+  const eligibleAgents = users.filter((u) => {
+    if (u.role !== 'AGENT') return false;
+    if (currentUser?.role === 'RESPONSABLE') {
+      return !currentUser.sectorId || u.sectorId === currentUser.sectorId;
+    }
+    return true;
+  });
 
   const totalTickets = unremittedSales.length;
   const totalExpectedAmount = totalTickets * TICKET_PRICE_FCFA;
