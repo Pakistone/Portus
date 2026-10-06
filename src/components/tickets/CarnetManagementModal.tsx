@@ -20,6 +20,7 @@ import {
   Clock,
   User,
   CloudUpload,
+  Lock,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -130,8 +131,12 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     });
   }, [auditLogs, selectedCarnet]);
 
-  // Handler d'impression PDF A4 Paysage (9 tickets/page)
+  // Handler d'impression PDF A4 Paysage (9 tickets/page) (Réservé à l'administrateur pour éviter toute falsification)
   const handlePrintPDF = async (c: Carnet) => {
+    if (currentUser?.role !== 'ADMINISTRATEUR') {
+      setActionError("Accès refusé : Seul l’administrateur général de l’UJPAS est autorisé à générer, visualiser ou imprimer des tickets d’entrée officiels.");
+      return;
+    }
     setActionLoading(true);
     setActionError(null);
     setDownloadUrl(null);
@@ -459,14 +464,24 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     <p className="text-[11px] text-slate-400">par {selectedCarnet.createdByName}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handlePrintPDF(selectedCarnet)}
-                      disabled={actionLoading}
-                      className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
-                    >
-                      <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                      <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (9/page)'}</span>
-                    </button>
+                    {currentUser?.role === 'ADMINISTRATEUR' ? (
+                      <button
+                        onClick={() => handlePrintPDF(selectedCarnet)}
+                        disabled={actionLoading}
+                        className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
+                      >
+                        <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                        <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (9/page)'}</span>
+                      </button>
+                    ) : (
+                      <span
+                        className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-500 cursor-not-allowed select-none"
+                        title="Seul l’administrateur est autorisé à imprimer"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Impression verrouillée</span>
+                      </span>
+                    )}
                     {selectedCarnet.status !== 'CANCELLED' && (
                       <button
                         onClick={() => setCancelModalCarnet(selectedCarnet)}
@@ -713,14 +728,23 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                 </button>
 
                                 {/* Imprimer le PDF 9/page A4 */}
-                                <button
-                                  onClick={() => handlePrintPDF(c)}
-                                  disabled={actionLoading}
-                                  className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
-                                  title="Imprimer le carnet en PDF (9 tickets par page A4 paysage)"
-                                >
-                                  <Printer className="w-3.5 h-3.5" />
-                                </button>
+                                {currentUser?.role === 'ADMINISTRATEUR' ? (
+                                  <button
+                                    onClick={() => handlePrintPDF(c)}
+                                    disabled={actionLoading}
+                                    className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
+                                    title="Imprimer le carnet en PDF (9 tickets par page A4 paysage)"
+                                  >
+                                    <Printer className="w-3.5 h-3.5" />
+                                  </button>
+                                ) : (
+                                  <span
+                                    className="p-1.5 rounded-lg bg-slate-800/40 border border-slate-800 text-slate-600 cursor-not-allowed select-none"
+                                    title="Impression réservée à l'administrateur général"
+                                  >
+                                    <Lock className="w-3.5 h-3.5" />
+                                  </span>
+                                )}
 
                                 {/* Attribuer au responsable si non encore attribué */}
                                 {!c.assignedToResponsableId && c.status !== 'CANCELLED' && (

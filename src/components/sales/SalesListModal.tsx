@@ -171,6 +171,7 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                 <th className="py-2.5 px-3">Date Vente (Originale)</th>
                 <th className="py-2.5 px-3">Téléphone</th>
                 <th className="py-2.5 px-3">GPS</th>
+                <th className="py-2.5 px-3">Mode</th>
                 <th className="py-2.5 px-3">Statut Synchro</th>
                 <th className="py-2.5 px-3 text-right">Montant</th>
                 <th className="py-2.5 px-3 text-right">Actions</th>
@@ -179,7 +180,7 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {visibleSales.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-500">
+                  <td colSpan={10} className="py-12 text-center text-slate-500">
                     Aucune vente enregistrée.
                   </td>
                 </tr>
@@ -209,6 +210,32 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                         </span>
                       ) : (
                         <span className="text-[10px] text-slate-600">Non capturé</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 font-sans whitespace-nowrap">
+                      {s.paymentMethod === 'MOBILE_MONEY' ? (
+                        (() => {
+                          const refStr = s.paymentReference || '';
+                          const dashIdx = refStr.indexOf('-');
+                          const provider = dashIdx !== -1 ? refStr.slice(0, dashIdx) : 'MOMO';
+                          const ref = dashIdx !== -1 ? refStr.slice(dashIdx + 1) : refStr;
+                          
+                          let bg = 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+                          if (provider === 'WAVE') bg = 'bg-sky-500/10 text-sky-400 border-sky-500/20';
+                          else if (provider === 'ORANGE') bg = 'bg-orange-500/10 text-orange-400 border-orange-500/20';
+                          else if (provider === 'MTN') bg = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+                          
+                          return (
+                            <span className={`inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold ${bg}`}>
+                              <span className="font-black text-[9px] uppercase tracking-wider">{provider}</span>
+                              {ref && <span className="font-mono text-[9px] text-slate-400">{ref}</span>}
+                            </span>
+                          );
+                        })()
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                          💵 Espèces
+                        </span>
                       )}
                     </td>
                     <td className="py-2.5 px-3 font-sans whitespace-nowrap">

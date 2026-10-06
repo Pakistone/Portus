@@ -36,8 +36,6 @@ export const TruckRegistryModal: React.FC<TruckRegistryModalProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | string>('ALL');
   const [selectedPlate, setSelectedPlate] = useState<string | null>(null);
 
-  if (!isOpen) return null;
-
   // Extraction unique des véhicules avec catégories et statistiques
   const registryMap = useMemo(() => {
     const map = new Map<
@@ -113,6 +111,8 @@ export const TruckRegistryModal: React.FC<TruckRegistryModalProps> = ({
     if (!selectedPlate) return null;
     return registryMap.find((item) => item.plateNumber === selectedPlate) || null;
   }, [registryMap, selectedPlate]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">

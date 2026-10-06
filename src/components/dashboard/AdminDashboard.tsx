@@ -23,6 +23,9 @@ import {
   Settings,
   CloudUpload,
   ShoppingCart,
+  BarChart3,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -65,6 +68,7 @@ import { VentesARemettreModal } from '../remises/VentesARemettreModal';
 import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
 import { ExpensesModule } from '../expenses/ExpensesModule';
 import { AdminSettingsModal } from '../admin/AdminSettingsModal';
+import { AdminAnalyticsView } from './AdminAnalyticsView';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -73,6 +77,7 @@ export const AdminDashboard: React.FC = () => {
     tickets,
     sales,
     remises,
+    expenses,
     controls,
     fraudReports,
     auditLogs,
@@ -82,12 +87,18 @@ export const AdminDashboard: React.FC = () => {
     syncAllToSupabase,
   } = useData();
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'analytics' | 'expenses'>('dashboard');
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   // Filtre de période
   const [period, setPeriod] = useState<PeriodFilterState>({ type: 'month' });
+
+  // Agent Table Search, Filter and Sort States
+  const [agentSearchQuery, setAgentSearchQuery] = useState('');
+  const [agentSectorFilter, setAgentSectorFilter] = useState('ALL');
+  const [agentSortField, setAgentSortField] = useState<'name' | 'sold' | 'expected' | 'remitted' | 'remaining'>('sold');
+  const [agentSortDirection, setAgentSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Modals state
   const [carnetModalOpen, setCarnetModalOpen] = useState(false);
@@ -193,6 +204,73 @@ export const AdminDashboard: React.FC = () => {
     return users.filter((u) => u.role === 'RESPONSABLE' && u.isActive);
   }, [users]);
 
+  // Calcul, Filtrage et Tri Dynamique des Agents pour la Table de Décomposition
+  const processedAgents = useMemo(() => {
+    const agentsWithStats = activeAgents.map((ag) => {
+      const agentSold = tickets.filter(
+        (t) => t.assignedAgentId === ag.id && (t.status === 'SOLD' || t.status === 'CONTROLLED')
+      ).length;
+      const expected = agentSold * TICKET_PRICE_FCFA;
+      const agentRemises = remises.filter((r) => r.agentId === ag.id);
+      const remitted = agentRemises.reduce((sum, r) => sum + r.amount, 0);
+      const remaining = Math.max(0, expected - remitted);
+      const alertItem = alerts.find((a) => a.agentId === ag.id);
+
+      return {
+        ...ag,
+        agentSold,
+        expected,
+        remitted,
+        remaining,
+        alertItem,
+      };
+    });
+
+    const filtered = agentsWithStats.filter((ag) => {
+      const matchesSearch = ag.fullName.toLowerCase().includes(agentSearchQuery.toLowerCase());
+      const matchesSector =
+        agentSectorFilter === 'ALL' ||
+        ag.sectorId === agentSectorFilter ||
+        ag.sectorName === agentSectorFilter;
+      return matchesSearch && matchesSector;
+    });
+
+    return [...filtered].sort((a, b) => {
+      let valA: any = 0;
+      let valB: any = 0;
+
+      if (agentSortField === 'name') {
+        valA = a.fullName.toLowerCase();
+        valB = b.fullName.toLowerCase();
+      } else if (agentSortField === 'sold') {
+        valA = a.agentSold;
+        valB = b.agentSold;
+      } else if (agentSortField === 'expected') {
+        valA = a.expected;
+        valB = b.expected;
+      } else if (agentSortField === 'remitted') {
+        valA = a.remitted;
+        valB = b.remitted;
+      } else if (agentSortField === 'remaining') {
+        valA = a.remaining;
+        valB = b.remaining;
+      }
+
+      if (valA < valB) return agentSortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return agentSortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [
+    activeAgents,
+    tickets,
+    remises,
+    alerts,
+    agentSearchQuery,
+    agentSectorFilter,
+    agentSortField,
+    agentSortDirection,
+  ]);
+
   const totalFrauds = fraudReports.length;
   const pendingFraudsCount = fraudReports.filter(
     (f) => f.status === 'NOUVEAU' || f.status === 'EN_COURS'
@@ -283,6 +361,24 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
+  const toggleSort = (field: 'name' | 'sold' | 'expected' | 'remitted' | 'remaining') => {
+    if (agentSortField === field) {
+      setAgentSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setAgentSortField(field);
+      setAgentSortDirection('desc');
+    }
+  };
+
+  const renderSortIndicator = (field: 'name' | 'sold' | 'expected' | 'remitted' | 'remaining') => {
+    if (agentSortField !== field) return null;
+    return agentSortDirection === 'asc' ? (
+      <ChevronUp className="w-3.5 h-3.5 ml-1 inline-block text-purple-400" />
+    ) : (
+      <ChevronDown className="w-3.5 h-3.5 ml-1 inline-block text-purple-400" />
+    );
+  };
+
   const handleOpenRemiseForAgent = (agentId: string) => {
     setSelectedAgentForRemise(agentId);
     setNewRemiseModalOpen(true);
@@ -295,8 +391,8 @@ export const AdminDashboard: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 space-y-5">
-      {/* Navigation Onglets (Tableau de bord / Dépenses) */}
-      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+      {/* Navigation Onglets (Tableau de bord / Analyses / Dépenses) */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
         <button
           onClick={() => setActiveTab('dashboard')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
@@ -307,6 +403,17 @@ export const AdminDashboard: React.FC = () => {
         >
           <Layers className="w-4 h-4" />
           <span>Tableau de Bord UJPAA</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('analytics')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+            activeTab === 'analytics'
+              ? 'bg-linear-to-r from-purple-600 to-indigo-700 text-white shadow-md shadow-purple-950/40 border border-purple-400/30'
+              : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          <span>📊 Analyses &amp; Performance</span>
         </button>
         <button
           onClick={() => setActiveTab('expenses')}
@@ -323,6 +430,8 @@ export const AdminDashboard: React.FC = () => {
 
       {activeTab === 'expenses' ? (
         <ExpensesModule />
+      ) : activeTab === 'analytics' ? (
+        <AdminAnalyticsView period={period} />
       ) : (
         <div className="space-y-5">
       {/* ========================================================================= */}
@@ -750,6 +859,126 @@ export const AdminDashboard: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
+      {/* SUIVI DE LA TRÉSORERIE ET DES ENCAISSEMENTS MOBILES                       */}
+      {/* ========================================================================= */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* 1. Encaissements Mobiles vs Espèces */}
+        <div className="lg:col-span-2 rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div>
+              <h3 className="text-sm font-black text-white">Analyse des Modes d'Encaissement</h3>
+              <p className="text-[11px] text-slate-400">Répartition des recettes entre espèces physiques et paiements Mobile Money.</p>
+            </div>
+            <span className="text-[10px] font-bold text-slate-500 uppercase font-mono bg-slate-950 px-2.5 py-1 rounded-md">Période Active</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+            {/* Jauge globale de répartition */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-emerald-400 font-bold flex items-center gap-1">💵 Espèces (Cash)</span>
+                <span className="font-mono font-bold text-white">
+                  {formatFCFA(periodSalesAmount - (filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA))}
+                  {' '}({periodSalesAmount > 0 ? (((periodSalesAmount - (filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA)) / periodSalesAmount) * 100).toFixed(0) : 0}%)
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-blue-400 font-bold flex items-center gap-1">📱 Mobile Money (MoMo)</span>
+                <span className="font-mono font-bold text-white">
+                  {formatFCFA(filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA)}
+                  {' '}({periodSalesAmount > 0 ? (((filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA) / periodSalesAmount) * 100).toFixed(0) : 0}%)
+                </span>
+              </div>
+
+              {/* Barre de répartition visuelle */}
+              <div className="w-full h-3 rounded-full bg-slate-950 overflow-hidden flex border border-slate-800">
+                <div 
+                  className="bg-emerald-500 h-full transition-all"
+                  style={{ width: `${periodSalesAmount > 0 ? (((periodSalesAmount - (filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA)) / periodSalesAmount) * 100) : 50}%` }}
+                />
+                <div 
+                  className="bg-blue-500 h-full transition-all"
+                  style={{ width: `${periodSalesAmount > 0 ? (((filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA) / periodSalesAmount) * 100) : 50}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Détails par opérateur Mobile Money */}
+            <div className="rounded-xl bg-slate-950 p-3 space-y-2 border border-slate-850">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Détails Opérateurs MoMo</span>
+              
+              {/* Wave */}
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-sky-400 font-bold">Wave</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {formatFCFA(filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY' && s.paymentReference?.startsWith('WAVE-')).length * TICKET_PRICE_FCFA)}
+                </span>
+              </div>
+              
+              {/* Orange */}
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-orange-400 font-bold">Orange Money</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {formatFCFA(filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY' && s.paymentReference?.startsWith('ORANGE-')).length * TICKET_PRICE_FCFA)}
+                </span>
+              </div>
+
+              {/* MTN */}
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-yellow-400 font-bold">MTN MoMo</span>
+                <span className="font-mono font-bold text-slate-200">
+                  {formatFCFA(filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY' && s.paymentReference?.startsWith('MTN-')).length * TICKET_PRICE_FCFA)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Trésorerie Nette Consolidée */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-xs space-y-3 flex flex-col justify-between">
+          <div className="space-y-1">
+            <h3 className="text-sm font-black text-white">Trésorerie Consolidée du Corridor</h3>
+            <p className="text-[11px] text-slate-400">Bilan des encaissements sécurisés et des dépenses opérationnelles sur la période.</p>
+          </div>
+
+          <div className="space-y-2.5 my-3">
+            {/* Espèces reçues en caisse (remises validées) */}
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400">Espèces Reçues (Remises)</span>
+              <span className="font-mono font-bold text-emerald-400">+{formatFCFA(periodRemittedAmount)}</span>
+            </div>
+
+            {/* MoMo direct en banque */}
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400">MoMo Encaissés (Banque)</span>
+              <span className="font-mono font-bold text-blue-400">+{formatFCFA(filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA)}</span>
+            </div>
+
+            {/* Dépenses approuvées */}
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-slate-400">Dépenses Approuvées</span>
+              <span className="font-mono font-bold text-rose-400">-{formatFCFA(expenses?.filter(e => (e.status === 'VALIDATED' || e.status === 'VALIDEE') && filterItemByPeriod(e.expenseDate, period)).reduce((sum, e) => sum + e.amount, 0) || 0)}</span>
+            </div>
+
+            <div className="border-t border-slate-800 pt-2.5 flex justify-between items-center text-xs font-black">
+              <span className="text-white">Solde Net Trésorerie</span>
+              <span className="font-mono text-sm text-emerald-300">
+                {formatFCFA(
+                  periodRemittedAmount + 
+                  (filteredSales.filter(s => s.paymentMethod === 'MOBILE_MONEY').length * TICKET_PRICE_FCFA) - 
+                  (expenses?.filter(e => (e.status === 'VALIDATED' || e.status === 'VALIDEE') && filterItemByPeriod(e.expenseDate, period)).reduce((sum, e) => sum + e.amount, 0) || 0)
+                )}
+              </span>
+            </div>
+          </div>
+
+          <div className="text-[10px] text-slate-500 italic bg-slate-950 p-2 rounded-xl text-center border border-slate-850">
+            Trésorerie calculée en temps réel d'après les flux financiers validés
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
       {/* GRAPHIQUES ET STATISTIQUES REQUIS                                         */}
       {/* ========================================================================= */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -786,11 +1015,11 @@ export const AdminDashboard: React.FC = () => {
       {/* ========================================================================= */}
       {/* DÉCOMPOSITION FINANCIÈRE PAR AGENT AVEC ACTIONS RAPIDES                   */}
       {/* ========================================================================= */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 shadow-sm space-y-3">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 shadow-sm space-y-3 animate-fadeIn">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
           <div>
             <h3 className="text-sm font-bold text-white">
-              Décomposition Individuelle par Agent ({activeAgents.length})
+              Décomposition Individuelle par Agent ({processedAgents.length})
             </h3>
             <p className="text-xs text-slate-400">
               Montant attendu strict (5 000 FCFA × ventes), montant remis et régularisation.
@@ -818,37 +1047,113 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
 
+        {/* Barre de Recherche et de Filtrage Ergonomique (frontend-design guidelines compliant) */}
+        <div className="flex flex-col sm:flex-row gap-3 items-center bg-slate-950 p-3 rounded-xl border border-slate-850 text-xs">
+          {/* Recherche de l'agent */}
+          <div className="relative w-full sm:w-72 shrink-0">
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Rechercher un agent..."
+              value={agentSearchQuery}
+              onChange={(e) => setAgentSearchQuery(e.target.value)}
+              className="w-full rounded-lg bg-slate-900 border border-slate-800 pl-9 pr-3 py-2 text-white text-xs placeholder:text-slate-500 focus:outline-hidden focus:border-purple-500 transition"
+            />
+          </div>
+
+          {/* Filtrage par secteur */}
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Secteur :</span>
+            <select
+              value={agentSectorFilter}
+              onChange={(e) => setAgentSectorFilter(e.target.value)}
+              className="rounded-lg bg-slate-900 border border-slate-800 text-white text-xs px-2.5 py-2 focus:outline-hidden focus:border-purple-500 transition cursor-pointer"
+            >
+              <option value="ALL">Tous les secteurs ({sectors.length})</option>
+              {sectors.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Bouton de réinitialisation si filtré */}
+          {(agentSearchQuery || agentSectorFilter !== 'ALL') && (
+            <button
+              onClick={() => {
+                setAgentSearchQuery('');
+                setAgentSectorFilter('ALL');
+              }}
+              className="text-xs font-semibold text-slate-400 hover:text-white transition py-1 px-2.5 hover:bg-slate-900 rounded-md shrink-0 cursor-pointer"
+            >
+              Réinitialiser les filtres
+            </button>
+          )}
+        </div>
+
         <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950">
           <table className="w-full text-left text-xs text-slate-300">
-            <thead className="border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400 bg-slate-900/70">
+            <thead className="border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400 bg-slate-900/70 select-none">
               <tr>
-                <th className="py-2.5 px-3">Agent</th>
-                <th className="py-2.5 px-3">Secteur</th>
-                <th className="py-2.5 px-3 text-center">Tickets Vendus</th>
-                <th className="py-2.5 px-3 text-right">Montant Attendu</th>
-                <th className="py-2.5 px-3 text-right">Montant Remis</th>
-                <th className="py-2.5 px-3 text-right">Solde Restant</th>
-                <th className="py-2.5 px-3 text-center">Statut</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
+                <th 
+                  onClick={() => toggleSort('name')}
+                  className="py-2.5 px-3 cursor-pointer hover:text-white transition whitespace-nowrap"
+                >
+                  <span className="flex items-center">
+                    Agent {renderSortIndicator('name')}
+                  </span>
+                </th>
+                <th className="py-2.5 px-3 whitespace-nowrap">Secteur</th>
+                <th 
+                  onClick={() => toggleSort('sold')}
+                  className="py-2.5 px-3 text-center cursor-pointer hover:text-white transition whitespace-nowrap"
+                >
+                  <span className="flex items-center justify-center">
+                    Tickets Vendus {renderSortIndicator('sold')}
+                  </span>
+                </th>
+                <th 
+                  onClick={() => toggleSort('expected')}
+                  className="py-2.5 px-3 text-right cursor-pointer hover:text-white transition whitespace-nowrap"
+                >
+                  <span className="flex items-center justify-end">
+                    Montant Attendu {renderSortIndicator('expected')}
+                  </span>
+                </th>
+                <th 
+                  onClick={() => toggleSort('remitted')}
+                  className="py-2.5 px-3 text-right cursor-pointer hover:text-white transition whitespace-nowrap"
+                >
+                  <span className="flex items-center justify-end">
+                    Montant Remis {renderSortIndicator('remitted')}
+                  </span>
+                </th>
+                <th 
+                  onClick={() => toggleSort('remaining')}
+                  className="py-2.5 px-3 text-right cursor-pointer hover:text-white transition whitespace-nowrap"
+                >
+                  <span className="flex items-center justify-end">
+                    Solde Restant {renderSortIndicator('remaining')}
+                  </span>
+                </th>
+                <th className="py-2.5 px-3 text-center whitespace-nowrap">Statut</th>
+                <th className="py-2.5 px-3 text-right whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
-              {activeAgents.length === 0 ? (
+              {processedAgents.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-500 font-sans">
-                    Aucun agent actif répertorié.
+                    {activeAgents.length === 0 ? "Aucun agent actif répertorié." : "Aucun agent ne correspond aux critères de filtrage."}
                   </td>
                 </tr>
               ) : (
-                activeAgents.map((ag) => {
-                  const agentSold = tickets.filter(
-                    (t) => t.assignedAgentId === ag.id && (t.status === 'SOLD' || t.status === 'CONTROLLED')
-                  ).length;
-                  const expected = agentSold * TICKET_PRICE_FCFA;
-                  const agentRemises = remises.filter((r) => r.agentId === ag.id);
-                  const remitted = agentRemises.reduce((sum, r) => sum + r.amount, 0);
-                  const remaining = Math.max(0, expected - remitted);
-                  const alertItem = alerts.find((a) => a.agentId === ag.id);
+                processedAgents.map((ag) => {
+                  const expected = ag.expected;
+                  const remitted = ag.remitted;
+                  const remaining = ag.remaining;
+                  const alertItem = ag.alertItem;
 
                   return (
                     <tr key={ag.id} className="hover:bg-slate-900/40 transition">
@@ -859,7 +1164,7 @@ export const AdminDashboard: React.FC = () => {
                         {ag.sectorName || '—'}
                       </td>
                       <td className="py-2.5 px-3 text-center text-emerald-400 font-bold whitespace-nowrap">
-                        {agentSold}
+                        {ag.agentSold}
                       </td>
                       <td className="py-2.5 px-3 text-right text-slate-200 whitespace-nowrap">
                         {formatFCFA(expected)}

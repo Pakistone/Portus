@@ -55,12 +55,30 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenTimeline,
 }) => {
   const { currentUser, logout } = useAuth();
-  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase, isRlsPermissionIssue, lastRlsError } = useData();
+  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase, isRlsPermissionIssue, lastRlsError, triggerSOSAlert } = useData();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
+
+  // States pour SOS d'Urgence
+  const [sosConfirmOpen, setSosConfirmOpen] = useState(false);
+  const [sosSending, setSosSending] = useState(false);
+  const [sosMessage, setSosMessage] = useState('Urgence terrain / agression ou menace sur l\'agent');
+
+  const handleTriggerSOS = async () => {
+    setSosSending(true);
+    try {
+      await triggerSOSAlert(sosMessage);
+      setSosConfirmOpen(false);
+      alert("⚠️ Alerte SOS envoyée avec succès ! Les coordinateurs et superviseurs ont été notifiés de votre position GPS et de l'état de détresse.");
+    } catch (err: any) {
+      alert("Échec de l'envoi de l'alerte SOS : " + (err.message || 'Erreur inconnue'));
+    } finally {
+      setSosSending(false);
+    }
+  };
 
   const handleNotificationClick = (n: any) => {
     if (!n.isRead) {
@@ -254,8 +272,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Modèle de Ticket & Cachet Officiel UJPAS */}
-          {onOpenStamp && (
+          {/* Bouton Modèle de Ticket & Cachet Officiel UJPAS (Seul l'administrateur peut voir le spécimen) */}
+          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
             <button
               onClick={onOpenStamp}
               className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
@@ -321,6 +339,16 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </div>
 
+          {/* Bouton SOS d'urgence d'Abidjan */}
+          <button
+            onClick={() => setSosConfirmOpen(true)}
+            className="flex h-8 px-2.5 items-center justify-center gap-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-black animate-pulse shadow-md shadow-rose-600/30 active:scale-95 transition cursor-pointer"
+            title="DÉCLENCHER UNE ALERTE SOS TERRAIN EN DIRECT"
+          >
+            <ShieldAlert className="w-4 h-4 text-white" />
+            <span className="hidden xl:inline">SOS</span>
+          </button>
+
           {/* Utilisateur connecté & Logout */}
           {currentUser && (
             <div className="flex items-center gap-2 border-l border-slate-700 pl-3">
@@ -365,6 +393,15 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Bouton Mobile Hamburger */}
         <div className="flex items-center gap-2 lg:hidden">
+          {/* Bouton SOS Mobile de détresse */}
+          <button
+            onClick={() => setSosConfirmOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-600 text-white animate-pulse shadow-md shadow-rose-600/20 active:scale-95 transition"
+            title="DÉCLENCHER UNE ALERTE SOS"
+          >
+            <ShieldAlert className="w-4 h-4" />
+          </button>
+
           <button
             onClick={() => setNotifModalOpen(true)}
             className="relative flex h-9 w-9 items-center justify-center rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700"
@@ -606,8 +643,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Modèle & Cachet UJPAS en Mobile */}
-          {onOpenStamp && (
+          {/* Bouton Modèle & Cachet UJPAS en Mobile (Seul l'administrateur peut voir le spécimen) */}
+          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
             <button
               onClick={() => {
                 onOpenStamp();
@@ -683,6 +720,70 @@ export const Header: React.FC<HeaderProps> = ({
         isOpen={changePasswordOpen}
         onClose={() => setChangePasswordOpen(false)}
       />
+
+      {/* Modale de confirmation SOS d'Urgence Extrême */}
+      {sosConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4 backdrop-blur-md animate-fadeIn">
+          <div className="w-full max-w-sm rounded-2xl border-2 border-rose-500 bg-slate-900 p-6 shadow-2xl text-slate-100 space-y-4">
+            <div className="text-center space-y-2">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/20 text-rose-500 border border-rose-500/40 animate-bounce">
+                <ShieldAlert className="w-8 h-8" />
+              </div>
+              <h3 className="text-base font-black text-white uppercase tracking-wider">
+                ⚠️ DÉCLENCHER UNE ALERTE SOS ?
+              </h3>
+              <p className="text-xs text-rose-300 font-medium leading-relaxed">
+                Cette action transmettra immédiatement un signal de détresse avec votre identité, rôle et coordonnées GPS précises à tous les superviseurs et administrateurs.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                Motif de l'urgence (Optionnel)
+              </label>
+              <select
+                value={sosMessage}
+                onChange={(e) => setSosMessage(e.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-850 py-2 px-2.5 text-xs text-white focus:border-rose-500 focus:outline-hidden"
+              >
+                <option value="Urgence terrain / agression ou menace sur l'agent">⚠️ Menace physique / Agression</option>
+                <option value="Accident routier grave sur le corridor">🚗 Accident routier grave</option>
+                <option value="Contestation virulente / altercation chauffeur bloquant">Altercation / Chauffeur récalcitrant</option>
+                <option value="Panne d'équipement ou problème réseau critique">Disponibilité terrain bloquée</option>
+              </select>
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-855">
+              <button
+                type="button"
+                onClick={() => setSosConfirmOpen(false)}
+                disabled={sosSending}
+                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-bold text-slate-300 hover:bg-slate-700 transition"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleTriggerSOS}
+                disabled={sosSending}
+                className="flex-1 rounded-xl bg-rose-600 hover:bg-rose-500 py-2.5 text-xs font-black text-white shadow-lg shadow-rose-950 transition active:scale-98 flex items-center justify-center gap-1.5"
+              >
+                {sosSending ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Envoi...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert className="w-3.5 h-3.5 animate-pulse" />
+                    <span>LANCER SOS</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };

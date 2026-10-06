@@ -427,10 +427,10 @@ export async function generateCarnetPrintPDF(
 
     const cellW = 99.0;
     const cellH = 70.0;
-    const ticketW = 98.0; // Marges de coupe minimales de 0.5 mm
-    const ticketH = 68.0; // Marges de coupe minimales de 1.0 mm
-    const padX = (cellW - ticketW) / 2; // 0.5 mm
-    const padY = (cellH - ticketH) / 2; // 1.0 mm
+    const ticketW = 97.0; // Marge de coupe de 1.0 mm de chaque côté
+    const ticketH = 67.0; // Marge de coupe de 1.5 mm en haut/bas
+    const padX = (cellW - ticketW) / 2; // 1.0 mm
+    const padY = (cellH - ticketH) / 2; // 1.5 mm
 
     pageTickets.forEach((ticket, idx) => {
       const globalIdx = startIndex + idx;

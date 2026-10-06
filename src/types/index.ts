@@ -391,7 +391,8 @@ export type AuditAction =
   | 'DAILY_CLOSING_CONFIRMED'
   | 'DATABASE_EXPORTED'
   | 'DATABASE_RESET'
-  | 'CONFIG_UPDATE';
+  | 'CONFIG_UPDATE'
+  | 'SECURITY_ALERT';
 
 export interface AuditLog {
   id: string;

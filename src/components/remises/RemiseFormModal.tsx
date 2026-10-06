@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, HandCoins, AlertCircle, CheckCircle2, Printer } from 'lucide-react';
+import { X, HandCoins, AlertCircle, CheckCircle2, Printer, Calculator, RefreshCw } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
@@ -27,6 +27,34 @@ export const RemiseFormModal: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdRemise, setCreatedRemise] = useState<Remise | null>(null);
+
+  // States pour le calculateur de billets (Billetage assisté)
+  const [showCounter, setShowCounter] = useState(false);
+  const [b10000, setB10000] = useState<string>('');
+  const [b5000, setB5000] = useState<string>('');
+  const [b2000, setB2000] = useState<string>('');
+  const [b1000, setB1000] = useState<string>('');
+  const [b500, setB500] = useState<string>('');
+
+  const counterTotal = 
+    (Number(b10000 || 0) * 10000) +
+    (Number(b5000 || 0) * 5000) +
+    (Number(b2000 || 0) * 2000) +
+    (Number(b1000 || 0) * 1000) +
+    (Number(b500 || 0) * 500);
+
+  const applyCounterTotal = () => {
+    setAmount(String(counterTotal));
+    setShowCounter(false);
+  };
+
+  const resetCounter = () => {
+    setB10000('');
+    setB5000('');
+    setB2000('');
+    setB1000('');
+    setB500('');
+  };
 
   if (!isOpen) return null;
 
@@ -246,27 +274,180 @@ export const RemiseFormModal: React.FC<Props> = ({
             )}
 
             {/* Montant versé (remise partielle autorisée) */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-300">
                   Montant remis (FCFA) — <span className="text-emerald-400 font-normal">Remise partielle autorisée</span>
                 </label>
                 <span className="text-[11px] text-slate-400 font-mono">
-                  {Math.floor(Number(amount || 0) / TICKET_PRICE_FCFA)} ticket(s) plein(s) couvert(s)
+                  {Math.floor(Number(amount || 0) / TICKET_PRICE_FCFA)} ticket(s) couvert(s)
                 </span>
               </div>
-              <input
-                type="text"
-                inputMode="numeric"
-                required
-                value={amount}
-                onChange={(e) => {
-                  const cleaned = e.target.value.replace(/[^\d]/g, '').replace(/^0+/, '');
-                  setAmount(cleaned);
-                }}
-                placeholder="0"
-                className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-base font-bold font-mono text-white focus:border-blue-500 focus:outline-hidden"
-              />
+              
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    required
+                    value={amount}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d]/g, '').replace(/^0+/, '');
+                      setAmount(cleaned);
+                    }}
+                    placeholder="0"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-base font-bold font-mono text-white focus:border-blue-500 focus:outline-hidden"
+                  />
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => setShowCounter(!showCounter)}
+                  className={`px-3 py-2.5 rounded-xl border font-bold text-xs flex items-center gap-1.5 transition shrink-0 ${
+                    showCounter
+                      ? 'bg-blue-600 border-blue-500 text-white shadow-lg'
+                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-750'
+                  }`}
+                  title="Calculateur de coupures de billets (billetage)"
+                >
+                  <Calculator className="w-4 h-4" />
+                  <span>Coupures</span>
+                </button>
+              </div>
+
+              {/* Panneau Billetage / Calculateur de coupures */}
+              {showCounter && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-4 animate-fadeIn">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <span className="text-xs font-black text-blue-400 flex items-center gap-1.5">
+                      <Calculator className="w-3.5 h-3.5" />
+                      <span>ASSISTANT COMPTAGE / BILLETAGE</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={resetCounter}
+                      className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 font-bold"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Réinitialiser</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {/* Billet 10 000 FCFA */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 w-28 shrink-0">
+                        <div className="w-3 h-6 rounded bg-indigo-700 border border-indigo-500 shadow-sm" />
+                        <span className="font-mono font-bold text-indigo-300">10 000 FCFA</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={b10000}
+                        onChange={(e) => setB10000(e.target.value.replace(/[^\d]/g, ''))}
+                        className="w-16 rounded-lg border border-slate-700 bg-slate-900 p-1.5 text-center font-mono font-bold text-white text-xs"
+                      />
+                      <span className="w-20 text-right font-mono font-semibold text-slate-400">
+                        {b10000 ? formatFCFA(Number(b10000) * 10000) : '0 FCFA'}
+                      </span>
+                    </div>
+
+                    {/* Billet 5 000 FCFA */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 w-28 shrink-0">
+                        <div className="w-3 h-6 rounded bg-emerald-700 border border-emerald-500 shadow-sm" />
+                        <span className="font-mono font-bold text-emerald-300">5 000 FCFA</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={b5000}
+                        onChange={(e) => setB5000(e.target.value.replace(/[^\d]/g, ''))}
+                        className="w-16 rounded-lg border border-slate-700 bg-slate-900 p-1.5 text-center font-mono font-bold text-white text-xs"
+                      />
+                      <span className="w-20 text-right font-mono font-semibold text-slate-400">
+                        {b5000 ? formatFCFA(Number(b5000) * 5000) : '0 FCFA'}
+                      </span>
+                    </div>
+
+                    {/* Billet 2 000 FCFA */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 w-28 shrink-0">
+                        <div className="w-3 h-6 rounded bg-cyan-700 border border-cyan-500 shadow-sm" />
+                        <span className="font-mono font-bold text-cyan-300">2 000 FCFA</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={b2000}
+                        onChange={(e) => setB2000(e.target.value.replace(/[^\d]/g, ''))}
+                        className="w-16 rounded-lg border border-slate-700 bg-slate-900 p-1.5 text-center font-mono font-bold text-white text-xs"
+                      />
+                      <span className="w-20 text-right font-mono font-semibold text-slate-400">
+                        {b2000 ? formatFCFA(Number(b2000) * 2000) : '0 FCFA'}
+                      </span>
+                    </div>
+
+                    {/* Billet 1 000 FCFA */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 w-28 shrink-0">
+                        <div className="w-3 h-6 rounded bg-rose-700 border border-rose-500 shadow-sm" />
+                        <span className="font-mono font-bold text-rose-300">1 000 FCFA</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={b1000}
+                        onChange={(e) => setB1000(e.target.value.replace(/[^\d]/g, ''))}
+                        className="w-16 rounded-lg border border-slate-700 bg-slate-900 p-1.5 text-center font-mono font-bold text-white text-xs"
+                      />
+                      <span className="w-20 text-right font-mono font-semibold text-slate-400">
+                        {b1000 ? formatFCFA(Number(b1000) * 1000) : '0 FCFA'}
+                      </span>
+                    </div>
+
+                    {/* Billet/Pièce 500 FCFA */}
+                    <div className="flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 w-28 shrink-0">
+                        <div className="w-3 h-6 rounded bg-amber-700 border border-amber-500 shadow-sm" />
+                        <span className="font-mono font-bold text-amber-300">500 FCFA</span>
+                      </div>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={b500}
+                        onChange={(e) => setB500(e.target.value.replace(/[^\d]/g, ''))}
+                        className="w-16 rounded-lg border border-slate-700 bg-slate-900 p-1.5 text-center font-mono font-bold text-white text-xs"
+                      />
+                      <span className="w-20 text-right font-mono font-semibold text-slate-400">
+                        {b500 ? formatFCFA(Number(b500) * 500) : '0 FCFA'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between border-t border-slate-800 pt-3">
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-black">Somme calculée</p>
+                      <p className="text-sm font-black text-emerald-400 font-mono">
+                        {formatFCFA(counterTotal)}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={applyCounterTotal}
+                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md transition"
+                    >
+                      Appliquer le montant
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Note ou observation */}

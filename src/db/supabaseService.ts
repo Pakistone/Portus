@@ -1061,6 +1061,8 @@ export const SupabaseDataLayer = {
       gps_accuracy: sale.gpsAccuracy,
       gps_status: sale.gpsStatus,
       price: sale.price || 5000,
+      payment_method: sale.paymentMethod || 'ESPECES',
+      payment_reference: sale.paymentReference || null,
     });
 
     if (error) {

@@ -216,6 +216,8 @@ interface DataContextType {
     driverPhone?: string;
     driverName?: string;
     overrideOldTicketId?: string;
+    paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+    paymentReference?: string;
   }) => Promise<Sale>;
   getAgentStats: (agentId: string) => {
     assignedCount: number;
@@ -265,6 +267,7 @@ interface DataContextType {
 
   // Rechargement manuel des données
   refreshData: () => Promise<void>;
+  triggerSOSAlert: (message?: string) => Promise<FraudReport>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -1089,6 +1092,59 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
     },
     [currentUser]
+  );
+
+  const triggerSOSAlert = useCallback(
+    async (message = 'Incident bloquant ou agression sur le terrain') => {
+      const now = new Date();
+      const gps = await getCurrentCoordinates();
+      
+      const sosReport: FraudReport = {
+        id: `sos-${Date.now()}`,
+        ticketNumber: 'SOS-URGENT',
+        plateNumber: 'SOS_ALERT',
+        controleurId: currentUser?.id || 'system',
+        controleurName: currentUser?.fullName || 'Agent PORTUS',
+        type: 'AUTRE',
+        typeLabel: '🚨 ALERTE SOS - AGENT EN DANGER',
+        comment: `${message}. Position GPS : ${gps.latitude ? `${gps.latitude.toFixed(5)}, ${gps.longitude?.toFixed(5)} (Précision: ${gps.accuracy || 0}m)` : 'Non disponible'}.`,
+        photos: [],
+        reportedAt: now.toISOString(),
+        reportedDate: now.toISOString().slice(0, 10),
+        reportedTime: now.toLocaleTimeString('fr-FR', { hour12: false }),
+        gpsLatitude: gps.latitude || 5.2647,
+        gpsLongitude: gps.longitude || -4.0089,
+        status: 'NOUVEAU',
+        syncStatus: 'SYNCED',
+        syncedAt: now.toISOString(),
+      };
+
+      // Déclencher localement
+      playIncidentAlertSound();
+      setLatestRealtimeIncident(sosReport);
+      window.dispatchEvent(new CustomEvent('portus-road-safety-alert', { detail: sosReport }));
+
+      // Enregistrer localement
+      const db = await getDB();
+      await db.put('fraud_reports', sosReport);
+
+      // Diffuser sur Supabase
+      if (SupabaseDataLayer.isAvailable()) {
+        await SupabaseDataLayer.broadcastIncident(sosReport).catch(() => {});
+        await SupabaseDataLayer.insertFraudReport(sosReport).catch(() => {});
+      }
+
+      await recordAudit(
+        'SECURITY_ALERT',
+        'System',
+        sosReport.id,
+        `Déclenchement d'une alerte SOS par l'utilisateur ${currentUser?.fullName} (${currentUser?.role}) : ${message}`
+      );
+
+      await refreshData();
+      return sosReport;
+    },
+    [currentUser, refreshData]
   );
 
   // Helper pour journaliser l'audit
@@ -3007,6 +3063,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     driverPhone?: string;
     driverName?: string;
     overrideOldTicketId?: string;
+    paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+    paymentReference?: string;
   }): Promise<Sale> => {
     const db = await getDB();
     const ticket = await db.get('tickets', params.ticketId);
@@ -3099,6 +3157,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       syncStatus: isOnline ? 'SYNCED' : 'PENDING_SYNC',
       syncedAt: isOnline ? originalSoldAt : undefined,
       price: ticketPrice,
+      paymentMethod: params.paymentMethod || 'ESPECES',
+      paymentReference: params.paymentReference || undefined,
     };
 
     await db.put('sales', sale);
@@ -3857,6 +3917,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         syncAllToSupabase,
         isRlsPermissionIssue,
         lastRlsError,
+        triggerSOSAlert,
       }}
     >
       {children}
