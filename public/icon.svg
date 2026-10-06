@@ -36,5 +36,5 @@
 
   <!-- Brand text badge -->
   <text x="256" y="405" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="900" fill="#f8fafc" text-anchor="middle" letter-spacing="4">PORTUS</text>
-  <text x="256" y="430" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#10b981" text-anchor="middle" letter-spacing="2">U.J.S.R.V.</text>
+  <text x="256" y="430" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#10b981" text-anchor="middle" letter-spacing="2">UJPAA</text>
 </svg>

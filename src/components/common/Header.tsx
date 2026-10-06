@@ -114,6 +114,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md">
+      {/* Ruban officiel tricolore République de Côte d'Ivoire */}
+      <div className="h-1 w-full bg-linear-to-r from-orange-500 via-white to-emerald-600" />
+
       {isRlsPermissionIssue && currentUser?.role === 'ADMINISTRATEUR' && (
         <div className="bg-rose-950/95 border-b border-rose-500/50 px-4 py-2.5 text-xs text-rose-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-2.5">
@@ -138,16 +141,24 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="mx-auto flex max-w-7xl items-center justify-between px-3 py-2.5 sm:px-6">
         {/* Logo & Titre */}
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 shadow-md shadow-emerald-950/50">
-            <ShieldAlert className="h-6 w-6 text-white" />
+          <div className="relative h-11 w-11 shrink-0 rounded-full p-0.5 bg-slate-800 border-2 border-emerald-500/40 shadow-md shadow-emerald-950/50 flex items-center justify-center">
+            <img
+              src="/logo-ujpaa.png"
+              alt="Emblème UJPAA"
+              className="h-full w-full rounded-full object-contain"
+              referrerPolicy="no-referrer"
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-base font-black tracking-wider text-white">
                 {ORG_INFO.NAME}
               </span>
-              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-bold text-emerald-400">
+              <span className="rounded bg-linear-to-r from-orange-600 to-emerald-700 px-1.5 py-0.5 text-[10px] font-black text-white shadow-xs">
                 {ORG_INFO.SHORT_ORG_NAME}
+              </span>
+              <span className="hidden sm:inline-block rounded bg-orange-500/10 border border-orange-500/30 px-1.5 py-0.5 text-[10px] font-bold text-orange-400">
+                🇨🇮 Côte d’Ivoire
               </span>
             </div>
             <p className="hidden text-[11px] font-medium text-slate-400 sm:block">
@@ -243,15 +254,15 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Cachet Officiel U.J.S.R.V. - ADMINISTRATEUR UNIQUEMENT */}
-          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
+          {/* Bouton Modèle de Ticket & Cachet Officiel UJPAS */}
+          {onOpenStamp && (
             <button
               onClick={onOpenStamp}
               className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
-              title="Afficher & Télécharger le cachet officiel réel"
+              title="Afficher le nouveau modèle de ticket, le logo et le cachet officiel UJPAS"
             >
               <Stamp className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Cachet Officiel</span>
+              <span>Modèle & Cachet UJPAS</span>
             </button>
           )}
 
@@ -595,8 +606,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Bouton Cachet Officiel en Mobile - ADMINISTRATEUR UNIQUEMENT */}
-          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
+          {/* Bouton Modèle & Cachet UJPAS en Mobile */}
+          {onOpenStamp && (
             <button
               onClick={() => {
                 onOpenStamp();
@@ -605,7 +616,7 @@ export const Header: React.FC<HeaderProps> = ({
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 border border-emerald-500/40 p-2.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 transition cursor-pointer"
             >
               <Stamp className="w-4 h-4 text-emerald-400" />
-              <span>Cachet Officiel U.J.S.R.V.</span>
+              <span>Modèle de Ticket & Cachet UJPAS</span>
             </button>
           )}
 

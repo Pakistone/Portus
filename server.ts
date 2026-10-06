@@ -135,6 +135,8 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       // l'adresse e-mail officielle de l'administrateur conserve son accès root complet
       const isAdminEmail = 
         user.email === 'ypaki090@gmail.com' || 
+        user.email === 'admin@ujpaa.ci' ||
+        user.email === 'admin@portus.ujpaa.ci' ||
         user.email === 'admin@ujsrv.ci' || 
         user.email === 'admin@portus.ujsrv.ci' ||
         (user.user_metadata?.username && ['ypaki090', 'admin'].includes(user.user_metadata.username.toLowerCase()));
@@ -637,7 +639,7 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus.ujsrv.ci`;
+    const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus.ujpaa.ci`;
 
     const { data: existing } = await supabaseAdmin
       .from('profiles')

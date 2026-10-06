@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, User, AlertCircle, Clock, CheckCircle, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, Lock, User, AlertCircle, Clock, CheckCircle, Eye, EyeOff, MapPin } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ORG_INFO } from '../../config/constants';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
+import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 
 export const LoginView: React.FC = () => {
   const { login, loginError, sessionNotice, clearSessionNotice, lockoutRemainingSeconds, isLoading } = useAuth();
@@ -22,22 +23,48 @@ export const LoginView: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-4 sm:p-6">
-      <div className="w-full max-w-md space-y-6">
-        {/* En-tête Organisation */}
-        <div className="text-center space-y-2">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-emerald-600 to-emerald-400 shadow-xl shadow-emerald-950">
-            <ShieldCheck className="h-10 w-10 text-white" />
+    <div className="relative flex min-h-screen items-center justify-center bg-slate-950 p-4 sm:p-6 overflow-hidden">
+      {/* Fond décoratif officiel : Carte de Côte d'Ivoire en filigrane discret */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5">
+        <CoteDIvoireMap variant="watermark" className="w-[850px] h-[850px] max-w-none text-emerald-400" />
+      </div>
+
+      {/* Liseré supérieur tricolore Côte d'Ivoire (Orange - Blanc - Vert) */}
+      <div className="fixed top-0 left-0 right-0 h-1.5 bg-linear-to-r from-orange-500 via-white to-emerald-600 shadow-md shadow-orange-500/20 z-50" />
+
+      <div className="relative w-full max-w-md space-y-6 z-10">
+        {/* En-tête Organisation & Emblème UJPAA */}
+        <div className="text-center space-y-3">
+          <div className="relative mx-auto flex h-28 w-28 items-center justify-center rounded-3xl bg-slate-900/90 border-2 border-emerald-500/40 p-2 shadow-2xl shadow-emerald-950/80 group">
+            <div className="absolute -inset-1 rounded-3xl bg-linear-to-r from-orange-500/30 via-transparent to-emerald-500/30 blur-md opacity-75" />
+            <img
+              src={ORG_INFO.LOGO_PATH}
+              alt="Emblème Officiel UJPAS — Côte d'Ivoire"
+              className="relative h-full w-full object-contain filter drop-shadow-md"
+              referrerPolicy="no-referrer"
+            />
           </div>
-          <h1 className="text-2xl font-black tracking-wider text-white">
-            {ORG_INFO.NAME}
-          </h1>
-          <p className="text-xs font-semibold uppercase tracking-widest text-emerald-400">
-            {ORG_INFO.SHORT_ORG_NAME}
-          </p>
-          <p className="text-xs text-slate-400 max-w-xs mx-auto">
-            {ORG_INFO.FULL_ORG_NAME}
-          </p>
+
+          <div>
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-2xl font-black tracking-wider text-white">
+                {ORG_INFO.NAME}
+              </span>
+              <span className="rounded-md bg-linear-to-r from-orange-600 to-emerald-700 px-2 py-0.5 text-[11px] font-black tracking-widest text-white shadow-xs">
+                {ORG_INFO.SHORT_ORG_NAME}
+              </span>
+            </div>
+            <p className="text-[11px] font-bold uppercase tracking-wider text-orange-400 mt-1">
+              RÉPUBLIQUE DE CÔTE D'IVOIRE
+            </p>
+            <p className="text-xs text-slate-300 max-w-xs mx-auto font-medium mt-1 leading-snug">
+              {ORG_INFO.FULL_ORG_NAME}
+            </p>
+            <p className="text-[11px] text-emerald-400 font-semibold mt-1 flex items-center justify-center gap-1">
+              <MapPin className="w-3 h-3 text-orange-400" />
+              <span>{ORG_INFO.ZONE}</span>
+            </p>
+          </div>
         </div>
 
         {/* Notification d'expiration de session */}
@@ -161,9 +188,10 @@ export const LoginView: React.FC = () => {
               id="btn-login-submit"
               type="submit"
               disabled={Boolean(lockoutRemainingSeconds && lockoutRemainingSeconds > 0) || submitting || isLoading}
-              className="mt-2 w-full rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition disabled:opacity-50 cursor-pointer"
+              className="mt-3 w-full rounded-xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 py-3.5 text-sm font-black text-white shadow-xl shadow-orange-950/40 active:scale-98 transition disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2 border border-orange-400/30"
             >
-              {submitting ? 'Vérification...' : 'Se connecter'}
+              <ShieldCheck className="w-4 h-4 text-white" />
+              <span>{submitting ? 'Vérification en cours...' : 'Se connecter'}</span>
             </button>
           </form>
         </div>
@@ -174,29 +202,31 @@ export const LoginView: React.FC = () => {
             <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl space-y-4">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-emerald-400" />
+                  <Lock className="w-4 h-4 text-orange-400" />
                   <span>Réinitialisation du Mot de Passe</span>
                 </h3>
                 <button
                   onClick={() => setShowForgotModal(false)}
-                  className="text-slate-400 hover:text-white text-sm"
+                  className="text-slate-400 hover:text-white text-sm cursor-pointer"
                 >
                   ✕
                 </button>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Conformément aux protocoles de sécurité de l’<strong>Union des Jeunes de la Sécurité Routière de Vridi (U.J.S.R.V.)</strong>,
+                Conformément aux protocoles de sécurité de l’<strong>{ORG_INFO.FULL_ORG_NAME} ({ORG_INFO.SHORT_ORG_NAME})</strong>,
                 la réinitialisation d’un mot de passe ou le déblocage manuel d’un compte est strictement réservé à la direction administrative.
               </p>
               <div className="rounded-xl bg-slate-950/70 border border-slate-800 p-3 text-xs space-y-1 text-slate-400">
-                <p><span className="font-bold text-slate-300">Contact Administrateur :</span> Direction U.J.S.R.V.</p>
-                <p><span className="font-bold text-slate-300">Zone d’intervention :</span> Vridi — Port Autonome d'Abidjan</p>
+                <p><span className="font-bold text-slate-300">Direction :</span> {ORG_INFO.FULL_ORG_NAME} ({ORG_INFO.SHORT_ORG_NAME})</p>
+                <p><span className="font-bold text-slate-300">Zone d’intervention :</span> {ORG_INFO.ZONE}</p>
+                <p><span className="font-bold text-slate-300">Contacts officiels :</span> {ORG_INFO.CONTACT_TEL}</p>
+                <p><span className="font-bold text-slate-300">E-mail officiel :</span> {ORG_INFO.CONTACT_EMAIL}</p>
                 <p><span className="font-bold text-slate-300">Procédure :</span> Présentez votre badge professionnel à votre Responsable de secteur ou à l’Administrateur.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowForgotModal(false)}
-                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-bold text-white hover:bg-slate-700 transition"
+                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-bold text-white hover:bg-slate-700 transition cursor-pointer"
               >
                 J’ai compris
               </button>
@@ -207,9 +237,9 @@ export const LoginView: React.FC = () => {
         {/* Bouton PWA et Mention Sécurité */}
         <div className="flex flex-col items-center justify-center gap-3 text-center">
           <PWAInstallButton />
-          <p className="flex items-center gap-1.5 text-xs text-slate-500">
-            <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Application PWA disponible hors ligne • Sécurité U.J.S.R.V.</span>
+          <p className="flex items-center gap-1.5 text-xs text-slate-400">
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Application PWA disponible hors ligne • Sécurité UJPAA — Côte d'Ivoire</span>
           </p>
         </div>
       </div>

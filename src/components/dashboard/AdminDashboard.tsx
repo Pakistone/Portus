@@ -27,6 +27,7 @@ import {
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StatCard } from './StatCard';
+import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { exportFullAuditPackage } from '../../utils/excelExport';
@@ -298,20 +299,20 @@ export const AdminDashboard: React.FC = () => {
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
         <button
           onClick={() => setActiveTab('dashboard')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
             activeTab === 'dashboard'
-              ? 'bg-rose-600 text-white shadow-md shadow-rose-950'
+              ? 'bg-linear-to-r from-orange-600 to-emerald-700 text-white shadow-md shadow-orange-950/40 border border-orange-400/30'
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>Tableau de Bord</span>
+          <span>Tableau de Bord UJPAA</span>
         </button>
         <button
           onClick={() => setActiveTab('expenses')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
             activeTab === 'expenses'
-              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
+              ? 'bg-linear-to-r from-emerald-600 to-teal-700 text-white shadow-md shadow-emerald-950/40 border border-emerald-400/30'
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
           }`}
         >
@@ -327,30 +328,35 @@ export const AdminDashboard: React.FC = () => {
       {/* ========================================================================= */}
       {/* EN-TÊTE DU TABLEAU DE BORD ADMIN                                          */}
       {/* ========================================================================= */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 border-b border-slate-800 pb-3">
-        <div>
+      <div className="relative overflow-hidden rounded-2xl bg-slate-900/60 border border-slate-800 p-4 sm:p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        {/* Filigrane discret carte Côte d'Ivoire */}
+        <div className="absolute right-0 top-0 pointer-events-none opacity-5 overflow-hidden">
+          <CoteDIvoireMap variant="watermark" className="w-64 h-64 -mr-16 -mt-16 text-emerald-400" />
+        </div>
+
+        <div className="relative z-10">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] uppercase font-black tracking-wider text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded border border-rose-500/20">
-              Supervision Générale
+            <span className="text-[11px] uppercase font-black tracking-wider text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
+              Supervision Générale UJPAA 🇨🇮
             </span>
-            <span className="text-[11px] text-slate-400 hidden sm:inline">
-              Base de données active Supabase
+            <span className="text-[11px] text-emerald-400 font-bold hidden sm:inline">
+              Port Autonome d'Abidjan
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
-            Tableau de Bord Administrateur
+            Tableau de Bord Direction &amp; Administration
           </h2>
           <p className="text-xs text-slate-400">
-            Pilotage consolidé des carnets, des flux financiers, des effectifs et des contrôles.
+            Pilotage consolidé des carnets, des flux financiers, des effectifs et des contrôles sur le corridor.
           </p>
         </div>
 
         {/* Actions d'administration */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 md:pt-0">
+        <div className="relative z-10 flex flex-wrap items-center gap-2 pt-1 md:pt-0">
           {/* Bouton Enregistrer Vente Directe */}
           <button
             onClick={() => setSaleModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-950 hover:bg-emerald-500 transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-xl bg-linear-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-orange-950/40 transition cursor-pointer border border-orange-400/30"
             title="Enregistrer directement une vente de ticket poids lourd"
           >
             <ShoppingCart className="w-4 h-4" />
@@ -363,7 +369,7 @@ export const AdminDashboard: React.FC = () => {
               setSelectedAgentForRemise(undefined);
               setNewRemiseModalOpen(true);
             }}
-            className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-blue-950 hover:bg-blue-500 transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-xl bg-linear-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition cursor-pointer border border-emerald-400/30"
             title="Enregistrer un versement / remise de fonds (Agent ou Responsable)"
           >
             <HandCoins className="w-4 h-4" />
@@ -374,7 +380,7 @@ export const AdminDashboard: React.FC = () => {
             onClick={() => setCarnetManagementModalOpen(true)}
             className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition cursor-pointer"
           >
-            <Layers className="w-4 h-4 text-purple-400" />
+            <Layers className="w-4 h-4 text-orange-400" />
             <span>Carnets</span>
           </button>
           <button

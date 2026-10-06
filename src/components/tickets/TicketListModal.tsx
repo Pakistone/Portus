@@ -12,9 +12,10 @@ import {
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { exportTicketsToExcel } from '../../utils/excelExport';
-import { generateCarnetPrintPDF } from '../../utils/pdfGenerator';
+import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerator';
 import { formatDateTime, formatPlateDisplay } from '../../utils/normalization';
-import type { Ticket, TicketStatus } from '../../types';
+import { CarnetPrintModal } from './CarnetPrintModal';
+import type { Ticket, TicketStatus, Carnet } from '../../types';
 
 interface Props {
   isOpen: boolean;
@@ -41,6 +42,8 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
 
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [printModalData, setPrintModalData] = useState<{ carnet: Carnet; url: string; filename: string } | null>(null);
 
   if (!isOpen) return null;
 
@@ -116,8 +119,24 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
   const handlePrintCarnet = async (carnetId: string) => {
     const c = carnets.find((item) => item.id === carnetId);
     if (!c) return;
-    const cTickets = tickets.filter((t) => t.carnetId === carnetId);
-    await generateCarnetPrintPDF(c, cTickets);
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      const cTickets = tickets.filter((t) => t.carnetId === carnetId || t.carnetNumber === c.carnetNumber);
+      const filename = `PORTUS_UJPAS_CARNET_${c.carnetNumber}_${c.size || 9}TICKETS.pdf`;
+      const url = await generateCarnetPrintPDF(c, cTickets);
+      if (url) {
+        setPrintModalData({ carnet: c, url, filename });
+        printPdfDocument(url);
+      }
+      setActionSuccess(`Carnet ${c.carnetNumber} prêt pour impression.`);
+      setTimeout(() => setActionSuccess(null), 4000);
+    } catch (err: any) {
+      console.error('Erreur téléchargement carnet:', err);
+      setActionError(err?.message || 'Erreur lors du téléchargement du carnet.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const statusBadge = (t: Ticket) => {
@@ -410,6 +429,17 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
               </form>
             </div>
           </div>
+        )}
+
+        {/* Modal d'aperçu et d'impression officielle du carnet */}
+        {printModalData && (
+          <CarnetPrintModal
+            isOpen={!!printModalData}
+            onClose={() => setPrintModalData(null)}
+            carnet={printModalData.carnet}
+            pdfUrl={printModalData.url}
+            filename={printModalData.filename}
+          />
         )}
       </div>
     </div>

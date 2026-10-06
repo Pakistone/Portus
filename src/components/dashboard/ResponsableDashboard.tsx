@@ -18,6 +18,7 @@ import {
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StatCard } from './StatCard';
+import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatPlateDisplay } from '../../utils/normalization';
 import { EntityRankingChart, EntityRankItem } from './DashboardCharts';
@@ -183,18 +184,18 @@ export const ResponsableDashboard: React.FC = () => {
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
         <button
           onClick={() => setActiveTab('dashboard')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
             activeTab === 'dashboard'
-              ? 'bg-blue-600 text-white shadow-md shadow-blue-950'
+              ? 'bg-linear-to-r from-orange-600 to-emerald-700 text-white shadow-md shadow-orange-950/40 border border-orange-400/30'
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>Tableau de Bord</span>
+          <span>Tableau de Bord UJPAA</span>
         </button>
         <button
           onClick={() => setActiveTab('agents')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
             activeTab === 'agents'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
@@ -205,7 +206,7 @@ export const ResponsableDashboard: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('expenses')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition ${
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
             activeTab === 'expenses'
               ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950'
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
@@ -225,18 +226,23 @@ export const ResponsableDashboard: React.FC = () => {
       {/* ========================================================================= */}
       {/* EN-TÊTE DU TABLEAU DE BORD RESPONSABLE                                    */}
       {/* ========================================================================= */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800 pb-3">
-        <div>
+      <div className="relative overflow-hidden rounded-2xl bg-slate-900/60 border border-slate-800 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        {/* Filigrane discret carte Côte d'Ivoire */}
+        <div className="absolute right-0 top-0 pointer-events-none opacity-5 overflow-hidden">
+          <CoteDIvoireMap variant="watermark" className="w-56 h-56 -mr-12 -mt-12 text-emerald-400" />
+        </div>
+
+        <div className="relative z-10">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] uppercase font-black tracking-wider text-blue-400 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">
-              Espace Secteur
+            <span className="text-[11px] uppercase font-black tracking-wider text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
+              Espace Secteur UJPAA 🇨🇮
             </span>
-            <span className="rounded bg-blue-500/20 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-300">
+            <span className="rounded bg-emerald-950 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
               {currentUser?.sectorName || 'Secteur Non Assigné'}
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
-            Tableau de Bord Responsable
+            Tableau de Bord Responsable Secteur
           </h2>
           <p className="text-xs text-slate-400">
             Gestion du stock du secteur, distribution aux agents et encaissement des remises.
@@ -244,7 +250,7 @@ export const ResponsableDashboard: React.FC = () => {
         </div>
 
         {/* Boutons d'actions rapides */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-0">
+        <div className="relative z-10 flex flex-wrap items-center gap-2 pt-1 sm:pt-0">
           <button
             onClick={() => setSearchModalOpen(true)}
             className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-amber-500/40 px-3.5 py-2 text-xs font-bold text-amber-300 hover:bg-slate-700 transition cursor-pointer shadow-xs"
@@ -265,7 +271,7 @@ export const ResponsableDashboard: React.FC = () => {
           </button>
           <button
             onClick={() => setAssignmentModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-blue-950 hover:bg-blue-500 transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-xl bg-linear-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-orange-950/40 transition cursor-pointer border border-orange-400/30"
           >
             <UserPlus className="w-4 h-4" />
             <span>Distribuer Tickets</span>
@@ -275,7 +281,7 @@ export const ResponsableDashboard: React.FC = () => {
               setSelectedAgentForRemise(undefined);
               setRemiseModalOpen(true);
             }}
-            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-950 hover:bg-emerald-500 transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-xl bg-linear-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 px-3.5 py-2 text-xs font-bold text-white shadow-lg shadow-emerald-950/40 transition cursor-pointer border border-emerald-400/30"
           >
             <HandCoins className="w-4 h-4" />
             <span>Enregistrer Remise</span>

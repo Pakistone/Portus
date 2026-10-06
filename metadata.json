@@ -1,6 +1,6 @@
 {
   "name": "PORTUS UJSRV App",
-  "description": "Système de gestion de tickets, ventes terrain, contrôles et remises financières — Union des Jeunes de la Sécurité Routière de Vridi",
+  "description": "Système de gestion de tickets, surveillance camion, contrôles et remises financières — Union des Jeunes du Port pour l'Assistance et la Sécurité (UJPAS)",
   "requestFramePermissions": ["camera", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -24,6 +24,7 @@ import { useData } from '../../context/DataContext';
 import { formatDateTime, formatPlateDisplay, normalizePlate, normalizeText } from '../../utils/normalization';
 import { FraudReportModal } from './FraudReportModal';
 import { QrCameraScanner } from './QrCameraScanner';
+import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import type { Ticket, Control } from '../../types';
 import type { VerifyTicketResult } from '../../context/DataContext';
 
@@ -301,16 +302,27 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-2 sm:p-4 backdrop-blur-xs">
-      <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl text-slate-100 max-h-[95vh] flex flex-col overflow-hidden">
+      <div className="relative w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl text-slate-100 max-h-[95vh] flex flex-col overflow-hidden">
+        {/* Ruban officiel tricolore République de Côte d'Ivoire */}
+        <div className="h-1 w-full bg-linear-to-r from-orange-500 via-white to-emerald-600 shrink-0" />
+
+        {/* Carte de Côte d'Ivoire en filigrane discret */}
+        <div className="absolute right-0 bottom-0 pointer-events-none opacity-5 overflow-hidden">
+          <CoteDIvoireMap variant="watermark" className="w-80 h-80 -mr-16 -mb-16 text-emerald-400" />
+        </div>
+
         {/* En-tête avec indicateurs de connexion */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5 bg-slate-900/90">
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5 bg-slate-900/90 relative z-10">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-              <QrCode className="w-5 h-5" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-orange-500/20 to-emerald-500/20 text-orange-400 border border-orange-500/30">
+              <QrCode className="w-5 h-5 text-orange-400" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white">Module Contrôleur</h3>
+                <span className="rounded bg-linear-to-r from-orange-600 to-emerald-700 px-1.5 py-0.2 text-[9px] font-black text-white">
+                  UJPAA 🇨🇮
+                </span>
                 <span
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
                     isOnline
@@ -319,17 +331,17 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   }`}
                 >
                   {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                  <span>{isOnline ? 'Serveur En Ligne' : 'Cache Hors Ligne'}</span>
+                  <span>{isOnline ? 'En Ligne' : 'Hors Ligne'}</span>
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Contrôle de conformité des véhicules sur le corridor portuaire
+                Zone Industrielle &amp; Zone Portuaire d’Abidjan
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -337,14 +349,14 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
         {/* Sélecteur de mode : Caméra vs Recherche Manuelle */}
         {!result && !plateSearchResults && (
-          <div className="px-5 pt-3 pb-1 border-b border-slate-800 bg-slate-900/50">
+          <div className="px-5 pt-3 pb-1 border-b border-slate-800 bg-slate-900/50 relative z-10">
             <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
                 type="button"
                 onClick={() => setMode('CAMERA')}
-                className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition ${
+                className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
                   mode === 'CAMERA'
-                    ? 'bg-amber-600 text-white shadow-xs'
+                    ? 'bg-orange-600 text-white shadow-xs'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -354,9 +366,9 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <button
                 type="button"
                 onClick={() => setMode('MANUAL')}
-                className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition ${
+                className={`flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
                   mode === 'MANUAL'
-                    ? 'bg-amber-600 text-white shadow-xs'
+                    ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >

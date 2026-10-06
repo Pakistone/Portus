@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "PORTUS UJSRV App",
-  "short_name": "PORTUS",
-  "description": "Système de gestion de tickets, ventes terrain, contrôles et remises — Union des Jeunes de la Sécurité Routière de Vridi",
+  "name": "PORTUS — UJPAA",
+  "short_name": "PORTUS UJPAA",
+  "description": "Système officiel de gestion des tickets, surveillance camion, contrôles routiers et remises — Union des Jeunes du Port Autonome d'Abidjan (UJPAA)",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

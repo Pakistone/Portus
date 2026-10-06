@@ -1,11 +1,14 @@
-const CACHE_NAME = 'portus-v1.2.0';
+const CACHE_NAME = 'portus-v1.3.0';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
   '/favicon.ico',
   '/logoss.jpg',
-  '/cachet-ujsrv.png'
+  '/cachet-ujsrv.png',
+  '/ticket_bg_ujpas_hd.png',
+  '/ticket_bg_ujpas_hd.jpg',
+  '/ticket_bg_ujpas_hd.svg',
 ];
 
 self.addEventListener('install', (event) => {

@@ -1,15 +1,23 @@
 /**
- * Constantes métier de PORTUS — U.J.S.R.V.
- * Union des Jeunes de la Sécurité Routière de Vridi
+ * Constantes métier de PORTUS — UJPAS
+ * Union des Jeunes du Port pour l'Assistance et la Sécurité
  */
 
 export const ORG_INFO = {
   NAME: 'PORTUS',
-  FULL_ORG_NAME: 'UNION DES JEUNES DE LA SÉCURITÉ ROUTIÈRE DE VRIDI',
-  SHORT_ORG_NAME: 'U.J.S.R.V.',
-  COMMUNE: 'Port-Bouët / Vridi, Abidjan',
+  FULL_ORG_NAME: "UNION DES JEUNES DU PORT POUR L'ASSISTANCE ET LA SÉCURITÉ",
+  SHORT_ORG_NAME: 'UJPAS',
+  MISSION: "SURVEILLANCE & LOGISTIQUE - PORT D'ABIDJAN",
+  ZONE: "Zone Industrielle & Zone Portuaire d’Abidjan",
+  COMMUNE: "Port Autonome d'Abidjan, Abidjan",
   COUNTRY: "Côte d'Ivoire",
   CURRENCY: 'FCFA',
+  CONTACT_TEL: '01 03 31 37 68 / 07 77 91 78 04',
+  CONTACT_EMAIL: 'contact@portus-ujpas.online',
+  LOGO_PATH: '/logo-ujpas.png',
+  LOGO_PNG_PATH: '/logo-ujpas.png',
+  STAMP_PATH: '/cachet-ujpas.png',
+  TICKET_SPECIMEN_PATH: '/ticket_bg_ujpas_hd.jpg',
 } as const;
 
 /**
@@ -44,6 +52,28 @@ export const REMISE_ALERT_STEP = 5;
  */
 export const CARNET_SIZE_MULTIPLE = 3;
 export const TICKETS_PER_PAGE_A4_LANDSCAPE = 9;
+
+/**
+ * GÉOMÉTRIE D'IMPRESSION A4 PAYSAGE 3x3 (OPTIMISATION MAXIMUM LARGEUR)
+ * cellW = 99.0 mm, cellH = 70.0 mm
+ * ticketW = 98.0 mm (marge latérale 0.5 mm)
+ * ticketH = 55.18 mm (ratio 16:9 parfait)
+ * padX = 0.5 mm, padY = 7.41 mm
+ */
+export const TICKET_PRINT_GRID = {
+  PAGE_WIDTH_MM: 297.0,
+  PAGE_HEIGHT_MM: 210.0,
+  COLS: 3,
+  ROWS: 3,
+  CELL_WIDTH_MM: 99.0,
+  CELL_HEIGHT_MM: 70.0,
+  TICKET_WIDTH_MM: 98.6,
+  TICKET_HEIGHT_MM: 68.0,
+  PAD_X_MM: 0.2,
+  PAD_Y_MM: 1.0,
+  LINE_DASH: [2, 2] as const,
+  VERIFICATION_BANNER: "POUR TOUTE VÉRIFICATION, CONTACTEZ L'UJPAS : 01 03 31 37 68 / 07 77 91 78 04 | EMAIL : CONTACT@PORTUS-UJPAS.ONLINE",
+} as const;
 
 /**
  * SÉCURITÉ ET BRUTE-FORCE

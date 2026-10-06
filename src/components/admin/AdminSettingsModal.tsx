@@ -251,7 +251,7 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     const link = document.createElement('a');
                     const dateStr = new Date().toISOString().slice(0, 10);
                     link.href = url;
-                    link.download = `portus_ujsrv_backup_${dateStr}.json`;
+                    link.download = `portus_ujpaa_backup_${dateStr}.json`;
                     document.body.appendChild(link);
                     link.click();
                     document.body.removeChild(link);

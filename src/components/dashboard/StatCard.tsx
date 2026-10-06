@@ -6,7 +6,7 @@ interface StatCardProps {
   value: string | number;
   subtitle?: string;
   icon: ReactNode;
-  variant?: 'emerald' | 'blue' | 'amber' | 'rose' | 'slate';
+  variant?: 'emerald' | 'orange' | 'blue' | 'amber' | 'rose' | 'slate';
   onClick?: () => void;
 }
 
@@ -21,6 +21,7 @@ export const StatCard: React.FC<StatCardProps> = ({
 }) => {
   const variantStyles = {
     emerald: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
+    orange: 'bg-orange-500/10 border-orange-500/30 text-orange-400',
     blue: 'bg-blue-500/10 border-blue-500/30 text-blue-400',
     amber: 'bg-amber-500/10 border-amber-500/30 text-amber-400',
     rose: 'bg-rose-500/10 border-rose-500/30 text-rose-400',
@@ -29,6 +30,7 @@ export const StatCard: React.FC<StatCardProps> = ({
 
   const iconBgStyles = {
     emerald: 'bg-emerald-500/20 text-emerald-400',
+    orange: 'bg-orange-500/20 text-orange-400',
     blue: 'bg-blue-500/20 text-blue-400',
     amber: 'bg-amber-500/20 text-amber-400',
     rose: 'bg-rose-500/20 text-rose-400',
@@ -39,12 +41,12 @@ export const StatCard: React.FC<StatCardProps> = ({
     <div
       id={id}
       onClick={onClick}
-      className={`rounded-2xl border p-4 shadow-sm backdrop-blur-xs transition ${
+      className={`relative overflow-hidden rounded-2xl border p-4 shadow-sm backdrop-blur-xs transition ${
         variantStyles[variant]
       } ${onClick ? 'cursor-pointer hover:border-slate-500 active:scale-98' : ''}`}
     >
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
           {title}
         </span>
         <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${iconBgStyles[variant]}`}>
@@ -52,9 +54,9 @@ export const StatCard: React.FC<StatCardProps> = ({
         </div>
       </div>
       <div className="mt-2">
-        <span className="text-2xl font-black tracking-tight text-white">{value}</span>
+        <span className="text-2xl font-black tracking-tight text-white tabular-nums">{value}</span>
       </div>
-      {subtitle && <p className="mt-1 text-xs text-slate-400">{subtitle}</p>}
+      {subtitle && <p className="mt-1 text-xs text-slate-400 font-medium">{subtitle}</p>}
     </div>
   );
 };

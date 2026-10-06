@@ -1,244 +1,388 @@
 /**
- * Générateur PDF pour PORTUS — U.J.S.R.V.
+ * Générateur PDF pour PORTUS — UJPAS
+ * Union des Jeunes du Port pour l'Assistance et la Sécurité
  * 
- * RÈGLES MÉTIER :
+ * RÈGLES MÉTIER & IMPRESSION :
  * 1. Format physique : A4 Paysage (297 x 210 mm)
- * 2. Disposition : 9 tickets par page (grille 3 colonnes x 3 lignes)
- * 3. Zones obligatoires sur chaque ticket physique :
- *    - Image du logo / cachet officiel U.J.S.R.V. (/logoss.jpg ou /cachet-ujsrv.png)
- *    - Numéro de ticket (clairement visible)
- *    - QR Code unique haute définition (20 x 20 mm)
- *    - Immatriculation (zone vierge avec ligne pointillée)
- *    - Date manuscrite (____ / ____ / 2026)
- *    - Signature de l'agent & Cachet officiel avec image intégrée (16x16 mm)
- *    - Contacts officiels U.J.S.R.V.
- * 4. ⚠️ INTERDICTION STRICTE D'IMPRIMER DES PRIX OU MONTANTS
+ * 2. Disposition : 9 tickets par page (grille 3 colonnes x 3 lignes de 99 x 70 mm)
+ * 3. Fond graphique officiel : /ticket_bg_ujpas_hd.jpg
+ * 4. Surimpressions dynamiques :
+ *    - Numéro de ticket séquentiel dans le cartouche bleu en haut à gauche (ex. : N° VRDCH-000001)
+ *    - QR code dynamique scannable haute densité dans le cadre blanc sous la rosace à droite, avec le badge central "UJPAS"
+ * 5. Mentions administratives conservées :
+ *    - "SIGNATURE AGENT UJPAS"
+ *    - "VALIDATION UJPAS"
+ *    - Bandeau de contact inférieur UJPAS
+ * 6. ⚠️ INTERDICTION STRICTE D'IMPRIMER DES PRIX OU MONTANTS SUR LES TICKETS (5 000 FCFA non imprimé)
  */
 
 import QRCode from 'qrcode';
-import type { Carnet, Ticket, Remise } from '../types';
+import type { Carnet, Ticket, TicketStatus, Remise } from '../types';
 import { ORG_INFO } from '../config/constants';
 import { formatFCFA, formatDate, formatDateTime } from './normalization';
 
-/**
- * Génère un Data URL PNG d'un cachet officiel rond d'entreprise (vectoriel flat design)
- * Couleurs : vert forêt (#0F4C3A) et gris ardoise (#1E293B) sur fond parfaitement blanc.
- */
-function getFallbackStampDataUrl(): string {
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = 500;
-    canvas.height = 500;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return '';
-
-    // Fond blanc pur
-    ctx.clearRect(0, 0, 500, 500);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 500, 500);
-
-    const cx = 250;
-    const cy = 250;
-    const rOuter = 220;
-    const rInner = 205;
-
-    // 1. Double cercle extérieur fin (Vert forêt #0F4C3A)
-    ctx.strokeStyle = '#0F4C3A';
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rOuter, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(cx, cy, rInner, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // 2. Texte circulaire supérieur 'U.J.S.R.V.'
-    ctx.save();
-    ctx.fillStyle = '#0F4C3A';
-    ctx.font = '900 42px Helvetica, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const topText = 'U . J . S . R . V .';
-    ctx.translate(cx, cy);
-    ctx.rotate(-Math.PI / 2 - 0.35);
-    const radiusTop = 175;
-    for (let i = 0; i < topText.length; i++) {
-      ctx.save();
-      const angle = (i - topText.length / 2 + 0.5) * 0.12;
-      ctx.rotate(angle);
-      ctx.translate(0, -radiusTop);
-      ctx.fillText(topText[i], 0, 0);
-      ctx.restore();
-    }
-    ctx.restore();
-
-    // 3. Texte circulaire inférieur 'CACHET OFFICIEL'
-    ctx.save();
-    ctx.fillStyle = '#0F4C3A';
-    ctx.font = '700 24px Helvetica, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const bottomText = '• CACHET OFFICIEL •';
-    ctx.translate(cx, cy);
-    ctx.rotate(Math.PI / 2 + 0.55);
-    const radiusBottom = 172;
-    for (let i = 0; i < bottomText.length; i++) {
-      ctx.save();
-      const angle = (i - bottomText.length / 2 + 0.5) * 0.085;
-      ctx.rotate(-angle);
-      ctx.translate(0, radiusBottom);
-      ctx.fillText(bottomText[i], 0, 0);
-      ctx.restore();
-    }
-    ctx.restore();
-
-    // 4. Silhouette centrale minimaliste et moderne d'un camion de face & branches de laurier
-    // Branches de laurier latérales (gris ardoise #1E293B)
-    ctx.fillStyle = '#1E293B';
-    ctx.strokeStyle = '#1E293B';
-    ctx.lineWidth = 3;
-
-    // Laurier gauche
-    for (let i = -2; i <= 2; i++) {
-      const ly = cy + i * 22;
-      const lx = cx - 95 - Math.abs(i) * 4;
-      ctx.beginPath();
-      ctx.ellipse(lx, ly, 10, 5, Math.PI / 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // Laurier droit
-    for (let i = -2; i <= 2; i++) {
-      const ly = cy + i * 22;
-      const rx = cx + 95 + Math.abs(i) * 4;
-      ctx.beginPath();
-      ctx.ellipse(rx, ly, 10, 5, -Math.PI / 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Camion semi-remorque de face (Flat Design géométrique épuré)
-    // Cabine principale
-    ctx.fillStyle = '#0F4C3A';
-    ctx.fillRect(cx - 50, cy - 35, 100, 75);
-
-    // Pare-brise
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(cx - 40, cy - 25, 80, 30);
-
-    // Séparateur pare-brise
-    ctx.fillStyle = '#0F4C3A';
-    ctx.fillRect(cx - 3, cy - 25, 6, 30);
-
-    // Phares et calandre
-    ctx.fillStyle = '#1E293B';
-    ctx.fillRect(cx - 42, cy + 12, 84, 15);
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(cx - 32, cy + 19, 5, 0, Math.PI * 2);
-    ctx.arc(cx + 32, cy + 19, 5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Roues latérales
-    ctx.fillRect(cx - 62, cy + 25, 14, 25);
-    ctx.fillRect(cx + 48, cy + 25, 14, 25);
-
-    return canvas.toDataURL('image/png');
-  } catch {
-    return '';
-  }
-}
-
+let cachedBgDataUrl: string | null = null;
 
 /**
- * Charge et optimise l'image pour le document PDF :
- * - Redimensionne aux dimensions cibles réelles d'impression (160-200 px max)
- * - Réduit drastiquement le poids mémoire et le poids final du PDF (ex: cachet de 1.4 Mo -> ~15 Ko)
+ * Convertit de façon robuste toute source (URL ou Blob) en DataURL PNG pure via Canvas
  */
-const loadAndOptimizeImage = async (url: string, maxDim = 180): Promise<string> => {
+async function convertToPngDataUrl(source: string | Blob): Promise<string> {
   return new Promise((resolve) => {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') {
+      return resolve('');
+    }
+
     const img = new Image();
-    img.crossOrigin = 'Anonymous';
+
+    let objectUrl: string | null = null;
+    if (typeof source !== 'string') {
+      try {
+        objectUrl = URL.createObjectURL(source);
+        img.src = objectUrl;
+      } catch {
+        return resolve('');
+      }
+    } else {
+      img.src = source;
+    }
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve('');
+    }, 3000);
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (objectUrl) {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {
+          // ignore
+        }
+      }
+    };
+
     img.onload = () => {
       try {
-        let w = img.naturalWidth || img.width || maxDim;
-        let h = img.naturalHeight || img.height || maxDim;
-        if (w > maxDim || h > maxDim) {
-          if (w > h) {
-            h = Math.round((h * maxDim) / w);
-            w = maxDim;
-          } else {
-            w = Math.round((w * maxDim) / h);
-            h = maxDim;
-          }
-        }
         const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
+        canvas.width = img.naturalWidth || 2376;
+        canvas.height = img.naturalHeight || 1680;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/png'));
-          return;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const pngUrl = canvas.toDataURL('image/png');
+          cleanup();
+          return resolve(pngUrl);
         }
       } catch (err) {
-        console.warn(`Canvas optimization failed for ${url}:`, err);
+        console.warn('Erreur rasterisation canvas vers PNG:', err);
       }
+      cleanup();
       resolve('');
     };
-    img.onerror = () => {
-      fetch(url)
-        .then((res) => (res.ok ? res.blob() : null))
-        .then((blob) => {
-          if (!blob) return resolve('');
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-          reader.onerror = () => resolve('');
-          reader.readAsDataURL(blob);
-        })
-        .catch(() => resolve(''));
-    };
-    img.src = url;
-  });
-};
 
-async function loadLogoImage(): Promise<string> {
-  try {
-    const res = await loadAndOptimizeImage('/logoss.jpg', 160);
-    return res || getFallbackStampDataUrl();
-  } catch {
-    return getFallbackStampDataUrl();
-  }
+    img.onerror = () => {
+      cleanup();
+      resolve('');
+    };
+  });
 }
 
-async function loadStampImage(): Promise<string> {
+/**
+ * Charge le fond graphique officiel UJPAS et garantit une DataURL PNG/JPEG pure et valide
+ */
+async function loadTicketBgImage(): Promise<string> {
+  if (cachedBgDataUrl) {
+    return cachedBgDataUrl;
+  }
+
+  const candidateUrls = [
+    '/ticket_bg_ujpas_hd.jpg',
+    '/ticket-ujpas-specimen.png',
+    '/ticket_bg_ujpas_hd.png',
+  ];
+
+  for (const url of candidateUrls) {
+    try {
+      // 1. Essai Fetch direct avec timeout
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = setTimeout(() => controller?.abort(), 3000);
+      const res = await fetch(url, { signal: controller ? controller.signal : undefined }).catch(() => null);
+      clearTimeout(timer);
+
+      if (res && res.ok) {
+        const blob = await res.blob().catch(() => null);
+        if (blob && blob.size > 0) {
+          // Lecture directe ultra-rapide et fiable via FileReader
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const resUrl = typeof reader.result === 'string' ? reader.result : '';
+              resolve(resUrl);
+            };
+            reader.onerror = () => resolve('');
+            reader.readAsDataURL(blob);
+          });
+
+          if (dataUrl && (dataUrl.startsWith('data:image/png') || dataUrl.startsWith('data:image/jpeg'))) {
+            cachedBgDataUrl = dataUrl;
+            return dataUrl;
+          }
+
+          // Pour tout format vectoriel SVG, conversion Canvas vers PNG pur
+          const rasterPng = await convertToPngDataUrl(blob);
+          if (rasterPng && rasterPng.startsWith('data:image/png')) {
+            cachedBgDataUrl = rasterPng;
+            return rasterPng;
+          }
+        }
+      }
+
+      // 2. Repli HTML Image si fetch a échoué
+      const imagePng = await convertToPngDataUrl(url);
+      if (imagePng && imagePng.startsWith('data:image/png')) {
+        cachedBgDataUrl = imagePng;
+        return imagePng;
+      }
+    } catch (e) {
+      console.warn(`Échec du chargement du fond candidat ${url}:`, e);
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Génère un QR Code scannable dynamique haute résolution avec le badge central orange "UJPAS"
+ * Dessiné directement et de façon synchrone sur Canvas pour une vitesse instantanée
+ */
+async function generateQrWithBadge(payload: string): Promise<string> {
   try {
-    const res = await loadAndOptimizeImage('/cachet-ujsrv.png', 180);
-    return res || getFallbackStampDataUrl();
-  } catch {
-    return getFallbackStampDataUrl();
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 180;
+      canvas.height = 180;
+
+      await QRCode.toCanvas(canvas, payload, {
+        width: 180,
+        margin: 1,
+        errorCorrectionLevel: 'H',
+        color: {
+          dark: '#0D4A36',
+          light: '#FFFFFF',
+        },
+      });
+
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const s = canvas.width;
+        const badgeSize = s * 0.28;
+        const bx = (s - badgeSize) / 2;
+        const by = (s - badgeSize) / 2;
+
+        // Contour de dégagement blanc
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(bx - 2, by - 2, badgeSize + 4, badgeSize + 4);
+
+        // Badge officiel orange UJPAS (#EA580C)
+        ctx.fillStyle = '#EA580C';
+        if (typeof ctx.roundRect === 'function') {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, badgeSize, badgeSize, 4);
+          ctx.fill();
+        } else {
+          ctx.fillRect(bx, by, badgeSize, badgeSize);
+        }
+
+        // Mention textuelle "UJPAS"
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 15px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('UJPAS', s / 2, s / 2 + 1);
+      }
+
+      return canvas.toDataURL('image/png');
+    }
+
+    return await QRCode.toDataURL(payload, {
+      width: 180,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+      color: {
+        dark: '#0D4A36',
+        light: '#FFFFFF',
+      },
+    });
+  } catch (err) {
+    console.warn('Erreur génération QR directe canvas, repli toDataURL:', err);
+    try {
+      return await QRCode.toDataURL(payload);
+    } catch {
+      return '';
+    }
   }
 }
 
 /**
- * Génère le PDF d'impression complet d'un carnet prêt à imprimer (9 tickets par feuille A4 Paysage)
- * Modèle officiel PORTUS — U.J.S.R.V. (Titre de circulation / Surveillance Camion)
+ * Lance l'impression d'un document PDF dans le navigateur via une iframe isolée
+ */
+export function printPdfDocument(blobUrl: string): boolean {
+  if (typeof document === 'undefined' || !blobUrl) return false;
+
+  try {
+    const iframeId = 'portus-pdf-print-frame';
+    let iframe = document.getElementById(iframeId) as HTMLIFrameElement | null;
+    if (iframe && iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe);
+    }
+
+    iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0.01';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+
+    const triggerPrint = () => {
+      try {
+        iframe?.contentWindow?.focus();
+        iframe?.contentWindow?.print();
+      } catch (err) {
+        console.warn('[PORTUS Print] Échec impression iframe:', err);
+      }
+    };
+
+    iframe.onload = () => {
+      setTimeout(triggerPrint, 300);
+    };
+
+    setTimeout(() => {
+      if (iframe && document.body.contains(iframe)) {
+        document.body.removeChild(iframe);
+      }
+    }, 60000);
+
+    return true;
+  } catch (err) {
+    console.warn('[PORTUS Print] Erreur iframe print:', err);
+    return false;
+  }
+}
+
+/**
+ * Déclenche le téléchargement du PDF de manière garantie et retourne l'URL Blob du document
+ * 1. Extraction directe du Blob PDF de jsPDF
+ * 2. Création dynamique de balise <a> dans le DOM pour téléchargement
+ * 3. Déclenchement manuel du clic
+ */
+export function downloadPdfDoc(doc: any, filename: string): string {
+  let finalBlobUrl = '';
+
+  // 1. Extraction directe du Blob
+  try {
+    const blob = doc.output('blob');
+    if (blob && blob.size > 0) {
+      finalBlobUrl = URL.createObjectURL(blob);
+    }
+  } catch (blobErr) {
+    console.warn('doc.output("blob") a échoué:', blobErr);
+  }
+
+  // Repli doc.output('bloburl')
+  if (!finalBlobUrl) {
+    try {
+      const rawBlobUrl = doc.output('bloburl');
+      if (typeof rawBlobUrl === 'string' && rawBlobUrl.startsWith('blob:')) {
+        finalBlobUrl = rawBlobUrl;
+      }
+    } catch (blobUrlErr) {
+      console.warn('doc.output("bloburl") a échoué:', blobUrlErr);
+    }
+  }
+
+  if (typeof document === 'undefined' || !finalBlobUrl) {
+    return finalBlobUrl;
+  }
+
+  // 2. Déclenchement propre du téléchargement sans déclencheur en double
+  try {
+    const link = document.createElement('a');
+    link.href = finalBlobUrl;
+    link.download = filename;
+    link.rel = 'noopener noreferrer';
+    link.style.position = 'fixed';
+    link.style.top = '-9999px';
+    link.style.left = '-9999px';
+    link.style.width = '1px';
+    link.style.height = '1px';
+    link.style.opacity = '0.01';
+    document.body.appendChild(link);
+
+    try {
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    } catch {
+      link.click();
+    }
+
+    setTimeout(() => {
+      if (document.body.contains(link)) {
+        document.body.removeChild(link);
+      }
+    }, 2000);
+  } catch (clickErr) {
+    console.warn('Erreur lors du clic automatique sur le lien:', clickErr);
+  }
+
+  return finalBlobUrl;
+}
+
+/**
+ * Génère le PDF d'impression officiel d'un carnet UJPAS (9 tickets par feuille A4 Paysage)
+ * Format : 297 x 210 mm (3 colonnes x 3 lignes = 99 x 70 mm par cellule)
+ * Optimisé : ticket 98 x 55.18 mm (largeur maximale, ratio 16:9 préservé, 100% rendu image)
  */
 export async function generateCarnetPrintPDF(
   carnet: Carnet,
   tickets: Ticket[],
   onProgress?: (progress: number, total: number) => void
-): Promise<void> {
-  // Chargement dynamique de jspdf et des images optimisées
-  const [{ jsPDF }, logoDataUrl, stampDataUrl] = await Promise.all([
+): Promise<string> {
+  // 0. Assurer la présence des tickets (auto-reconstruction si la liste reçue est vide)
+  let effectiveTickets = tickets && tickets.length > 0 ? tickets : [];
+  if (effectiveTickets.length === 0) {
+    const size = carnet.size || (carnet.endNumber && carnet.startNumber ? carnet.endNumber - carnet.startNumber + 1 : 9);
+    const start = carnet.startNumber || 1;
+    const prefix = carnet.seriesPrefix || 'VRDCH';
+    effectiveTickets = Array.from({ length: size }, (_, i) => {
+      const num = start + i;
+      const tNum = `${prefix}-${String(num).padStart(6, '0')}`;
+      return {
+        id: `gen-${carnet.id}-${num}`,
+        carnetId: carnet.id,
+        carnetNumber: carnet.carnetNumber,
+        ticketNumber: tNum,
+        physicalNumber: num,
+        price: 5000,
+        controlCount: 0,
+        status: 'AVAILABLE' as TicketStatus,
+        createdAt: carnet.createdAt || new Date().toISOString(),
+        qrPayload: tNum,
+      };
+    });
+  }
+
+  // Chargement asynchrone de jsPDF et du fond officiel PNG
+  const [{ jsPDF }, bgDataUrl] = await Promise.all([
     import('jspdf'),
-    loadLogoImage(),
-    loadStampImage(),
+    loadTicketBgImage(),
   ]);
 
-  // Format A4 paysage standard avec compression active
+  // Document A4 Paysage
   const doc = new jsPDF({
     orientation: 'landscape',
     unit: 'mm',
@@ -246,281 +390,106 @@ export async function generateCarnetPrintPDF(
     compress: true,
   });
 
-  const pageWidth = 297;
-  const pageHeight = 210;
-
-  // Grille 3 colonnes x 3 lignes = 9 tickets par page
   const cols = 3;
-  const rows = 3;
   const ticketsPerPage = 9;
-
-  // 3 × 3 tickets couvrant exactement la feuille A4 paysage.
-  // Chaque ticket mesure donc exactement 99 × 70 mm.
-  const marginX = 0;
-  const marginY = 0;
-  const ticketWidth = pageWidth / cols; // 99 mm
-  const ticketHeight = pageHeight / rows; // 70 mm
-
-  const totalTickets = tickets.length;
+  const totalTickets = effectiveTickets.length;
   const totalPages = Math.ceil(totalTickets / ticketsPerPage);
 
-  // Génération optimisée des QR Codes par lots (résolution calibrée à 100px pour 20mm)
+  // 1. Pré-génération optimisée par lots des QR codes haute densité avec badge orange UJPAS
   const qrCodes: string[] = new Array(totalTickets);
   const batchSize = 18;
 
   for (let i = 0; i < totalTickets; i += batchSize) {
     const end = Math.min(i + batchSize, totalTickets);
-    const batch = tickets.slice(i, end);
+    const batch = effectiveTickets.slice(i, end);
+
     const rendered = await Promise.all(
-      batch.map(async (t) => {
-        try {
-          return await QRCode.toDataURL(t.qrPayload || t.ticketNumber, {
-            width: 100, // 100px est ultra-net pour 20x20mm (127 DPI) et très léger
-            margin: 0,
-            errorCorrectionLevel: 'M',
-            color: {
-              dark: '#0F4C3A',
-              light: '#ffffff',
-            },
-          });
-        } catch {
-          return '';
-        }
-      })
+      batch.map((t) => generateQrWithBadge(t.qrPayload || t.ticketNumber))
     );
+
     for (let j = 0; j < rendered.length; j++) {
       qrCodes[i + j] = rendered[j];
     }
+
     if (onProgress) {
       onProgress(Math.min(end, totalTickets), totalTickets);
     }
   }
 
-  // Construction des pages A4 paysage
+  // 2. Assemblage des pages A4 Paysage
   for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
     if (pageIdx > 0) {
       doc.addPage('a4', 'landscape');
     }
 
-    // 0. Filigrane de fond en mosaïque sans couture haute densité et ultra-léger
-    const watermarkUnit = "UCRPPLAO-CI / UCRAO-CI  CSCRAO   ";
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(4.8);
-    doc.setTextColor(190, 214, 204);
-
-    const unitWidth = doc.getTextWidth(watermarkUnit);
-    // Concaténation de la ligne complète : réduit le nombre d'instructions de tracé de 700 à 58 par page
-    const repeatCount = Math.ceil(pageWidth / unitWidth) + 3;
-    const fullRowText = watermarkUnit.repeat(repeatCount);
-    const stepY = 3.6;
-    let rowIndex = 0;
-
-    for (let wy = 3; wy <= pageHeight + 4; wy += stepY) {
-      const shiftX = (rowIndex % 2 === 1) ? (unitWidth / 2) : 0;
-      doc.text(fullRowText, -shiftX - 5, wy);
-      rowIndex++;
-    }
-
     const startIndex = pageIdx * ticketsPerPage;
-    const pageTickets = tickets.slice(startIndex, startIndex + ticketsPerPage);
+    const pageTickets = effectiveTickets.slice(startIndex, startIndex + ticketsPerPage);
+
+    const cellW = 99.0;
+    const cellH = 70.0;
+    const ticketW = 98.0; // Marges de coupe minimales de 0.5 mm
+    const ticketH = 68.0; // Marges de coupe minimales de 1.0 mm
+    const padX = (cellW - ticketW) / 2; // 0.5 mm
+    const padY = (cellH - ticketH) / 2; // 1.0 mm
 
     pageTickets.forEach((ticket, idx) => {
       const globalIdx = startIndex + idx;
       const col = idx % cols;
       const row = Math.floor(idx / cols);
+      const cx = col * cellW;
+      const cy = row * cellH;
+      const tx = cx + padX;
+      const ty = cy + padY;
 
-      const x0 = marginX + col * ticketWidth;
-      const y0 = marginY + row * ticketHeight;
-
-      // 1. Ligne de découpe extérieure (tirets fins et coins pointillés)
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineDashPattern([2, 2], 0);
-      doc.setLineWidth(0.2);
-      doc.rect(x0, y0, ticketWidth, ticketHeight);
-      doc.setLineDashPattern([], 0);
-
-      // Le fond du ticket est laissé translucide/naturel afin que le filigrane de sécurité
-      // apparaisse nettement en continu sur l'ensemble de la page et sous les tickets.
-
-      // 2. Cadre externe fin et élégant du ticket (0.5 pt)
-      doc.setDrawColor(30, 41, 59);
-      doc.setLineWidth(0.3);
-      doc.rect(x0 + 1.2, y0 + 1.2, ticketWidth - 2.4, ticketHeight - 2.4);
-
-      // =========================================================================
-      // 1. EN-TÊTE DU TICKET (Fond clair épuré, double liseré vert / ardoise)
-      // =========================================================================
-      doc.setFillColor(248, 250, 252);
-      doc.rect(x0 + 1.3, y0 + 1.3, ticketWidth - 2.6, 14.5, 'F');
-
-      // Double liseré séparateur de l'en-tête (Vert foncé #0F4C3A et Ardoise #1E293B)
-      doc.setDrawColor(15, 76, 58); // Vert foncé #0F4C3A
-      doc.setLineWidth(0.6);
-      doc.line(x0 + 1.2, y0 + 15.8, x0 + ticketWidth - 1.2, y0 + 15.8);
-      doc.setDrawColor(30, 41, 59); // Ardoise #1E293B
-      doc.setLineWidth(0.2);
-      doc.line(x0 + 1.2, y0 + 16.1, x0 + ticketWidth - 1.2, y0 + 16.1);
-
-      // LOGO EN HAUT À GAUCHE : x = x0 + 2.5 mm, y = y0 + 2 mm, taille 12 × 12 mm (réutilisation XObject via alias)
-      if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'PNG', x0 + 2.5, y0 + 2.0, 12, 12, 'PORTUS_LOGO', 'FAST');
+      // 1. Image officielle 100% brute (aucune altération vectorielle)
+      if (bgDataUrl) {
+        const imgFmt = bgDataUrl.includes('image/jpeg') || bgDataUrl.includes('image/jpg') ? 'JPEG' : 'PNG';
+        doc.addImage(bgDataUrl, imgFmt, tx, ty, ticketW, ticketH, 'TICKET_UJPAS', 'FAST');
       }
 
-      // EN-TÊTE : coordonnées absolues, sans maxWidth.
-      const textX = x0 + 17;
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6);
-      doc.setTextColor(30, 41, 59);
-      doc.text('UNION DES JEUNES DE LA SÉCURITÉ', textX, y0 + 4.0);
-      doc.text('ROUTIÈRE DE VRIDI', textX, y0 + 6.5);
-
-      doc.setFontSize(10.5);
-      doc.setTextColor(15, 76, 58);
-      doc.text('SURVEILLANCE CAMION', textX, y0 + 11.0);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(5);
-      doc.setTextColor(100, 116, 139);
-      doc.text('Zone Portuaire & Industrielle de Vridi — Port-Bouët', textX, y0 + 14.0);
-
-      // Référence du carnet en haut à droite (sans superposition)
-      doc.setFontSize(4.5);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(15, 76, 58);
-      doc.text(`CARNET : ${carnet.carnetNumber}`, x0 + ticketWidth - 2.5, y0 + 4.0, { align: 'right' });
-
-      // =========================================================================
-      // 2. CARTOUCHE NUMÉRO & QR CODE
-      // =========================================================================
-      const contentTopY = y0 + 17.5;
-
-      // Cartouche Numéro
-      doc.setFillColor(241, 245, 249); // #F1F5F9
+      // 2. Ligne de coupe en pointillés autour de la cellule 99x70 mm
       doc.setDrawColor(203, 213, 225);
-      doc.setLineWidth(0.3);
-      doc.roundedRect(x0 + 2.5, contentTopY, ticketWidth - 28, 8.0, 1, 1, 'FD');
+      doc.setLineWidth(0.2);
+      doc.setLineDashPattern([2, 2], 0);
+      doc.rect(cx, cy, cellW, cellH);
+      doc.setLineDashPattern([], 0);
 
-      doc.setTextColor(15, 23, 42);
+      // 3. Numéro de ticket dynamique dans la boîte bleue (ratios précis de l'image de fond officielle 1000 x 563)
+      const patchX = tx + ticketW * 0.075;
+      const patchY = ty + ticketH * 0.2948;
+      const patchW = ticketW * 0.175;
+      const patchH = ticketH * 0.0639;
+      
+      // Couleur de fond et de texte harmonisées avec la charte graphique officielle UJPAS
+      doc.setFillColor(224, 242, 254);
+      doc.roundedRect(patchX, patchY, patchW, patchH, 0.6, 0.6, 'F');
+      doc.setTextColor(3, 105, 161);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9);
-      doc.text(`TICKET N° : ${ticket.ticketNumber}`, x0 + 4, contentTopY + 5.2);
+      doc.setFontSize(7.0);
+      
+      // Alignement centré parfait pour s'adapter dynamiquement à toutes les longueurs de préfixe
+      doc.text(`N° ${ticket.ticketNumber}`, patchX + patchW / 2, patchY + patchH * 0.68, { align: 'center' });
 
-      // QR Code
-      const qrX = x0 + ticketWidth - 23;
-      const qrY = y0 + 17.0;
-      const qrSize = 20;
+      // 4. QR Code dynamique scannable dans la case (ratios précis de l'image de fond officielle 1000 x 563)
+      const qrX = tx + ticketW * 0.770;
+      const qrY = ty + ticketH * 0.595;
+      const qrW = ticketW * 0.135;
+      const qrH = ticketH * 0.231;
 
+      // Masquage blanc de propreté étiré pour correspondre exactement à l'espace de la case
       doc.setFillColor(255, 255, 255);
-      doc.setDrawColor(30, 41, 59);
-      doc.setLineWidth(0.3);
-      doc.roundedRect(qrX, qrY, qrSize, qrSize, 1, 1, 'FD');
+      doc.rect(qrX, qrY, qrW, qrH, 'F');
 
       const qrData = qrCodes[globalIdx];
       if (qrData) {
-        doc.addImage(qrData, 'PNG', qrX + 1, qrY + 1, qrSize - 2, qrSize - 2, undefined, 'FAST');
+        doc.addImage(qrData, 'PNG', qrX, qrY, qrW, qrH, undefined, 'FAST');
       }
-
-      // =========================================================================
-      // 3. CORPS DU TICKET (IMMATRICULATION & DATE)
-      // =========================================================================
-      const leftWidth = ticketWidth - 28;
-      const immY = contentTopY + 9.0;
-      const immHeight = 8;
-
-      // Boîte IMMATRICULATION
-      doc.setFillColor(255, 255, 255);
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineWidth(0.35);
-      doc.roundedRect(x0 + 2.5, immY, leftWidth, immHeight, 1, 1, 'FD');
-
-      doc.setTextColor(15, 23, 42);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(4.2);
-      doc.text('IMMATRICULATION :', x0 + 3.5, immY + 5.2);
-
-      // Ligne pointillée
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineWidth(0.2);
-      doc.setLineDashPattern([0.8, 0.8], 0);
-      doc.line(x0 + 29.5, immY + 5.2, x0 + ticketWidth - 28, immY + 5.2);
-      doc.setLineDashPattern([], 0);
-
-      // DATE
-      const dateY = immY + 8.8;
-      doc.setFillColor(255, 255, 255);
-      doc.setDrawColor(148, 163, 184);
-      doc.roundedRect(x0 + 2.5, dateY, leftWidth, 6.5, 1, 1, 'FD');
-
-      doc.setTextColor(15, 23, 42);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(4.5);
-      doc.text('DATE :', x0 + 3.5, dateY + 4.2);
-
-      doc.setFont('courier', 'normal');
-      doc.setFontSize(5.8);
-      doc.setTextColor(100, 116, 139);
-      doc.text('____ / ____ / 2026', x0 + 13, dateY + 4.2);
-
-      // =========================================================================
-      // 4. CADRES INFÉRIEURS (SIGNATURE AGENT & CACHET OFFICIEL)
-      // =========================================================================
-      const boxY = dateY + 7.5;
-      const boxW = (leftWidth - 1) / 2; // ~31.5 mm chacun
-      const boxH = 14;
-
-      // Encadré 1 : SIGNATURE AGENT (vierge)
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineDashPattern([0.8, 0.8], 0);
-      doc.roundedRect(x0 + 2.5, boxY, boxW, boxH, 1, 1, 'D');
-      doc.setLineDashPattern([], 0);
-
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(x0 + 3, boxY + 0.5, boxW - 1, 3.2, 0.5, 0.5, 'F');
-      doc.setTextColor(51, 65, 85);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(4);
-      doc.text('SIGNATURE AGENT', x0 + 3.8, boxY + 2.5);
-
-      // Encadré 2 : CACHET OFFICIEL (tampon image réutilisé via alias PORTUS_STAMP)
-      doc.setDrawColor(148, 163, 184);
-      doc.setLineDashPattern([0.8, 0.8], 0);
-      doc.roundedRect(x0 + 3.5 + boxW, boxY, boxW, boxH, 1, 1, 'D');
-      doc.setLineDashPattern([], 0);
-
-      doc.setFillColor(248, 250, 252);
-      doc.roundedRect(x0 + 4 + boxW, boxY + 0.5, boxW - 1, 3.2, 0.5, 0.5, 'F');
-      doc.setTextColor(51, 65, 85);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(4);
-      doc.text('CACHET OFFICIEL', x0 + 4.8 + boxW, boxY + 2.5);
-
-      if (stampDataUrl) {
-        const stampImgSize = 16; // 16 x 16 mm
-        const stampImgX = x0 + 3.5 + boxW + (boxW - stampImgSize) / 2;
-        const stampImgY = boxY + 3.0;
-        doc.addImage(stampDataUrl, 'PNG', stampImgX, stampImgY, stampImgSize, stampImgSize, 'PORTUS_STAMP', 'FAST');
-      }
-
-      // =========================================================================
-      // 5. BAS DU TICKET (PIED DE PAGE NET)
-      // =========================================================================
-      const footerY = y0 + ticketHeight - 2.5;
-
-      doc.setTextColor(15, 76, 58); // Vert officiel #0F4C3A
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(6.5);
-      doc.text(
-        'CONTACTS OFFICIELS : 07 77 91 78 04 / 01 03 31 37 68',
-        x0 + ticketWidth / 2,
-        footerY,
-        { align: 'center' }
-      );
     });
   }
 
-  // Téléchargement immédiat
-  doc.save(`PORTUS_CARNET_${carnet.carnetNumber}_${totalTickets}TICKETS.pdf`);
+  // Nom de fichier officiel demandé :
+  // PORTUS_UJPAS_CARNET_${carnet.carnetNumber}_${totalTickets}TICKETS.pdf
+  return downloadPdfDoc(doc, `PORTUS_UJPAS_CARNET_${carnet.carnetNumber}_${totalTickets}TICKETS.pdf`);
 }
 
 /**
@@ -534,18 +503,22 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
     format: 'a5',
     compress: true,
   });
+
   const pw = 148;
 
   // En-tête
   doc.setFillColor(15, 23, 42);
   doc.rect(0, 0, pw, 28, 'F');
+
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.text(ORG_INFO.FULL_ORG_NAME, pw / 2, 10, { align: 'center' });
+
   doc.setFontSize(9);
   doc.setTextColor(16, 185, 129);
   doc.text(`PORTUS — REÇU OFFICIEL DE REMISE FINANCIÈRE`, pw / 2, 16, { align: 'center' });
+
   doc.setTextColor(203, 213, 225);
   doc.setFontSize(7);
   doc.text(`${ORG_INFO.COMMUNE} — ${ORG_INFO.COUNTRY}`, pw / 2, 22, { align: 'center' });
@@ -561,9 +534,11 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
   doc.setDrawColor(16, 185, 129);
   doc.setLineWidth(0.8);
   doc.roundedRect(14, 46, pw - 28, 22, 3, 3, 'FD');
+
   doc.setTextColor(22, 101, 52);
   doc.setFontSize(9);
   doc.text('MONTANT VERSÉ', pw / 2, 53, { align: 'center' });
+
   doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
   doc.text(formatFCFA(remise.amount), pw / 2, 63, { align: 'center' });
@@ -572,6 +547,7 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
+
   let curY = 78;
   const lineGap = 7;
 
@@ -590,6 +566,7 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
   addRow('Responsable receveur :', remise.responsableName);
   addRow('Secteur de versement :', remise.sectorName);
   addRow('Tickets couverts :', `${remise.ticketsCount} tickets (à 5 000 FCFA/unité)`);
+
   if (remise.note) {
     addRow('Observation :', remise.note);
   }
@@ -618,5 +595,5 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
     { align: 'center' }
   );
 
-  doc.save(`REMISE_${remise.reference}.pdf`);
+  downloadPdfDoc(doc, `REMISE_${remise.reference}.pdf`);
 }

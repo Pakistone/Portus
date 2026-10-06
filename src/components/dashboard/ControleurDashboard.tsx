@@ -409,17 +409,17 @@ export const ControleurDashboard: React.FC = () => {
             <button
               id="btn-controleur-scan"
               onClick={() => setScanModalOpen(true)}
-              className="flex flex-col items-center justify-center p-5 sm:p-6 rounded-2xl bg-amber-600 hover:bg-amber-500 text-white shadow-xl shadow-amber-950 active:scale-98 transition text-center cursor-pointer space-y-2 border border-amber-500/50"
+              className="flex flex-col items-center justify-center p-5 sm:p-6 rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 text-white shadow-xl shadow-orange-950/40 active:scale-98 transition text-center cursor-pointer space-y-2 border border-orange-400/40"
             >
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-black/20 text-white">
+              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-black/20 text-white shadow-inner">
                 <QrCode className="w-7 h-7 sm:w-8 sm:h-8" />
               </div>
               <div>
                 <h3 className="text-base sm:text-lg font-black tracking-wide">
                   CONTRÔLER UN VÉHICULE
                 </h3>
-                <p className="text-xs text-amber-100 font-medium">
-                  Scanner QR Code ou saisir la plaque d'immatriculation
+                <p className="text-xs text-orange-100 font-medium">
+                  Scanner QR Code UJPAA ou vérifier l'immatriculation
                 </p>
               </div>
             </button>

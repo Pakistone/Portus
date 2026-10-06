@@ -23,9 +23,10 @@ import {
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import { generateCarnetPrintPDF } from '../../utils/pdfGenerator';
+import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerator';
 import { formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { CarnetGeneratorModal } from './CarnetGeneratorModal';
+import { CarnetPrintModal } from './CarnetPrintModal';
 import type { Carnet, Ticket, CarnetStatus, TicketStatus } from '../../types';
 
 interface Props {
@@ -77,6 +78,8 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<{ url: string; filename: string } | null>(null);
+  const [printModalData, setPrintModalData] = useState<{ carnet: Carnet; url: string; filename: string } | null>(null);
 
   const responsables = users.filter((u) => u.role === 'RESPONSABLE' && u.isActive);
 
@@ -129,8 +132,26 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   // Handler d'impression PDF A4 Paysage (9 tickets/page)
   const handlePrintPDF = async (c: Carnet) => {
-    const cTickets = tickets.filter((t) => t.carnetId === c.id);
-    await generateCarnetPrintPDF(c, cTickets);
+    setActionLoading(true);
+    setActionError(null);
+    setDownloadUrl(null);
+    try {
+      const cTickets = tickets.filter((t) => t.carnetId === c.id || t.carnetNumber === c.carnetNumber);
+      const filename = `PORTUS_UJPAS_CARNET_${c.carnetNumber}_${c.size || 9}TICKETS.pdf`;
+      const url = await generateCarnetPrintPDF(c, cTickets);
+      if (url) {
+        setDownloadUrl({ url, filename });
+        setPrintModalData({ carnet: c, url, filename });
+        printPdfDocument(url);
+      }
+      setActionSuccess(`Le PDF du carnet ${c.carnetNumber} est prêt pour impression.`);
+      setTimeout(() => setActionSuccess(null), 6000);
+    } catch (err: any) {
+      console.error('Erreur lors de l’impression du carnet:', err);
+      setActionError(err?.message || 'Erreur lors de la génération du PDF.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // Attribution d'un carnet à un responsable
@@ -375,9 +396,21 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
           {/* Feedback messages */}
           {actionSuccess && (
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
-              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-              <span>{actionSuccess}</span>
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300 flex-wrap">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+                <span>{actionSuccess}</span>
+              </div>
+              {downloadUrl && (
+                <a
+                  href={downloadUrl.url}
+                  download={downloadUrl.filename}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1 font-bold text-white hover:bg-emerald-500 transition shadow text-xs"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Télécharger / Imprimer directement</span>
+                </a>
+              )}
             </div>
           )}
           {actionError && (
@@ -428,10 +461,11 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handlePrintPDF(selectedCarnet)}
-                      className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition"
+                      disabled={actionLoading}
+                      className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
                     >
-                      <Printer className="w-4 h-4" />
-                      <span>Imprimer PDF (9/page)</span>
+                      <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                      <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (9/page)'}</span>
                     </button>
                     {selectedCarnet.status !== 'CANCELLED' && (
                       <button
@@ -681,7 +715,8 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                 {/* Imprimer le PDF 9/page A4 */}
                                 <button
                                   onClick={() => handlePrintPDF(c)}
-                                  className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition"
+                                  disabled={actionLoading}
+                                  className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
                                   title="Imprimer le carnet en PDF (9 tickets par page A4 paysage)"
                                 >
                                   <Printer className="w-3.5 h-3.5" />
@@ -1001,6 +1036,17 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal d'aperçu et d'impression officielle du carnet */}
+      {printModalData && (
+        <CarnetPrintModal
+          isOpen={!!printModalData}
+          onClose={() => setPrintModalData(null)}
+          carnet={printModalData.carnet}
+          pdfUrl={printModalData.url}
+          filename={printModalData.filename}
+        />
       )}
 
       {/* CarnetGeneratorModal déclenchable */}

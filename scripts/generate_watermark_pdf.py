@@ -16,7 +16,7 @@ def draw_security_watermark(c: canvas.Canvas, width: float, height: float):
     Tapisse intégralement le fond de la page avec un filigrane textuel
     horizontal, dense et répétitif.
     """
-    watermark_text = "UCRPPLAO-CI / UCRAO-CI  CSCRAO   "
+    watermark_text = "UJPAA   UCRAO   CSCRAO   UCRPPLAO-CI   "
     font_name = "Helvetica-Bold"
     font_size = 4.8  # Petite écriture fine de sécurité (micro-texte)
     
@@ -88,7 +88,7 @@ def draw_demo_ticket_grid(c: canvas.Canvas, width: float, height: float):
             # Titre dans l'en-tête
             c.setFillColor(colors.white)
             c.setFont("Helvetica-Bold", 8)
-            c.drawCentredString(x + (ticket_width / 2), y + ticket_height - margin - 15, "SURVEILLANCE CAMION — U.J.S.R.V.")
+            c.drawCentredString(x + (ticket_width / 2), y + ticket_height - margin - 15, "SURVEILLANCE & LOGISTIQUE — UJPAA")
             
     c.restoreState()
 

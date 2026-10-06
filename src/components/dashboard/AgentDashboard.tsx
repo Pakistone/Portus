@@ -23,6 +23,7 @@ import {
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StatCard } from './StatCard';
+import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
@@ -337,18 +338,23 @@ export const AgentDashboard: React.FC = () => {
       {/* ========================================================================= */}
       {/* GROS BOUTON MOBILE PRINCIPAL : NOUVELLE VENTE TICKET 5 000 FCFA           */}
       {/* ========================================================================= */}
-      <div className="rounded-3xl border border-emerald-500/40 bg-gradient-to-br from-emerald-950/80 via-slate-900 to-slate-900 p-5 shadow-2xl space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="relative overflow-hidden rounded-3xl border border-emerald-500/40 bg-gradient-to-br from-emerald-950/80 via-slate-900 to-slate-900 p-5 shadow-2xl space-y-4">
+        {/* Filigrane discret de la carte de Côte d'Ivoire */}
+        <div className="absolute right-0 top-0 pointer-events-none opacity-5 overflow-hidden">
+          <CoteDIvoireMap variant="watermark" className="w-56 h-56 -mr-12 -mt-12 text-emerald-400" />
+        </div>
+
+        <div className="relative z-10 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-              Guichet Vente Terrain
+              Guichet Vente Terrain • UJPAA 🇨🇮
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setSearchModalOpen(true)}
-              className="text-[11px] font-bold text-amber-300 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg border border-amber-500/40 flex items-center gap-1 transition"
+              className="text-[11px] font-bold text-amber-300 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg border border-amber-500/40 flex items-center gap-1 transition cursor-pointer"
               title="Rechercher par ticket ou immatriculation"
             >
               <Search className="w-3.5 h-3.5 text-amber-400" />
@@ -364,14 +370,14 @@ export const AgentDashboard: React.FC = () => {
           id="btn-agent-new-sale"
           onClick={() => handleStartSale()}
           disabled={stats.availableCount === 0}
-          className="w-full flex items-center justify-center gap-3 rounded-2xl bg-emerald-600 py-4 px-6 text-base sm:text-lg font-black tracking-wide text-white shadow-xl shadow-emerald-950 hover:bg-emerald-500 active:scale-98 transition disabled:opacity-50 cursor-pointer"
+          className="relative z-10 w-full flex items-center justify-center gap-3 rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 py-4 px-6 text-base sm:text-lg font-black tracking-wide text-white shadow-xl shadow-orange-950/40 active:scale-98 transition disabled:opacity-50 cursor-pointer border border-orange-400/30"
         >
           <ShoppingCart className="w-6 h-6" />
           <span>NOUVELLE VENTE TICKET ({formatFCFA(TICKET_PRICE_FCFA)})</span>
         </button>
 
         {stats.availableCount === 0 && (
-          <p className="text-center text-xs text-rose-400 font-semibold">
+          <p className="text-center text-xs text-rose-400 font-semibold relative z-10">
             Stock épuisé. Veuillez contacter votre responsable de secteur pour recevoir de nouveaux tickets.
           </p>
         )}

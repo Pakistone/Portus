@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { X, Layers, Printer, CheckCircle, AlertTriangle } from 'lucide-react';
+import { X, Layers, Printer, CheckCircle, AlertTriangle, Download, ExternalLink } from 'lucide-react';
 import { useData } from '../../context/DataContext';
-import { CARNET_SIZE_MULTIPLE } from '../../config/constants';
-import { generateCarnetPrintPDF } from '../../utils/pdfGenerator';
+import { CARNET_SIZE_MULTIPLE, ORG_INFO } from '../../config/constants';
+import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerator';
+import { CarnetPrintModal } from './CarnetPrintModal';
 import type { Carnet, Ticket } from '../../types';
 
 interface Props {
@@ -13,7 +14,7 @@ interface Props {
 export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const { createCarnet, users, tickets } = useData();
 
-  const [seriesPrefix, setSeriesPrefix] = useState('VRD');
+  const [seriesPrefix, setSeriesPrefix] = useState('VRDCH');
   const [size, setSize] = useState<string>('18'); // Multiple de 3 par défaut
   const [startPhysicalNumber, setStartPhysicalNumber] = useState<string>('');
   const [assignedResponsableId, setAssignedResponsableId] = useState('');
@@ -21,6 +22,10 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [error, setError] = useState<string | null>(null);
   const [createdCarnet, setCreatedCarnet] = useState<Carnet | null>(null);
   const [createdTickets, setCreatedTickets] = useState<Ticket[]>([]);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [generatedPdfUrl, setGeneratedPdfUrl] = useState<{ url: string; filename: string } | null>(null);
+  const [showPrintModal, setShowPrintModal] = useState(false);
 
   if (!isOpen) return null;
 
@@ -57,9 +62,26 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   };
 
   const handlePrintPDF = async () => {
-    if (!createdCarnet) return;
-    const carnetTickets = createdTickets.length > 0 ? createdTickets : tickets.filter((t) => t.carnetId === createdCarnet.id);
-    await generateCarnetPrintPDF(createdCarnet, carnetTickets);
+    if (!createdCarnet || downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const carnetTickets = createdTickets.length > 0 
+        ? createdTickets 
+        : tickets.filter((t) => t.carnetId === createdCarnet.id || t.carnetNumber === createdCarnet.carnetNumber);
+      const filename = `PORTUS_UJPAS_CARNET_${createdCarnet.carnetNumber}_${createdCarnet.size || 9}TICKETS.pdf`;
+      const url = await generateCarnetPrintPDF(createdCarnet, carnetTickets);
+      if (url) {
+        setGeneratedPdfUrl({ url, filename });
+        setShowPrintModal(true);
+        printPdfDocument(url);
+      }
+    } catch (err: any) {
+      console.error('Erreur téléchargement/impression PDF carnet:', err);
+      setDownloadError(err?.message || 'Erreur lors de la génération du PDF.');
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -105,26 +127,73 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
               )}
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400 text-left space-y-1">
-              <p>• Format physique : <strong>9 tickets par feuille A4 Paysage</strong></p>
-              <p>• QR Codes d’authenticité pré-intégrés sur chaque ticket</p>
-              <p>• ⚠️ Le montant n'est pas imprimé sur le ticket physique</p>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-400 text-left space-y-1.5">
+              <p className="font-bold text-orange-400">Normes de Sécurité Officielle UJPAS 🇨🇮 :</p>
+              <p>• Format physique : <strong>9 tickets par feuille A4 Paysage (99 × 70 mm)</strong></p>
+              <p>• Fond de référence officiel : <strong>Gabarit officiel UJPAS HD</strong></p>
+              <p>• Surimpression dynamique : <strong>N° VRDCH séquentiel &amp; QR code avec badge UJPAS</strong></p>
+              <p>• Contacts officiels : <strong>{ORG_INFO.CONTACT_TEL} | {ORG_INFO.CONTACT_EMAIL}</strong></p>
+              <p>• ⚠️ Le montant unitaire de 5 000 FCFA n'est pas imprimé sur le ticket physique</p>
             </div>
+
+            {downloadError && (
+              <div className="flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300 text-left">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{downloadError}</span>
+              </div>
+            )}
+
+            {generatedPdfUrl && (
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 flex flex-col gap-2 text-xs">
+                <div className="flex items-center gap-2 text-emerald-300 font-semibold">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>PDF généré avec succès ({generatedPdfUrl.filename})</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      printPdfDocument(generatedPdfUrl.url);
+                      setShowPrintModal(true);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500 transition shadow"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Lancer l'Impression</span>
+                  </button>
+                  <a
+                    href={generatedPdfUrl.url}
+                    download={generatedPdfUrl.filename}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 py-2 text-xs font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition"
+                  >
+                    <Download className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Télécharger PDF</span>
+                  </a>
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button
                 onClick={handlePrintPDF}
-                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition"
+                disabled={downloading}
+                className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 py-3 text-xs font-bold text-white shadow-lg transition cursor-pointer border border-orange-400/30 disabled:opacity-60"
               >
-                <Printer className="w-4 h-4" />
-                <span>Télécharger le PDF Prêt à Imprimer</span>
+                <Printer className={`w-4 h-4 ${downloading ? 'animate-spin' : ''}`} />
+                <span>
+                  {downloading
+                    ? 'Génération du PDF en cours...'
+                    : generatedPdfUrl
+                    ? 'Régénérer & Imprimer à nouveau'
+                    : 'Générer & Imprimer le PDF (9 tickets/page)'}
+                </span>
               </button>
               <button
                 onClick={() => {
                   setCreatedCarnet(null);
                   onClose();
                 }}
-                className="rounded-xl bg-slate-800 px-4 py-3 text-xs font-bold text-slate-300 hover:bg-slate-700"
+                className="rounded-xl bg-slate-800 px-4 py-3 text-xs font-bold text-slate-300 hover:bg-slate-700 cursor-pointer"
               >
                 Terminer
               </button>
@@ -140,13 +209,27 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 type="text"
                 required
                 value={seriesPrefix}
-                onChange={(e) => setSeriesPrefix(e.target.value)}
-                placeholder="VRD"
+                onChange={(e) => setSeriesPrefix(e.target.value.toUpperCase())}
+                placeholder="VRDCH"
                 className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-sm text-white focus:border-emerald-500 focus:outline-hidden"
               />
-              <p className="text-[11px] text-slate-500 mt-1">
-                Ex: VRD donnera des numéros comme VRD-000101.
-              </p>
+              <div className="flex items-center gap-2 mt-1.5">
+                <span className="text-[11px] text-slate-500">Séries suggérées :</span>
+                {['VRDCH', 'VRD', 'UJPAS'].map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setSeriesPrefix(p)}
+                    className={`px-2 py-0.5 text-[11px] rounded font-bold border transition ${
+                      seriesPrefix === p
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {p} {p === 'VRDCH' && '★ Nouveau UJPAS'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -228,31 +311,44 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-[11px] text-slate-400 space-y-1">
-              <p className="font-bold text-slate-300">Règles d’impression physique U.J.S.R.V. :</p>
-              <p>• 9 tickets par page A4 paysage.</p>
+              <p className="font-bold text-orange-400">Règles d’impression physique UJPAS 🇨🇮 :</p>
+              <p>• 9 tickets par page A4 paysage (99 × 70 mm).</p>
+              <p>• Fond graphique officiel de haute sécurité UJPAS.</p>
+              <p>• Numéro séquentiel N° VRDCH et QR Code scannable avec badge central UJPAS.</p>
               <p>• Le montant de 5 000 FCFA ne figure pas sur le ticket physique.</p>
-              <p>• Chaque ticket est doté d’un QR Code individuel infalsifiable.</p>
+              <p>• Contacts officiels : {ORG_INFO.CONTACT_TEL} | {ORG_INFO.CONTACT_EMAIL}.</p>
             </div>
 
             <div className="flex gap-2 pt-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
               >
                 Annuler
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-50"
+                className="flex-1 rounded-xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 py-2.5 text-xs font-bold text-white shadow-md transition disabled:opacity-50 cursor-pointer border border-orange-400/30"
               >
-                {loading ? 'Génération...' : 'Générer le Carnet'}
+                {loading ? 'Génération...' : 'Générer le Carnet UJPAA'}
               </button>
             </div>
           </form>
         )}
       </div>
+
+      {/* Modal d'aperçu et d'impression officielle du carnet */}
+      {showPrintModal && createdCarnet && generatedPdfUrl && (
+        <CarnetPrintModal
+          isOpen={showPrintModal}
+          onClose={() => setShowPrintModal(false)}
+          carnet={createdCarnet}
+          pdfUrl={generatedPdfUrl.url}
+          filename={generatedPdfUrl.filename}
+        />
+      )}
     </div>
   );
 };
