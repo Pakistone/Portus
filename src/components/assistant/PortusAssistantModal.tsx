@@ -28,7 +28,7 @@ export const PortusAssistantModal: React.FC<PortusAssistantModalProps> = ({ isOp
     {
       question: 'Introduction',
       answer:
-        'Bonjour ! Je suis l’Assistant Opérationnel PORTUS — UJPAA (Lecture Seule). Je réponds instantanément à vos questions sur les ventes du jour, l’état des stocks de carnets, les contrôles routiers et la situation de caisse, sur la base exclusive des données réelles enregistrées.',
+        'Bonjour ! Je suis l’Assistant Opérationnel PORTUS — UJPAS (Lecture Seule). Je réponds instantanément à vos questions sur les ventes du jour, l’état des stocks de carnets, les contrôles routiers et la situation de caisse, sur la base exclusive des données réelles enregistrées.',
       category: 'GENERAL',
     },
   ]);

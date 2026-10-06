@@ -161,8 +161,8 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-3">
           <div className="relative h-11 w-11 shrink-0 rounded-full p-0.5 bg-slate-800 border-2 border-emerald-500/40 shadow-md shadow-emerald-950/50 flex items-center justify-center">
             <img
-              src="/logo-ujpaa.png"
-              alt="Emblème UJPAA"
+              src={ORG_INFO.LOGO_PATH}
+              alt="Emblème UJPAS"
               className="h-full w-full rounded-full object-contain"
               referrerPolicy="no-referrer"
             />

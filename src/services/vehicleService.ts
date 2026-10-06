@@ -99,11 +99,13 @@ export const VehicleService = {
     );
 
     let lastSeenDate: string | undefined;
-    const timestamps = [
-      ...matchedSales.map((s) => s.soldAt),
-      ...matchedControls.map((c) => c.controlledAt),
-      ...matchedFrauds.map((f) => f.reportedAt),
-    ].filter(Boolean).sort().reverse();
+    const timestamps = (
+      [
+        ...matchedSales.map((s) => s.soldAt),
+        ...matchedControls.map((c) => c.controlledAt),
+        ...matchedFrauds.map((f) => f.reportedAt),
+      ].filter(Boolean) as string[]
+    ).sort((a, b) => a.localeCompare(b)).reverse();
 
     if (timestamps.length > 0) {
       lastSeenDate = timestamps[0];

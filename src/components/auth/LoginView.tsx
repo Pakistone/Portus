@@ -33,7 +33,7 @@ export const LoginView: React.FC = () => {
       <div className="fixed top-0 left-0 right-0 h-1.5 bg-linear-to-r from-orange-500 via-white to-emerald-600 shadow-md shadow-orange-500/20 z-50" />
 
       <div className="relative w-full max-w-md space-y-6 z-10">
-        {/* En-tête Organisation & Emblème UJPAA */}
+        {/* En-tête Organisation & Emblème UJPAS */}
         <div className="text-center space-y-3">
           <div className="relative mx-auto flex h-28 w-28 items-center justify-center rounded-3xl bg-slate-900/90 border-2 border-emerald-500/40 p-2 shadow-2xl shadow-emerald-950/80 group">
             <div className="absolute -inset-1 rounded-3xl bg-linear-to-r from-orange-500/30 via-transparent to-emerald-500/30 blur-md opacity-75" />
@@ -239,7 +239,7 @@ export const LoginView: React.FC = () => {
           <PWAInstallButton />
           <p className="flex items-center gap-1.5 text-xs text-slate-400">
             <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Application PWA disponible hors ligne • Sécurité UJPAA — Côte d'Ivoire</span>
+            <span>Application PWA disponible hors ligne • Sécurité UJPAS — Côte d'Ivoire</span>
           </p>
         </div>
       </div>

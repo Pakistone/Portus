@@ -135,6 +135,8 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       // l'adresse e-mail officielle de l'administrateur conserve son accès root complet
       const isAdminEmail = 
         user.email === 'ypaki090@gmail.com' || 
+        user.email === 'admin@ujpas.ci' ||
+        user.email === 'admin@portus-ujpas.online' ||
         user.email === 'admin@ujpaa.ci' ||
         user.email === 'admin@portus.ujpaa.ci' ||
         user.email === 'admin@ujsrv.ci' || 
@@ -639,7 +641,7 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus.ujpaa.ci`;
+    const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus-ujpas.online`;
 
     const { data: existing } = await supabaseAdmin
       .from('profiles')
@@ -1460,6 +1462,180 @@ app.post('/api/verify', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ valid: false, error: err.message });
+  }
+});
+
+// ------------------------------------------------------------------
+// PROTECTION ANTI-SSRF POUR WORKFLOWS AGENTIQUES ET REQUÊTES (S8703)
+// ------------------------------------------------------------------
+import dns from 'dns';
+import { promisify } from 'util';
+
+const lookupAsync = promisify(dns.lookup);
+
+/**
+ * Détermine si une adresse IP est privée, de bouclage, link-local ou réservée (non-routable/dangereuse)
+ * Conforme aux exigences de sécurité tssecurity:S8703 pour les agents et les workflows backend.
+ */
+export function isPrivateIP(ip: string): boolean {
+  const cleanIp = ip.trim();
+
+  // IPv4 Checks
+  if (cleanIp.includes('.')) {
+    const parts = cleanIp.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(isNaN)) return true; // Invalide => considéré comme non sûr
+
+    const [p0, p1, p2, p3] = parts;
+
+    // Loopback (127.0.0.0/8)
+    if (p0 === 127) return true;
+
+    // RFC 1918 Private Ranges:
+    // 10.0.0.0/8
+    if (p0 === 10) return true;
+    // 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
+    if (p0 === 172 && p1 >= 16 && p1 <= 31) return true;
+    // 192.168.0.0/16
+    if (p0 === 192 && p1 === 168) return true;
+
+    // Carrier-grade NAT (100.64.0.0/10)
+    if (p0 === 100 && p1 >= 64 && p1 <= 127) return true;
+
+    // Link-local (169.254.0.0/16)
+    if (p0 === 169 && p1 === 254) return true;
+
+    // Multicast (224.0.0.0/4)
+    if (p0 >= 224 && p0 <= 239) return true;
+
+    // Broadcast (255.255.255.255)
+    if (p0 === 255 && p1 === 255 && p2 === 255 && p3 === 255) return true;
+
+    // Documentation (192.0.2.0/24, 198.51.100.0/22, 203.0.113.0/24)
+    if (p0 === 192 && p1 === 0 && p2 === 2) return true;
+    if (p0 === 198 && p1 === 51 && p2 === 100) return true;
+    if (p0 === 203 && p1 === 0 && p2 === 113) return true;
+
+    // Benchmarking (198.18.0.0/15)
+    if (p0 === 198 && p1 >= 18 && p1 <= 19) return true;
+
+    // Unspecified / Shared (0.0.0.0/8)
+    if (p0 === 0) return true;
+
+    return false;
+  }
+
+  // IPv6 Checks
+  if (cleanIp.includes(':')) {
+    const lower = cleanIp.toLowerCase();
+    // Loopback (::1)
+    if (lower === '::1' || lower === '0:0:0:0:0:0:0:1') return true;
+    // Unspecified (::)
+    if (lower === '::' || lower === '0:0:0:0:0:0:0:0') return true;
+    // Unique Local (fc00::/7)
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    // Link-local (fe80::/10)
+    if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return true;
+    // Multicast (ff00::/8)
+    if (lower.startsWith('ff')) return true;
+
+    return false;
+  }
+
+  return true; // Non-identifié => bloqué par défaut
+}
+
+/**
+ * Valide de manière stricte une URL pour éviter les attaques de SSRF (Server-Side Request Forgery)
+ * Convient aux workflows agentiques et à toute récupération d'URL dynamique côté serveur.
+ */
+export async function validateUrlForSSRF(urlStr: string): Promise<{ isValid: boolean; error?: string; url?: URL }> {
+  try {
+    const parsedUrl = new URL(urlStr);
+
+    // Protocoles autorisés : HTTP et HTTPS uniquement
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return { isValid: false, error: 'Protocole non supporté. Seuls HTTP et HTTPS sont autorisés.' };
+    }
+
+    const hostname = parsedUrl.hostname;
+    if (!hostname) {
+      return { isValid: false, error: 'Nom d’hôte invalide ou absent.' };
+    }
+
+    // Si l'hôte est directement une IP (v4 ou v6), la valider immédiatement
+    const ipPattern = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+    const ipv6Pattern = /^[0-9a-fA-F:]+$/;
+
+    if (ipPattern.test(hostname) || ipv6Pattern.test(hostname)) {
+      if (isPrivateIP(hostname)) {
+        return { isValid: false, error: 'Accès aux adresses IP privées ou locales interdit.' };
+      }
+      return { isValid: true, url: parsedUrl };
+    }
+
+    // Résolution DNS systématique pour bloquer les redirections ou bypass (DNS Rebinding)
+    try {
+      const lookupResult = await lookupAsync(hostname, { all: true });
+      for (const entry of lookupResult) {
+        if (isPrivateIP(entry.address)) {
+          return {
+            isValid: false,
+            error: `Accès bloqué : le nom d’hôte résout vers une adresse IP non-routable ou privée (${entry.address}).`,
+          };
+        }
+      }
+    } catch {
+      return { isValid: false, error: 'Résolution DNS du nom d’hôte impossible.' };
+    }
+
+    return { isValid: true, url: parsedUrl };
+  } catch (err: any) {
+    return { isValid: false, error: `Format d’URL invalide : ${err.message}` };
+  }
+}
+
+/**
+ * Exécute une requête fetch sécurisée contre les attaques SSRF
+ */
+export async function ssrfSafeFetch(urlStr: string, init?: any): Promise<any> {
+  const validation = await validateUrlForSSRF(urlStr);
+  if (!validation.isValid || !validation.url) {
+    throw new Error(`SSRF Blocked: ${validation.error || 'URL non sécurisée.'}`);
+  }
+  // Utiliser le fetch natif global de Node.js
+  const fetchFn = (globalThis as any).fetch;
+  if (!fetchFn) {
+    throw new Error('Fetch natif non disponible sur ce runtime de serveur.');
+  }
+  return fetchFn(validation.url.toString(), init);
+}
+
+// Endpoint de proxy sécurisé pour toute requête externe ou de workflow agentique
+app.post('/api/assistant/fetch-safe', requireAuth, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ error: 'URL requise.' });
+    }
+
+    const validation = await validateUrlForSSRF(url);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: `SSRF bloqué : ${validation.error}` });
+    }
+
+    // Effectuer l'appel en toute sécurité
+    const response = await ssrfSafeFetch(url);
+    const contentType = response.headers.get('content-type') || '';
+    
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      return res.json({ success: true, contentType, data });
+    } else {
+      const text = await response.text();
+      return res.json({ success: true, contentType, data: text.slice(0, 100000) });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: `Erreur d’appel sécurisé : ${err.message}` });
   }
 });
 

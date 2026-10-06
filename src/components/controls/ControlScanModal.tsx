@@ -321,7 +321,7 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white">Module Contrôleur</h3>
                 <span className="rounded bg-linear-to-r from-orange-600 to-emerald-700 px-1.5 py-0.2 text-[9px] font-black text-white">
-                  UJPAA 🇨🇮
+                  UJPAS 🇨🇮
                 </span>
                 <span
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${

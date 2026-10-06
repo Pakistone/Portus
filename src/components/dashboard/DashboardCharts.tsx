@@ -306,7 +306,7 @@ export function buildTimelineData(
     }
   }
 
-  const keys = Object.keys(groupedByDate).sort();
+  const keys = Object.keys(groupedByDate).sort((a, b) => a.localeCompare(b));
   if (keys.length === 0) {
     return [
       { label: 'Début', count: 0, amount: 0, remittedAmount: 0 },

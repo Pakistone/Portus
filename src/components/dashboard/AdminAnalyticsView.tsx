@@ -195,7 +195,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({ period }
       <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <span className="text-[10px] uppercase font-bold tracking-widest text-purple-400">
-            Performance &amp; Audit Avancé UJPAA
+            Performance &amp; Audit Avancé UJPAS
           </span>
           <h2 className="text-xl font-black text-white mt-1">
             Analyses Décisionnelles &amp; Rentabilité
@@ -351,7 +351,7 @@ export const AdminAnalyticsView: React.FC<AdminAnalyticsViewProps> = ({ period }
                     </div>
                   </div>
                   <span className="text-[10px] text-slate-400 text-center">
-                    Objectif UJPAA : Réduire l'usage du cash de 50% d'ici fin 2026.
+                    Objectif UJPAS : Réduire l'usage du cash de 50% d'ici fin 2026.
                   </span>
                 </div>
 

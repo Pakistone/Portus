@@ -419,7 +419,7 @@ export const ControleurDashboard: React.FC = () => {
                   CONTRÔLER UN VÉHICULE
                 </h3>
                 <p className="text-xs text-orange-100 font-medium">
-                  Scanner QR Code UJPAA ou vérifier l'immatriculation
+                  Scanner QR Code UJPAS ou vérifier l'immatriculation
                 </p>
               </div>
             </button>

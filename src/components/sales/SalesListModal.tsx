@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart, Printer } from 'lucide-react';
+import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart, Printer, MessageSquare } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { exportSalesToExcel } from '../../utils/excelExport';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
+import { generateWhatsAppReceiptUrl } from '../../utils/cedeao';
 
 interface Props {
   isOpen: boolean;
@@ -253,15 +254,40 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                       {formatFCFA(s.price)}
                     </td>
                     <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => handlePrintReceipt(s)}
-                        disabled={!!printingTicketId}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
-                        title="Imprimer le ticket"
-                      >
-                        <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                        <span className="text-[10px] font-bold">Imprimer</span>
-                      </button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => handlePrintReceipt(s)}
+                          disabled={!!printingTicketId}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                          title="Imprimer le ticket"
+                        >
+                          <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-[10px] font-bold">Imprimer</span>
+                        </button>
+
+                        <a
+                          href={generateWhatsAppReceiptUrl({
+                            dialCode: '',
+                            phoneNumber: s.driverPhone || '',
+                            ticketNumber: s.ticketNumber,
+                            plateNumber: s.plateNumber,
+                            amount: s.price,
+                            agentName: s.agentName,
+                            dateStr: formatDateTime(s.soldAt),
+                          })}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={`p-1.5 rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
+                            s.driverPhone 
+                              ? 'bg-emerald-600/20 border-emerald-500/30 hover:bg-emerald-600/40 text-emerald-300' 
+                              : 'bg-slate-800/40 border-slate-700/30 hover:bg-slate-800 text-slate-500 hover:text-slate-400'
+                          }`}
+                          title={s.driverPhone ? "Partager le ticket via WhatsApp" : "Partager sans numéro prédéfini"}
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
+                          <span className="text-[10px] font-bold">WhatsApp</span>
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 ))

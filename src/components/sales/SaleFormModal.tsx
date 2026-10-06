@@ -87,6 +87,8 @@ export const SaleFormModal: React.FC<Props> = ({
   const [receiptImgUrl, setReceiptImgUrl] = useState<string | null>(null);
   const [isGeneratingImg, setIsGeneratingImg] = useState(false);
   const [copiedImageSuccess, setCopiedImageSuccess] = useState(false);
+  const [whatsAppRecipientPhone, setWhatsAppRecipientPhone] = useState('');
+  const [isSharingImg, setIsSharingImg] = useState(false);
 
   // States pour le scanneur de plaques d'immatriculation (ANPR)
   const [showAnpr, setShowAnpr] = useState(false);
@@ -146,7 +148,9 @@ export const SaleFormModal: React.FC<Props> = ({
       setTimeout(() => {
         // Liste de camions simulés sur le corridor de Vridi (Abidjan)
         const commonPlates = ['5829HZ01', '9021GF01', '3048FK01', '7721HG01', '8019AB01'];
-        const randomPlate = commonPlates[Math.floor(Math.random() * commonPlates.length)];
+        const randomArray = new Uint32Array(1);
+        window.crypto.getRandomValues(randomArray);
+        const randomPlate = commonPlates[randomArray[0] % commonPlates.length];
         
         // Jouer un petit bip sonore d'accroche ANPR
         try {
@@ -306,8 +310,17 @@ export const SaleFormModal: React.FC<Props> = ({
     };
   }, [completedSale]);
 
+  useEffect(() => {
+    if (completedSale) {
+      setWhatsAppRecipientPhone(completedSale.driverPhone || '');
+    } else {
+      setWhatsAppRecipientPhone('');
+    }
+  }, [completedSale]);
+
   const handleShareReceiptImage = async () => {
-    if (!receiptImgUrl || !completedSale) return;
+    if (!receiptImgUrl || !completedSale || isSharingImg) return;
+    setIsSharingImg(true);
     try {
       const response = await fetch(receiptImgUrl);
       const blob = await response.blob();
@@ -325,6 +338,8 @@ export const SaleFormModal: React.FC<Props> = ({
     } catch (err) {
       console.error('[PORTUS Share] Erreur lors du partage, repli téléchargement:', err);
       handleDownloadReceiptImage();
+    } finally {
+      setIsSharingImg(false);
     }
   };
 
@@ -607,19 +622,62 @@ export const SaleFormModal: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* Actions de Partage & Téléchargement */}
-            <div className="space-y-2 pt-3 border-t border-slate-800/80">
-              {/* 🟢 Partager l'Image sur WhatsApp */}
-              <button
-                type="button"
-                onClick={handleShareReceiptImage}
-                disabled={isGeneratingImg || !receiptImgUrl}
-                className="flex items-center justify-center gap-2 w-full rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 shadow-lg shadow-emerald-950 transition active:scale-98 disabled:opacity-50 cursor-pointer"
-              >
-                <Share2 className="w-4 h-4" />
-                <span>Partager Reçu (Image PNG) sur WhatsApp</span>
-              </button>
+            {/* Zone de Partage WhatsApp Dédiée */}
+            <div className="rounded-xl bg-slate-900/50 p-3.5 border border-slate-800/90 space-y-3 text-left">
+              <span className="text-xs font-black text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                <MessageSquare className="w-4 h-4 text-emerald-500 animate-bounce" />
+                Partage Direct WhatsApp (Vendeur)
+              </span>
 
+              {/* Champ d'Ajustement du Numéro WhatsApp */}
+              <div className="space-y-1">
+                <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">
+                  Numéro de Téléphone WhatsApp :
+                </label>
+                <input
+                  type="tel"
+                  placeholder="Saisir ou modifier le numéro (ex: +2250701020304)"
+                  value={whatsAppRecipientPhone}
+                  onChange={(e) => setWhatsAppRecipientPhone(e.target.value)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800/50 py-2 px-3 text-xs font-mono text-white focus:border-emerald-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 pt-1">
+                {/* Bouton Envoi Texte WhatsApp Officiel */}
+                <a
+                  href={generateWhatsAppReceiptUrl({
+                    dialCode: '',
+                    phoneNumber: whatsAppRecipientPhone || completedSale.driverPhone || '',
+                    ticketNumber: completedSale.ticketNumber,
+                    plateNumber: completedSale.plateNumber,
+                    amount: completedSale.price,
+                    agentName: completedSale.agentName,
+                    dateStr: formatDateTime(completedSale.soldAt),
+                  })}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 py-3 text-xs font-black text-white hover:text-white transition active:scale-98 shadow-md cursor-pointer"
+                >
+                  <MessageSquare className="w-4 h-4 text-emerald-100" />
+                  <span>Envoyer Reçu Officiel sur WhatsApp</span>
+                </a>
+
+                {/* Bouton Partage Image par Web Share */}
+                <button
+                  type="button"
+                  onClick={handleShareReceiptImage}
+                  disabled={isGeneratingImg || !receiptImgUrl || isSharingImg}
+                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-slate-700 bg-slate-800/80 py-2 text-[11px] font-bold text-slate-200 hover:bg-slate-700 hover:text-white transition active:scale-98 disabled:opacity-50 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Partager Reçu (Image PNG mobile)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Actions Supplémentaires de Reçu */}
+            <div className="space-y-2 pt-3 border-t border-slate-800/80">
               {/* 🖨️ Imprimer le Reçu */}
               <button
                 type="button"
@@ -663,27 +721,6 @@ export const SaleFormModal: React.FC<Props> = ({
                   <span>Enregistrer l'Image</span>
                 </button>
               </div>
-
-              {/* 💬 Fallback : WhatsApp Texte classique */}
-              {completedSale.driverPhone && (
-                <a
-                  href={generateWhatsAppReceiptUrl({
-                    dialCode: '',
-                    phoneNumber: completedSale.driverPhone,
-                    ticketNumber: completedSale.ticketNumber,
-                    plateNumber: completedSale.plateNumber,
-                    amount: completedSale.price,
-                    agentName: completedSale.agentName,
-                    dateStr: formatDateTime(completedSale.soldAt),
-                  })}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1.5 w-full rounded-xl bg-slate-800/50 py-2 text-[11px] text-slate-400 hover:text-white transition border border-slate-800"
-                >
-                  <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>Envoyer aussi par message texte WhatsApp</span>
-                </a>
-              )}
 
               <div className="pt-2">
                 <button

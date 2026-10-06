@@ -261,7 +261,7 @@ export const SupabaseDataLayer = {
     // 2. Repli direct client Supabase (si l'API serveur est non joignable)
     if (supabase) {
       const cleanUsername = userData.username.trim().toLowerCase();
-      const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus.ujpaa.ci`;
+      const email = cleanUsername.includes('@') ? cleanUsername : `${cleanUsername}@portus-ujpas.online`;
 
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
         email,

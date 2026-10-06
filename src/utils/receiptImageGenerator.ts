@@ -30,9 +30,9 @@ const loadImageSafe = (src: string): Promise<HTMLImageElement | null> => {
 };
 
 /**
- * Dessine un cachet de validation vectoriel UJPAA
+ * Dessine un cachet de validation vectoriel UJPAS
  */
-function drawValidationUjpaaFallback(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
+function drawValidationUjpasFallback(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
   ctx.save();
   ctx.strokeStyle = '#0F4C3A';
   ctx.fillStyle = '#0F4C3A';
@@ -74,12 +74,12 @@ function drawValidationUjpaaFallback(ctx: CanvasRenderingContext2D, cx: number, 
   ctx.fillText('VALIDATION', cx, cy - 8);
 
   ctx.font = '900 17px Helvetica, Arial, sans-serif';
-  ctx.fillText('UJPAA', cx, cy + 10);
+  ctx.fillText('UJPAS', cx, cy + 10);
   ctx.restore();
 }
 
 /**
- * Dessine un logo vectoriel de secours UJPAA
+ * Dessine un logo vectoriel de secours UJPAS
  */
 function drawLogoFallback(ctx: CanvasRenderingContext2D, lx: number, ly: number, size: number) {
   ctx.save();
@@ -96,7 +96,7 @@ function drawLogoFallback(ctx: CanvasRenderingContext2D, lx: number, ly: number,
   ctx.font = 'bold 22px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('UJPAA', lx, ly);
+  ctx.fillText('UJPAS', lx, ly);
   ctx.restore();
 }
 
@@ -114,18 +114,18 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   // Chargement asynchrone des assets images UJPAS
   const [logoImg, stampImg] = await Promise.all([
     loadImageSafe(ORG_INFO.LOGO_PATH).then((img) => img || loadImageSafe('/logoss.jpg')),
-    loadImageSafe(ORG_INFO.STAMP_PATH).then((img) => img || loadImageSafe('/cachet-ujsrv.png')),
+    loadImageSafe(ORG_INFO.STAMP_PATH).then((img) => img || loadImageSafe('/cachet-ujpas.png')),
   ]);
 
   // 1. Fond sécurisé ivoire clair
   ctx.fillStyle = '#FBF9F3';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 2. Filigrane de sécurité officiel - CONTIENT UNIQUEMENT : UJPAA, UCRAO, CSCRAO, UCRPPLAO-CI
+  // 2. Filigrane de sécurité officiel - CONTIENT UNIQUEMENT : UJPAS, UCRAO, CSCRAO, UCRPPLAO-CI
   ctx.save();
   ctx.fillStyle = 'rgba(13, 74, 54, 0.12)';
   ctx.font = 'bold 9.5px Helvetica, Arial, sans-serif';
-  const watermarkUnit = 'UJPAA   UCRAO   CSCRAO   UCRPPLAO-CI   ';
+  const watermarkUnit = 'UJPAS   UCRAO   CSCRAO   UCRPPLAO-CI   ';
   const unitWidth = ctx.measureText(watermarkUnit).width;
   const repeatCount = Math.ceil(canvas.width / unitWidth) + 3;
   const fullRowText = watermarkUnit.repeat(repeatCount);
@@ -170,11 +170,11 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
     drawLogoFallback(ctx, 78, 90, 85);
   }
 
-  // 6. Textes d'en-tête officiels UJPAA
+  // 6. Textes d'en-tête officiels UJPAS
   ctx.textAlign = 'left';
   ctx.fillStyle = '#0D4A36';
   ctx.font = '900 21px Helvetica, Arial, sans-serif';
-  ctx.fillText("UNION DES JEUNES DU PORT AUTONOME D'ABIDJAN (UJPAA)", 140, 68);
+  ctx.fillText("UNION DES JEUNES DU PORT POUR L'ASSISTANCE ET LA SÉCURITÉ (UJPAS)", 140, 68);
 
   ctx.fillStyle = '#EA580C';
   ctx.font = 'bold 16px Helvetica, Arial, sans-serif';
@@ -323,7 +323,7 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fillStyle = '#334155';
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('SIGNATURE AGENT UJPAA', 30 + boxW / 2, boxY + 17);
+  ctx.fillText('SIGNATURE AGENT UJPAS', 30 + boxW / 2, boxY + 17);
 
   // Signature cursive bleue élégante
   ctx.save();
@@ -352,7 +352,7 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fillStyle = '#0F4C3A';
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('VALIDATION UJPAA', 340 + boxW / 2, boxY + 17);
+  ctx.fillText('VALIDATION UJPAS', 340 + boxW / 2, boxY + 17);
 
   const stampCx = 340 + boxW / 2;
   const stampCy = boxY + boxH / 2 + 8;
@@ -360,7 +360,7 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   if (stampImg) {
     ctx.drawImage(stampImg, stampCx - 36, stampCy - 36, 72, 72);
   } else {
-    drawValidationUjpaaFallback(ctx, stampCx, stampCy, 35);
+    drawValidationUjpasFallback(ctx, stampCx, stampCy, 35);
   }
 
   // =========================================================================

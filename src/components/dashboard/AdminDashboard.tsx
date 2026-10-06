@@ -402,7 +402,7 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <Layers className="w-4 h-4" />
-          <span>Tableau de Bord UJPAA</span>
+          <span>Tableau de Bord UJPAS</span>
         </button>
         <button
           onClick={() => setActiveTab('analytics')}
@@ -446,7 +446,7 @@ export const AdminDashboard: React.FC = () => {
         <div className="relative z-10">
           <div className="flex items-center gap-2">
             <span className="text-[11px] uppercase font-black tracking-wider text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
-              Supervision Générale UJPAA 🇨🇮
+              Supervision Générale UJPAS 🇨🇮
             </span>
             <span className="text-[11px] text-emerald-400 font-bold hidden sm:inline">
               Port Autonome d'Abidjan

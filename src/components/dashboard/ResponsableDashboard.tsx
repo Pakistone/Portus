@@ -191,7 +191,7 @@ export const ResponsableDashboard: React.FC = () => {
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>Tableau de Bord UJPAA</span>
+          <span>Tableau de Bord UJPAS</span>
         </button>
         <button
           onClick={() => setActiveTab('agents')}
@@ -235,7 +235,7 @@ export const ResponsableDashboard: React.FC = () => {
         <div className="relative z-10">
           <div className="flex items-center gap-2">
             <span className="text-[11px] uppercase font-black tracking-wider text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded border border-orange-500/20">
-              Espace Secteur UJPAA 🇨🇮
+              Espace Secteur UJPAS 🇨🇮
             </span>
             <span className="rounded bg-emerald-950 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
               {currentUser?.sectorName || 'Secteur Non Assigné'}

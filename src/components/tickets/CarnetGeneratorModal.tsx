@@ -332,7 +332,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 disabled={loading}
                 className="flex-1 rounded-xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 py-2.5 text-xs font-bold text-white shadow-md transition disabled:opacity-50 cursor-pointer border border-orange-400/30"
               >
-                {loading ? 'Génération...' : 'Générer le Carnet UJPAA'}
+                {loading ? 'Génération...' : 'Générer le Carnet UJPAS'}
               </button>
             </div>
           </form>

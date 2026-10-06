@@ -348,7 +348,7 @@ export const AgentDashboard: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping" />
             <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-              Guichet Vente Terrain • UJPAA 🇨🇮
+              Guichet Vente Terrain • UJPAS 🇨🇮
             </span>
           </div>
           <div className="flex items-center gap-2">
