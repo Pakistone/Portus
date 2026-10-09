@@ -26,6 +26,7 @@ import {
   BarChart3,
   ChevronUp,
   ChevronDown,
+  Printer,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -69,6 +70,7 @@ import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
 import { ExpensesModule } from '../expenses/ExpensesModule';
 import { AdminSettingsModal } from '../admin/AdminSettingsModal';
 import { AdminAnalyticsView } from './AdminAnalyticsView';
+import { AgentBadgeModal } from '../agents/AgentBadgeModal';
 
 export const AdminDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -119,6 +121,8 @@ export const AdminDashboard: React.FC = () => {
   const [fraudFilterStatus, setFraudFilterStatus] = useState<any>('ALL');
   const [advancedSearchModalOpen, setAdvancedSearchModalOpen] = useState(false);
   const [adminSettingsModalOpen, setAdminSettingsModalOpen] = useState(false);
+  const [badgeModalOpen, setBadgeModalOpen] = useState(false);
+  const [selectedBadgeAgent, setSelectedBadgeAgent] = useState<any>(undefined);
 
   useEffect(() => {
     const handleNotificationClicked = (e: Event) => {
@@ -505,6 +509,17 @@ export const AdminDashboard: React.FC = () => {
           >
             <Users className="w-4 h-4 text-blue-400" />
             <span>Équipe ({activeAgents.length + activeResponsables.length})</span>
+          </button>
+          <button
+            onClick={() => {
+              setSelectedBadgeAgent(undefined);
+              setBadgeModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 rounded-xl bg-orange-600/20 border border-orange-500/40 px-3.5 py-2 text-xs font-bold text-orange-300 hover:bg-orange-600/30 transition cursor-pointer shadow-xs"
+            title="Créer et imprimer les grands badges de cou professionnels (85 × 120 mm)"
+          >
+            <Printer className="w-4 h-4 text-orange-400" />
+            <span>Badges Pro (85×120)</span>
           </button>
           <button
             onClick={() => setAdvancedSearchModalOpen(true)}
@@ -1195,6 +1210,16 @@ export const AdminDashboard: React.FC = () => {
                       <td className="py-2.5 px-3 text-right whitespace-nowrap font-sans">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            onClick={() => {
+                              setSelectedBadgeAgent(ag);
+                              setBadgeModalOpen(true);
+                            }}
+                            className="rounded-lg bg-orange-600/20 border border-orange-500/30 px-2 py-1 text-[11px] font-bold text-orange-300 hover:bg-orange-600/30 transition cursor-pointer"
+                            title="Éditer et imprimer le badge professionnel 85×120 mm"
+                          >
+                            Badge
+                          </button>
+                          <button
                             onClick={() => handleOpenVentesForAgent(ag.id)}
                             className="rounded-lg bg-slate-800 border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:text-white hover:bg-slate-700 transition cursor-pointer"
                           >
@@ -1290,6 +1315,14 @@ export const AdminDashboard: React.FC = () => {
       <AdminSettingsModal
         isOpen={adminSettingsModalOpen}
         onClose={() => setAdminSettingsModalOpen(false)}
+      />
+      <AgentBadgeModal
+        isOpen={badgeModalOpen}
+        onClose={() => {
+          setBadgeModalOpen(false);
+          setSelectedBadgeAgent(undefined);
+        }}
+        selectedAgent={selectedBadgeAgent}
       />
         </div>
       )}

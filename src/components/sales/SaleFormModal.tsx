@@ -23,6 +23,7 @@ import {
   Coins,
   QrCode,
   Wallet,
+  CreditCard,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { useData } from '../../context/DataContext';
@@ -97,8 +98,8 @@ export const SaleFormModal: React.FC<Props> = ({
   const [anprSuccessMsg, setAnprSuccessMsg] = useState<string | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
-  // States pour les paiements Mobile Money (Wave, Orange, MTN)
-  const [paymentMethod, setPaymentMethod] = useState<'ESPECES' | 'MOBILE_MONEY'>('ESPECES');
+  // States pour les paiements Mobile Money (Wave, Orange, MTN) et Bons d'abonnement
+  const [paymentMethod, setPaymentMethod] = useState<'ESPECES' | 'MOBILE_MONEY' | 'BON_ABONNEMENT'>('ESPECES');
   const [momoProvider, setMomoProvider] = useState<'WAVE' | 'ORANGE' | 'MTN'>('WAVE');
   const [paymentReference, setPaymentReference] = useState('');
   const [momoQrUrl, setMomoQrUrl] = useState<string | null>(null);
@@ -465,8 +466,8 @@ export const SaleFormModal: React.FC<Props> = ({
   };
 
   const executeSale = async (overrideOldTicketId?: string) => {
-    if (paymentMethod === 'MOBILE_MONEY' && !paymentReference.trim()) {
-      setError('Une référence de transaction Mobile Money (ou numéro payeur) est obligatoire pour les encaissements mobiles.');
+    if ((paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT') && !paymentReference.trim()) {
+      setError('Une référence de transaction ou numéro de bon est obligatoire pour ce mode de règlement.');
       return;
     }
 
@@ -480,14 +481,23 @@ export const SaleFormModal: React.FC<Props> = ({
           : `${selectedDialCode} ${cleanPhone}`
         : undefined;
 
+      let finalPaymentMethod: any = 'ESPECES';
+      if (paymentMethod === 'MOBILE_MONEY') {
+        if (momoProvider === 'WAVE') finalPaymentMethod = 'WAVE';
+        else if (momoProvider === 'ORANGE') finalPaymentMethod = 'ORANGE_MONEY';
+        else if (momoProvider === 'MTN') finalPaymentMethod = 'MTN_MOMO';
+      } else if (paymentMethod === 'BON_ABONNEMENT') {
+        finalPaymentMethod = 'BON_ABONNEMENT';
+      }
+
       const sale = await sellTicket({
         ticketId: selectedTicketId,
         plateNumber: plateInput,
         driverPhone: finalDriverPhone,
         driverName: driverNameInput.trim() || undefined,
         overrideOldTicketId,
-        paymentMethod,
-        paymentReference: paymentMethod === 'MOBILE_MONEY' ? `${momoProvider}-${paymentReference.trim().toUpperCase()}` : undefined,
+        paymentMethod: finalPaymentMethod,
+        paymentReference: paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT' ? paymentReference.trim().toUpperCase() : undefined,
       });
 
       setCompletedSale(sale);
@@ -974,32 +984,62 @@ export const SaleFormModal: React.FC<Props> = ({
                 <label className="block text-xs font-semibold text-slate-300">
                   Mode d'Encaissement du Ticket <span className="text-rose-400">*</span>
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('ESPECES')}
-                    className={`flex items-center justify-center gap-2 rounded-xl py-3 px-4 border text-xs font-bold transition-all ${
+                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
                       paymentMethod === 'ESPECES'
                         ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
                         : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
                     }`}
                   >
-                    <Coins className="w-4 h-4" />
-                    <span>Espèces (Cash)</span>
+                    <Coins className="w-3.5 h-3.5" />
+                    <span>Espèces</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('MOBILE_MONEY')}
-                    className={`flex items-center justify-center gap-2 rounded-xl py-3 px-4 border text-xs font-bold transition-all ${
+                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
                       paymentMethod === 'MOBILE_MONEY'
                         ? 'border-blue-500 bg-blue-500/10 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.15)]'
                         : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
                     }`}
                   >
-                    <Smartphone className="w-4 h-4" />
+                    <Smartphone className="w-3.5 h-3.5" />
                     <span>Mobile Money</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('BON_ABONNEMENT')}
+                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
+                      paymentMethod === 'BON_ABONNEMENT'
+                        ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+                        : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Bon Flotte</span>
+                  </button>
                 </div>
+
+                {paymentMethod === 'BON_ABONNEMENT' && (
+                  <div className="rounded-2xl border border-amber-500/20 bg-slate-950/80 p-4 space-y-2 mt-3 animate-fadeIn">
+                    <label className="block text-[11px] font-bold text-amber-400 uppercase tracking-wider">
+                      Référence Compte Flotte / Bon
+                    </label>
+                    <input
+                      type="text"
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                      placeholder="EX: FLEET-BOLLORE-2026"
+                      className="w-full rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs font-semibold text-slate-100 outline-none focus:border-amber-500 transition-all uppercase"
+                    />
+                    <p className="text-[10px] text-slate-500">
+                      Veuillez renseigner le code d'abonnement ou le numéro de bon validé avec le Trésorier Général.
+                    </p>
+                  </div>
+                )}
 
                 {paymentMethod === 'MOBILE_MONEY' && (
                   <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-4 animate-fadeIn">

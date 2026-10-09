@@ -191,7 +191,7 @@ export interface Sale {
   syncedAt?: string; // Date/heure réelle de synchronisation
   syncStatus: 'PENDING_SYNC' | 'SYNCED';
   price: number; // 5000 FCFA
-  paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+  paymentMethod?: PortusPaymentMethod;
   paymentReference?: string;
   coveredByRemiseId?: string;
 }
@@ -555,3 +555,73 @@ export interface QRVerificationLog {
   location?: string;
   verifiedAt: string;
 }
+
+// --------------------------------------------------------------------------
+// PAIEMENTS MOBILE MONEY, SOS, LITIGES ET PLANNING DES BRIGADES
+// --------------------------------------------------------------------------
+
+export type PortusPaymentMethod = 'ESPECES' | 'WAVE' | 'ORANGE_MONEY' | 'MTN_MOMO' | 'BON_ABONNEMENT' | 'MOBILE_MONEY' | 'AUTRE';
+
+export type SOSAlertStatus = 'ACTIVE' | 'RESOLU';
+
+export interface SOSAlert {
+  id: string;
+  agentId: string;
+  agentName: string;
+  agentRole: Role;
+  sectorId?: string;
+  sectorName?: string;
+  latitude: number | null;
+  longitude: number | null;
+  alertedAt: string;
+  status: SOSAlertStatus;
+  reason?: string;
+  resolvedBy?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+  resolutionNotes?: string;
+}
+
+export type LitigeStatus = 'OUVERT' | 'EN_COURS' | 'RESOLU' | 'REJETE';
+
+export interface LitigeChauffeur {
+  id: string;
+  plateNumber: string;
+  driverPhone?: string;
+  driverName?: string;
+  ticketNumber?: string;
+  reason: 'TICKET_DEJA_PAYE' | 'TICKET_PERDU' | 'ERREUR_IMMATRICULATION' | 'AUTRE';
+  description: string;
+  status: LitigeStatus;
+  reportedBy: string;
+  reportedByName: string;
+  reportedAt: string;
+  decisionNote?: string;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type BrigadeType = 'MATIN' | 'SOIR' | 'NUIT';
+export type SectorType = 'VRIDI_PORT' | 'CANAL' | 'ZI' | 'SIR';
+
+export interface BrigadeAssignment {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: Role;
+  brigade: BrigadeType;
+  sector: SectorType;
+  sectorName: string;
+  shiftDate: string; // Format YYYY-MM-DD
+  checkInAt?: string;
+  checkInApprovedBy?: string;
+  checkInApprovedByName?: string;
+  checkOutAt?: string;
+  notes?: string;
+  status: 'PLANIFIE' | 'PRESENT' | 'ABSENT' | 'TERMINE';
+  createdAt: string;
+}
+

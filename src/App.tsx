@@ -25,6 +25,7 @@ import { TicketTimelineModal } from './components/tickets/TicketTimelineModal';
 import { PortusAssistantModal } from './components/assistant/PortusAssistantModal';
 import { ExpensesModule } from './components/expenses/ExpensesModule';
 import { RemisesListModal } from './components/remises/RemisesListModal';
+import { AgentBadgeModal } from './components/agents/AgentBadgeModal';
 
 const AppContent: React.FC = () => {
   const { currentUser } = useAuth();
@@ -44,6 +45,7 @@ const AppContent: React.FC = () => {
   const [timelineTicketNumber, setTimelineTicketNumber] = useState<string | null>(null);
   const [expensesModalOpen, setExpensesModalOpen] = useState(false);
   const [remisesModalOpen, setRemisesModalOpen] = useState(false);
+  const [badgeModalOpen, setBadgeModalOpen] = useState(false);
 
   // Écoute de l'événement système pour afficher la chronologie d'un ticket spécifique
   useEffect(() => {
@@ -111,6 +113,7 @@ const AppContent: React.FC = () => {
           setTimelineTicketNumber(null);
           setTimelineModalOpen(true);
         }}
+        onOpenBadge={() => setBadgeModalOpen(true)}
       />
 
       {/* Contenu principal selon le rôle */}
@@ -174,6 +177,10 @@ const AppContent: React.FC = () => {
       <RemisesListModal
         isOpen={remisesModalOpen}
         onClose={() => setRemisesModalOpen(false)}
+      />
+      <AgentBadgeModal
+        isOpen={badgeModalOpen}
+        onClose={() => setBadgeModalOpen(false)}
       />
     </div>
   );

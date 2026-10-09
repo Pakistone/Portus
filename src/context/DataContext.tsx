@@ -26,6 +26,13 @@ import type {
   Vehicle,
   DailyClosing,
   TicketReprint,
+  SOSAlert,
+  LitigeChauffeur,
+  BrigadeAssignment,
+  LitigeStatus,
+  BrigadeType,
+  SectorType,
+  PortusPaymentMethod,
 } from '../types';
 import {
   TICKET_PRICE_FCFA,
@@ -105,9 +112,36 @@ interface DataContextType {
   dailyClosings: DailyClosing[];
   vehicles: Vehicle[];
   ticketReprints: TicketReprint[];
+  sosAlerts: SOSAlert[];
+  litigesChauffeurs: LitigeChauffeur[];
+  brigadeAssignments: BrigadeAssignment[];
   sectors: typeof DEFAULT_SECTORS;
   ticketPrice: number;
   updateTicketPrice: (newPrice: number) => Promise<void>;
+
+  // Actions SOS, Litiges, Plannings
+  resolveSOSAlert: (sosId: string, notes: string) => Promise<void>;
+  createLitige: (params: {
+    plateNumber: string;
+    driverPhone?: string;
+    driverName?: string;
+    ticketNumber?: string;
+    reason: 'TICKET_DEJA_PAYE' | 'TICKET_PERDU' | 'ERREUR_IMMATRICULATION' | 'AUTRE';
+    description: string;
+  }) => Promise<LitigeChauffeur>;
+  updateLitigeStatus: (litigeId: string, status: LitigeStatus, decisionNote: string) => Promise<LitigeChauffeur>;
+  createBrigadeAssignment: (params: {
+    userId: string;
+    userName: string;
+    userRole: Role;
+    brigade: BrigadeType;
+    sector: SectorType;
+    sectorName: string;
+    shiftDate: string;
+    notes?: string;
+  }) => Promise<BrigadeAssignment>;
+  checkInBrigade: (assignmentId: string) => Promise<void>;
+  checkOutBrigade: (assignmentId: string, notes?: string) => Promise<void>;
 
   // Actions Dépenses
   createExpense: (params: {
@@ -216,7 +250,7 @@ interface DataContextType {
     driverPhone?: string;
     driverName?: string;
     overrideOldTicketId?: string;
-    paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+    paymentMethod?: PortusPaymentMethod;
     paymentReference?: string;
   }) => Promise<Sale>;
   getAgentStats: (agentId: string) => {
@@ -296,6 +330,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [dailyClosings, setDailyClosings] = useState<DailyClosing[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [ticketReprints, setTicketReprints] = useState<TicketReprint[]>([]);
+  const [sosAlerts, setSosAlerts] = useState<SOSAlert[]>([]);
+  const [litigesChauffeurs, setLitigesChauffeurs] = useState<LitigeChauffeur[]>([]);
+  const [brigadeAssignments, setBrigadeAssignments] = useState<BrigadeAssignment[]>([]);
 
   // Alertes Realtime Sécurité Routière
   const [latestRealtimeIncident, setLatestRealtimeIncident] = useState<FraudReport | null>(null);
@@ -621,6 +658,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         allReprints = await db.getAll('ticket_reprints');
       }
       setTicketReprints(allReprints);
+
+      let allSos: SOSAlert[] = [];
+      if (db.objectStoreNames.contains('sos_alerts')) {
+        allSos = await db.getAll('sos_alerts');
+      }
+      setSosAlerts(allSos.sort((a, b) => b.alertedAt.localeCompare(a.alertedAt)));
+
+      let allLitiges: LitigeChauffeur[] = [];
+      if (db.objectStoreNames.contains('litiges_chauffeurs')) {
+        allLitiges = await db.getAll('litiges_chauffeurs');
+      }
+      setLitigesChauffeurs(allLitiges.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+
+      let allPlannings: BrigadeAssignment[] = [];
+      if (db.objectStoreNames.contains('brigades_plannings')) {
+        allPlannings = await db.getAll('brigades_plannings');
+      }
+      setBrigadeAssignments(allPlannings.sort((a, b) => b.shiftDate.localeCompare(a.shiftDate)));
 
       // Compter les ventes, contrôles et signalements de fraude en attente de synchro
       const pendingSales = allSales.filter((s) => s.syncStatus === 'PENDING_SYNC');
@@ -1143,6 +1198,192 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       await refreshData();
       return sosReport;
+    },
+    [currentUser, refreshData]
+  );
+
+  const resolveSOSAlert = useCallback(
+    async (sosId: string, notes: string) => {
+      const db = await getDB();
+      const report = await db.get('fraud_reports', sosId);
+      if (report) {
+        report.status = 'TRAITE';
+        report.adminDecisionNote = notes;
+        report.adminDecisionAt = new Date().toISOString();
+        report.adminDecisionBy = currentUser?.id;
+        report.adminDecisionByName = currentUser?.fullName;
+        await db.put('fraud_reports', report);
+      }
+      
+      const localSos = await db.get('sos_alerts', sosId);
+      if (localSos) {
+        localSos.status = 'RESOLU';
+        localSos.resolvedAt = new Date().toISOString();
+        localSos.resolvedBy = currentUser?.id;
+        localSos.resolvedByName = currentUser?.fullName;
+        localSos.resolutionNotes = notes;
+        await db.put('sos_alerts', localSos);
+      }
+
+      await recordAudit(
+        'FRAUD_STATUS_UPDATED',
+        'SOSAlert',
+        sosId,
+        `Résolution de l'alerte SOS par ${currentUser?.fullName} : ${notes}`
+      );
+      await refreshData();
+    },
+    [currentUser, refreshData]
+  );
+
+  const createLitige = useCallback(
+    async (params: {
+      plateNumber: string;
+      driverPhone?: string;
+      driverName?: string;
+      ticketNumber?: string;
+      reason: 'TICKET_DEJA_PAYE' | 'TICKET_PERDU' | 'ERREUR_IMMATRICULATION' | 'AUTRE';
+      description: string;
+    }) => {
+      const db = await getDB();
+      const id = generateUUID();
+      const now = new Date().toISOString();
+      const litige: LitigeChauffeur = {
+        id,
+        plateNumber: normalizePlate(params.plateNumber),
+        driverPhone: params.driverPhone ? normalizePhone(params.driverPhone) : undefined,
+        driverName: params.driverName,
+        ticketNumber: params.ticketNumber,
+        reason: params.reason,
+        description: params.description,
+        status: 'OUVERT',
+        reportedBy: currentUser?.id || 'system',
+        reportedByName: currentUser?.fullName || 'Agent PORTUS',
+        reportedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await db.put('litiges_chauffeurs', litige);
+      await recordAudit(
+        'SECURITY_ALERT',
+        'LitigeChauffeur',
+        id,
+        `Nouveau litige chauffeur enregistré pour plaque ${litige.plateNumber} par ${currentUser?.fullName}`
+      );
+      await refreshData();
+      return litige;
+    },
+    [currentUser, refreshData]
+  );
+
+  const updateLitigeStatus = useCallback(
+    async (litigeId: string, status: LitigeStatus, decisionNote: string) => {
+      const db = await getDB();
+      const litige = await db.get('litiges_chauffeurs', litigeId);
+      if (!litige) throw new Error('Litige introuvable');
+
+      litige.status = status;
+      litige.decisionNote = decisionNote;
+      litige.decidedBy = currentUser?.id;
+      litige.decidedByName = currentUser?.fullName;
+      litige.decidedAt = new Date().toISOString();
+      litige.updatedAt = new Date().toISOString();
+
+      await db.put('litiges_chauffeurs', litige);
+      await recordAudit(
+        'SECURITY_ALERT',
+        'LitigeChauffeur',
+        litigeId,
+        `Statut du litige chauffeur ${litigeId} modifié en ${status} par ${currentUser?.fullName} : ${decisionNote}`
+      );
+      await refreshData();
+      return litige;
+    },
+    [currentUser, refreshData]
+  );
+
+  const createBrigadeAssignment = useCallback(
+    async (params: {
+      userId: string;
+      userName: string;
+      userRole: Role;
+      brigade: BrigadeType;
+      sector: SectorType;
+      sectorName: string;
+      shiftDate: string;
+      notes?: string;
+    }) => {
+      const db = await getDB();
+      const id = generateUUID();
+      const assignment: BrigadeAssignment = {
+        id,
+        userId: params.userId,
+        userName: params.userName,
+        userRole: params.userRole,
+        brigade: params.brigade,
+        sector: params.sector,
+        sectorName: params.sectorName,
+        shiftDate: params.shiftDate,
+        notes: params.notes,
+        status: 'PLANIFIE',
+        createdAt: new Date().toISOString(),
+      };
+
+      await db.put('brigades_plannings', assignment);
+      await recordAudit(
+        'USER_UPDATED',
+        'BrigadeAssignment',
+        id,
+        `Planification de l'agent ${params.userName} pour la brigade ${params.brigade} du ${params.shiftDate}`
+      );
+      await refreshData();
+      return assignment;
+    },
+    [currentUser, refreshData]
+  );
+
+  const checkInBrigade = useCallback(
+    async (assignmentId: string) => {
+      const db = await getDB();
+      const assignment = await db.get('brigades_plannings', assignmentId);
+      if (!assignment) throw new Error('Planification introuvable');
+
+      assignment.status = 'PRESENT';
+      assignment.checkInAt = new Date().toISOString();
+      assignment.checkInApprovedBy = currentUser?.id;
+      assignment.checkInApprovedByName = currentUser?.fullName;
+
+      await db.put('brigades_plannings', assignment);
+      await recordAudit(
+        'USER_UPDATED',
+        'BrigadeAssignment',
+        assignmentId,
+        `Prise de service validée pour ${assignment.userName} à la brigade ${assignment.brigade}`
+      );
+      await refreshData();
+    },
+    [currentUser, refreshData]
+  );
+
+  const checkOutBrigade = useCallback(
+    async (assignmentId: string, notes?: string) => {
+      const db = await getDB();
+      const assignment = await db.get('brigades_plannings', assignmentId);
+      if (!assignment) throw new Error('Planification introuvable');
+
+      assignment.status = 'TERMINE';
+      assignment.checkOutAt = new Date().toISOString();
+      if (notes) assignment.notes = notes;
+
+      await db.put('brigades_plannings', assignment);
+      await recordAudit(
+        'USER_UPDATED',
+        'BrigadeAssignment',
+        assignmentId,
+        `Fin de service enregistrée pour ${assignment.userName} de la brigade ${assignment.brigade}`
+      );
+      await refreshData();
     },
     [currentUser, refreshData]
   );
@@ -3063,7 +3304,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     driverPhone?: string;
     driverName?: string;
     overrideOldTicketId?: string;
-    paymentMethod?: 'ESPECES' | 'MOBILE_MONEY' | 'AUTRE';
+    paymentMethod?: PortusPaymentMethod;
     paymentReference?: string;
   }): Promise<Sale> => {
     const db = await getDB();
@@ -3864,6 +4105,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         dailyClosings,
         vehicles,
         ticketReprints,
+        sosAlerts,
+        litigesChauffeurs,
+        brigadeAssignments,
         sectors: DEFAULT_SECTORS,
         ticketPrice,
         updateTicketPrice,
@@ -3918,6 +4162,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         isRlsPermissionIssue,
         lastRlsError,
         triggerSOSAlert,
+        resolveSOSAlert,
+        createLitige,
+        updateLitigeStatus,
+        createBrigadeAssignment,
+        checkInBrigade,
+        checkOutBrigade,
       }}
     >
       {children}

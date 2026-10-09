@@ -17,6 +17,9 @@ import type {
   LoginAttempt,
   TicketAssignment,
   NotificationRecord,
+  SOSAlert,
+  LitigeChauffeur,
+  BrigadeAssignment,
 } from '../types';
 
 interface PortusDB extends DBSchema {
@@ -118,10 +121,25 @@ interface PortusDB extends DBSchema {
     key: string;
     value: any;
   };
+  sos_alerts: {
+    key: string;
+    value: SOSAlert;
+    indexes: { 'by-agent': string; 'by-status': string; 'by-alerted-at': string };
+  };
+  litiges_chauffeurs: {
+    key: string;
+    value: LitigeChauffeur;
+    indexes: { 'by-plate': string; 'by-status': string; 'by-reported-by': string };
+  };
+  brigades_plannings: {
+    key: string;
+    value: BrigadeAssignment;
+    indexes: { 'by-user': string; 'by-brigade': string; 'by-shift-date': string };
+  };
 }
 
 const DB_NAME = 'portus_ujsrv_db_v1';
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 let dbPromise: Promise<IDBPDatabase<PortusDB>> | null = null;
 
@@ -306,6 +324,30 @@ export async function getDB(): Promise<IDBPDatabase<PortusDB>> {
           const reprintStore = db.createObjectStore('ticket_reprints', { keyPath: 'id' });
           reprintStore.createIndex('by-ticket', 'ticketId');
           reprintStore.createIndex('by-requester', 'requestedBy');
+        }
+
+        // SOS Alerts store
+        if (!db.objectStoreNames.contains('sos_alerts')) {
+          const sosStore = db.createObjectStore('sos_alerts', { keyPath: 'id' });
+          sosStore.createIndex('by-agent', 'agentId');
+          sosStore.createIndex('by-status', 'status');
+          sosStore.createIndex('by-alerted-at', 'alertedAt');
+        }
+
+        // Litiges Chauffeurs store
+        if (!db.objectStoreNames.contains('litiges_chauffeurs')) {
+          const litigeStore = db.createObjectStore('litiges_chauffeurs', { keyPath: 'id' });
+          litigeStore.createIndex('by-plate', 'plateNumber', { unique: false });
+          litigeStore.createIndex('by-status', 'status');
+          litigeStore.createIndex('by-reported-by', 'reportedBy');
+        }
+
+        // Brigades Plannings store
+        if (!db.objectStoreNames.contains('brigades_plannings')) {
+          const planningStore = db.createObjectStore('brigades_plannings', { keyPath: 'id' });
+          planningStore.createIndex('by-user', 'userId');
+          planningStore.createIndex('by-brigade', 'brigade');
+          planningStore.createIndex('by-shift-date', 'shiftDate');
         }
 
         // Settings / meta

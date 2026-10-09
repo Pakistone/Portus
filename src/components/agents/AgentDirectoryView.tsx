@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import { Users, Phone, MapPin, Clock, Shield, AlertCircle } from 'lucide-react';
+import { Users, Phone, MapPin, Clock, Shield, AlertCircle, Printer } from 'lucide-react';
 import { formatFCFA, formatDateTime } from '../../utils/normalization';
+import { AgentBadgeModal } from './AgentBadgeModal';
 
 interface AgentDirectoryViewProps {
   viewMode?: 'CONTROLEUR' | 'RESPONSABLE' | 'ADMIN';
@@ -11,6 +12,9 @@ interface AgentDirectoryViewProps {
 export const AgentDirectoryView: React.FC<AgentDirectoryViewProps> = ({ viewMode = 'ADMIN' }) => {
   const { currentUser } = useAuth();
   const { users, sales, tickets, remises } = useData();
+
+  const [badgeModalOpen, setBadgeModalOpen] = useState(false);
+  const [selectedAgentForBadge, setSelectedAgentForBadge] = useState<any>(null);
 
   // Liste de tous les agents (rôle AGENT)
   const agents = useMemo(() => {
@@ -196,10 +200,31 @@ export const AgentDirectoryView: React.FC<AgentDirectoryViewProps> = ({ viewMode
                   )}
                 </div>
               )}
+              {viewMode !== 'CONTROLEUR' && (
+                <button
+                  onClick={() => {
+                    setSelectedAgentForBadge(agent);
+                    setBadgeModalOpen(true);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-orange-600/20 border border-orange-500/30 px-3 py-2 text-xs font-bold text-orange-400 hover:bg-orange-600/30 transition mt-3"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Éditer &amp; Imprimer Badge</span>
+                </button>
+              )}
             </div>
           );
         })}
       </div>
+
+      <AgentBadgeModal
+        isOpen={badgeModalOpen}
+        onClose={() => {
+          setBadgeModalOpen(false);
+          setSelectedAgentForBadge(null);
+        }}
+        selectedAgent={selectedAgentForBadge}
+      />
     </div>
   );
 };

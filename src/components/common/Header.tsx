@@ -20,6 +20,7 @@ import {
   Shield,
   KeyRound,
   CloudUpload,
+  Printer,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -40,6 +41,7 @@ interface HeaderProps {
   onOpenVehicles?: () => void;
   onOpenAssistant?: () => void;
   onOpenTimeline?: () => void;
+  onOpenBadge?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -53,6 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenVehicles,
   onOpenAssistant,
   onOpenTimeline,
+  onOpenBadge,
 }) => {
   const { currentUser, logout } = useAuth();
   const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase, isRlsPermissionIssue, lastRlsError, triggerSOSAlert } = useData();
@@ -281,6 +284,18 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Stamp className="w-3.5 h-3.5 text-emerald-400" />
               <span>Modèle & Cachet UJPAS</span>
+            </button>
+          )}
+
+          {/* Bouton Badges Professionnels de Cou (85x120 mm) */}
+          {onOpenBadge && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE') && (
+            <button
+              onClick={onOpenBadge}
+              className="flex items-center gap-1.5 rounded-xl bg-orange-600/20 border border-orange-500/40 px-3 py-1.5 text-xs font-bold text-orange-300 hover:bg-orange-600/30 hover:border-orange-400 transition cursor-pointer shadow-xs"
+              title="Générateur de Badges Professionnels 85×120 mm avec QR Code et Photo"
+            >
+              <Printer className="w-3.5 h-3.5 text-orange-400" />
+              <span>Badges Pro (85×120)</span>
             </button>
           )}
 
@@ -598,6 +613,20 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Building2 className="w-4 h-4 text-emerald-400" />
               <span>Centre Opérations & Caisse Journalière</span>
+            </button>
+          )}
+
+          {/* Badges Pro en Mobile */}
+          {onOpenBadge && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE') && (
+            <button
+              onClick={() => {
+                onOpenBadge();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-orange-600/20 border border-orange-500/40 p-2.5 text-xs font-bold text-orange-300 hover:bg-orange-600/30 transition cursor-pointer"
+            >
+              <Printer className="w-4 h-4 text-orange-400" />
+              <span>Badges Professionnels (85 × 120 mm)</span>
             </button>
           )}
 
