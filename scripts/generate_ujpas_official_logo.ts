@@ -160,6 +160,15 @@ export function buildOfficialUjpasLogoSVG(): string {
 }
 
 async function run() {
+  // SÉCURITÉ ABSOLUE (S-07 & Directives projet) :
+  // Les fichiers officiels public/logo-ujpas.png et public/logoss.jpg sont protégés et ne doivent JAMAIS être écrasés.
+  const forceArg = process.argv.includes('--force-overwrite-protected-assets');
+  if (!forceArg) {
+    console.error('⛔ ERREUR DE SÉCURITÉ : Les logos officiels de l’UJPAS (public/logo-ujpas.png, public/logoss.jpg) sont protégés contre tout écrasement accidentel.');
+    console.error('Ce script a été désactivé par mesure de protection de l’intégrité graphique.');
+    process.exit(1);
+  }
+
   console.log('🇨🇮 Démarrage de la mise à jour complète du logo officiel UJPAS...');
 
   const svgContent = buildOfficialUjpasLogoSVG();

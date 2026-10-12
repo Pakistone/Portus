@@ -114,7 +114,7 @@ Dans votre tableau de bord **Vercel** (`Settings > Environment Variables`), assu
 | `VITE_SUPABASE_ANON_KEY` | `sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727` | Clé d'API publique Supabase |
 | `VITE_SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727` | Alias clé d'API publique |
 | `SUPABASE_SERVICE_ROLE_KEY` | *(Votre clé secrète service_role de Supabase)* | Clé secrète pour les fonctions d'administration Serverless |
-| `PORTUS_HMAC_SECRET` | `portus_production_master_hmac_secret_2026_ujsrv_secure` | Clé de signature HMAC des QR codes |
+| `PORTUS_HMAC_SECRET` | *(Clé aléatoire de 64 hex générée via `openssl rand -hex 32`)* | Clé secrète maître HMAC-SHA256 pour signature inviolable des QR codes (>= 32 caractères) |
 
 *Astuce : Vous trouverez votre `service_role key` dans Supabase sous : **Project Settings > API > Project API keys > `service_role` (secret)**.*
 

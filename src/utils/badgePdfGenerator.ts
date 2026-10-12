@@ -66,9 +66,13 @@ export async function generateAgentBadgePDF(agent: BadgeParams): Promise<Blob> {
     format: 'a4',
   });
 
-  // Load Official Logo and Administrative Stamp
-  const logoDataUrl = await convertImgToDataUrl('/public/logo-ujpas.png').catch(() => '');
-  const stampDataUrl = await convertImgToDataUrl('/public/cachet-ujpas.png').catch(() => '');
+  // Load Official Logo and Administrative Stamp (Support both /logo-ujpas.png and /public/logo-ujpas.png)
+  const logoDataUrl = await (convertImgToDataUrl('/logo-ujpas.png')
+    .then((res) => res || convertImgToDataUrl('/public/logo-ujpas.png'))
+    .catch(() => ''));
+  const stampDataUrl = await (convertImgToDataUrl('/cachet-ujpas.png')
+    .then((res) => res || convertImgToDataUrl('/public/cachet-ujpas.png'))
+    .catch(() => ''));
 
   // Generate QR Code for Agent Authentication
   // Format: UJPAS|AGENT|matricule|nom|role|annee
@@ -181,7 +185,8 @@ export async function generateAgentBadgePDF(agent: BadgeParams): Promise<Blob> {
   // Embedded Official Logo (Overlayed on upper corner of the photo beautifully or side)
   if (logoDataUrl) {
     try {
-      doc.addImage(logoDataUrl, 'PNG', rx + 6, ry + 28, 12, 12);
+      const logoFmt = logoDataUrl.includes('image/jpeg') || logoDataUrl.includes('image/jpg') ? 'JPEG' : 'PNG';
+      doc.addImage(logoDataUrl, logoFmt, rx + 6, ry + 28, 12, 12);
     } catch (e) {
       console.warn('Logo integration on badge failed:', e);
     }

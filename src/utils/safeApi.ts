@@ -14,7 +14,52 @@ export interface SafeFetchResult<T = any> {
 }
 
 /**
+ * Récupère le jeton d'authentification valide en cache de session ou local.
+ */
+export function getStoredAuthToken(): string | null {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const s = sessionStorage.getItem('portus_access_token');
+      if (s && s.trim()) return s.trim();
+    }
+    if (typeof localStorage !== 'undefined') {
+      const l = localStorage.getItem('portus_access_token');
+      if (l && l.trim()) return l.trim();
+      // Recherche éventuelle de jeton Supabase Auth dans localStorage
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('auth-token'))) {
+          try {
+            const parsed = JSON.parse(localStorage.getItem(key) || '{}');
+            if (parsed.access_token) return parsed.access_token;
+          } catch {}
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Génère les headers par défaut incluant Authorization Bearer si disponible.
+ */
+export function getAuthHeaders(customHeaders: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...customHeaders,
+  };
+  if (!headers['Authorization']) {
+    const token = getStoredAuthToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+  return headers;
+}
+
+/**
  * Safely fetches a URL and parses JSON only if the response has an application/json content-type.
+ * Automatically injects the Authorization Bearer header if a valid session token is available.
  * If Vercel or any proxy returns a 404/500 HTML page (e.g. "The page could not be found"),
  * it gracefully returns ok: false, data: null without crashing or throwing SyntaxError.
  */
@@ -23,7 +68,21 @@ export async function safeFetchJson<T = any>(
   init?: RequestInit
 ): Promise<SafeFetchResult<T>> {
   try {
-    const res = await fetch(input, init);
+    // Normalisation des en-têtes avec injection automatique du jeton Bearer
+    const headers = new Headers(init?.headers || {});
+    if (!headers.has('Authorization')) {
+      const token = getStoredAuthToken();
+      if (token) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+    }
+
+    const modifiedInit: RequestInit = {
+      ...init,
+      headers,
+    };
+
+    const res = await fetch(input, modifiedInit);
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const isJson = contentType.includes('application/json');
 

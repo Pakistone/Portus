@@ -561,13 +561,18 @@ export const SupabaseDataLayer = {
   async insertCarnet(carnet: Carnet, tickets?: Ticket[]): Promise<boolean> {
     // 1. Envoi prioritaire via le proxy serveur autoritaire
     try {
-      const { ok } = await safeFetchJson('/api/carnets', {
+      const res = await safeFetchJson<{ success?: boolean; carnetId?: string; error?: string }>('/api/carnets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ carnet, tickets: tickets || [] }),
       });
-      if (ok) return true;
-    } catch {}
+      if (res.ok) {
+        return true;
+      }
+      console.warn('[SupabaseDataLayer] Échec insertion via /api/carnets, bascule sur client Supabase direct:', res.error);
+    } catch (err: any) {
+      console.warn('[SupabaseDataLayer] Exception insertion carnet backend:', err?.message);
+    }
 
     // 2. Repli client Supabase
     const supabase = getSupabase();

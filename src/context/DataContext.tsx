@@ -60,6 +60,7 @@ import { useOnlineStatus } from '../components/pwa/usePWAInstall';
 import { SupabaseDataLayer, isRlsPermissionIssueDetected, getLastRlsErrorMessage } from '../db/supabaseService';
 import { safeFetchJson } from '../utils/safeApi';
 import { playIncidentAlertSound } from '../utils/audioAlert';
+import { showToast } from '../components/common/ToastNotification';
 import {
   buildTicketQRPayload,
   parseTicketQRPayload,
@@ -223,6 +224,7 @@ interface DataContextType {
   }) => Promise<{ carnet: Carnet; tickets: Ticket[] }>;
   assignCarnetToResponsable: (carnetId: string, responsableId: string) => Promise<Carnet>;
   cancelCarnet: (carnetId: string, reason: string) => Promise<Carnet>;
+  deleteCarnet: (carnetId: string) => Promise<void>;
   updateTicketStatus: (ticketId: string, newStatus: TicketStatus, reason?: string) => Promise<Ticket>;
   cancelTicket: (ticketId: string, reason: string) => Promise<void>;
   correctRemiseAdmin: (
@@ -300,8 +302,36 @@ interface DataContextType {
   ) => Promise<FraudReport>;
 
   // Rechargement manuel des données
-  refreshData: () => Promise<void>;
+  refreshData: (forceSync?: boolean) => Promise<void>;
   triggerSOSAlert: (message?: string) => Promise<FraudReport>;
+}
+
+let lastSyncTime = 0;
+
+const DELETED_CARNETS_STORAGE_KEY = 'portus_deleted_carnet_ids';
+
+export function getStoredDeletedCarnetIds(): Set<string> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(DELETED_CARNETS_STORAGE_KEY);
+      if (stored) {
+        const arr = JSON.parse(stored);
+        if (Array.isArray(arr)) return new Set(arr);
+      }
+    }
+  } catch {}
+  return new Set();
+}
+
+export function recordDeletedCarnet(id: string, carnetNumber?: string) {
+  try {
+    const set = getStoredDeletedCarnetIds();
+    if (id) set.add(id);
+    if (carnetNumber) set.add(carnetNumber);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(DELETED_CARNETS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch {}
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -372,13 +402,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   );
 
   // Charger toutes les données depuis IndexedDB
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (forceSync = false) => {
     try {
       await initializeDatabase();
       const db = await getDB();
 
       // Synchroniser les données depuis Supabase
-      if (SupabaseDataLayer.isAvailable()) {
+      const shouldSyncNetwork = forceSync || (Date.now() - lastSyncTime > 15000);
+      if (SupabaseDataLayer.isAvailable() && shouldSyncNetwork) {
         try {
           const [
             remoteProfiles,
@@ -414,13 +445,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
             await tx.done;
           }
-          if (remoteCarnets && remoteCarnets.length > 0) {
-            // Dé-duplication stricte des carnets distants avant injection
+          if (remoteCarnets && Array.isArray(remoteCarnets)) {
+            const deletedSet = getStoredDeletedCarnetIds();
+            // Dé-duplication stricte des carnets distants avant injection en ignorant les carnets supprimés
             const uniqueRemoteCarnets: Carnet[] = [];
             const seenCarnetIds = new Set<string>();
             const seenCarnetNums = new Set<string>();
             for (const c of remoteCarnets) {
-              if (c && c.id && !seenCarnetIds.has(c.id)) {
+              if (
+                c &&
+                c.id &&
+                !seenCarnetIds.has(c.id) &&
+                !deletedSet.has(c.id) &&
+                !(c.carnetNumber && deletedSet.has(c.carnetNumber))
+              ) {
                 seenCarnetIds.add(c.id);
                 let safeNum = c.carnetNumber;
                 if (!safeNum) {
@@ -440,7 +478,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             const currentLocalCarnets = await db.getAll('carnets');
             const tx = db.transaction('carnets', 'readwrite');
             for (const lc of currentLocalCarnets) {
-              if (!remoteCarnetIds.has(lc.id)) {
+              const isDeleted = deletedSet.has(lc.id) || (lc.carnetNumber && deletedSet.has(lc.carnetNumber));
+              const isRecent = lc.createdAt && (Date.now() - new Date(lc.createdAt).getTime() < 15 * 60 * 1000);
+              if (isDeleted) {
+                await tx.store.delete(lc.id);
+              } else if (!remoteCarnetIds.has(lc.id) && !isRecent) {
                 await tx.store.delete(lc.id);
               }
             }
@@ -449,16 +491,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
             await tx.done;
           }
-          if (remoteTickets && remoteTickets.length > 0) {
-            const remoteTicketIds = new Set(remoteTickets.map((t) => t.id));
+          if (remoteTickets && Array.isArray(remoteTickets)) {
+            const deletedSet = getStoredDeletedCarnetIds();
+            const validRemoteTickets = remoteTickets.filter(
+              (t) => !deletedSet.has(t.carnetId) && !(t.carnetNumber && deletedSet.has(t.carnetNumber))
+            );
+            const remoteTicketIds = new Set(validRemoteTickets.map((t) => t.id));
             const currentLocalTickets = await db.getAll('tickets');
             const tx = db.transaction('tickets', 'readwrite');
             for (const lt of currentLocalTickets) {
-              if (!remoteTicketIds.has(lt.id)) {
+              const isDeleted = deletedSet.has(lt.carnetId) || (lt.carnetNumber && deletedSet.has(lt.carnetNumber));
+              const isRecent = lt.createdAt && (Date.now() - new Date(lt.createdAt).getTime() < 15 * 60 * 1000);
+              if (isDeleted) {
+                await tx.store.delete(lt.id);
+              } else if (!remoteTicketIds.has(lt.id) && !isRecent) {
                 await tx.store.delete(lt.id);
               }
             }
-            for (const t of remoteTickets) {
+            for (const t of validRemoteTickets) {
               await tx.store.put(t);
             }
             await tx.done;
@@ -531,6 +581,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }
             await tx.done;
           }
+          // Enregistrer le timestamp de synchronisation réussie
+          lastSyncTime = Date.now();
         } catch (syncErr) {
           console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
         }
@@ -1832,8 +1884,53 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error('Seul l’administrateur est autorisé à réinitialiser l’application.');
     }
 
+    // 1. Purger d'abord la base distante via l'API sécurisée d'administration si connectée
+    if (SupabaseDataLayer.isAvailable()) {
+      try {
+        const supabase = (await import('../db/supabaseClient')).getSupabase();
+        const session = (await supabase?.auth.getSession())?.data.session;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (session?.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`;
+        }
+
+        const res = await safeFetchJson<{ error?: string }>('/api/admin/reset', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ confirmationPhrase: 'CONFIRMER' }),
+        });
+
+        if (!res.ok) {
+          throw new Error(res.error || 'Erreur lors de la réinitialisation de la base de données distante.');
+        }
+      } catch (err: any) {
+        console.warn('[DataContext] Échec réinitialisation via API backend, repli direct Supabase client:', err?.message);
+        // Repli direct si l'API n'est pas accessible
+        try {
+          const supabase = (await import('../db/supabaseClient')).getSupabase();
+          if (supabase) {
+            await supabase.from('controls').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('fraud_reports').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('ticket_status_history').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('ticket_assignments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('remittance_adjustments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('remittances').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('tickets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('carnets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            await supabase.from('login_attempts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            // SÉCURITÉ : La table audit_logs n'est JAMAIS purgée !
+          }
+        } catch (dbErr: any) {
+          console.error('[DataContext] Échec complet de la purge distante directe:', dbErr?.message);
+        }
+      }
+    }
+
+    // 2. Réinitialisation locale d'IndexedDB (audit_logs PRÉSERVÉ)
     const db = await getDB();
-    
     const stores = [
       'carnets',
       'tickets',
@@ -1842,7 +1939,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       'fraud_reports',
       'remises',
       'expenses',
-      'audit_logs',
       'ticket_assignments',
       'notifications',
       'login_attempts',
@@ -1857,25 +1953,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     await tx.done;
 
     await db.put('settings', false, 'is_initialized');
-
-    if (SupabaseDataLayer.isAvailable()) {
-      try {
-        const supabase = (await import('../db/supabaseClient')).getSupabase();
-        if (supabase) {
-          await supabase.from('controls').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('fraud_reports').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('remittance_adjustments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('ticket_assignments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('tickets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('carnets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-          await supabase.from('login_attempts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        }
-      } catch (err) {
-        console.warn('Erreur lors de la purge distante Supabase (Triggers ou RLS) :', err);
-      }
-    }
 
     await recordAudit(
       'DATABASE_RESET',
@@ -2061,7 +2138,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
     }
 
-    await refreshData();
+    // Mise à jour immédiate des états React pour un affichage instantané sans délai
+    setCarnets((prev) => [carnet, ...prev.filter((c) => c.id !== carnet.id)]);
+    const createdTicketIds = new Set(createdTickets.map((t) => t.id));
+    setTickets((prev) => [...createdTickets, ...prev.filter((t) => !createdTicketIds.has(t.id))]);
+
+    // Toast de notification de succès
+    showToast(
+      'success',
+      'Carnet Généré',
+      `Le carnet ${carnetNumber} (${params.size} tickets) a été généré avec succès.`
+    );
+
+    await refreshData(false);
     return { carnet, tickets: createdTickets };
   };
 
@@ -2232,8 +2321,144 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       `Annulation du carnet ${carnet.carnetNumber} (${cancelledCount} tickets non vendus annulés). Motif : ${cleanReason}`
     );
 
-    await refreshData();
+    await refreshData(true);
     return carnet;
+  };
+
+  /**
+   * SUPPRESSION DÉFINITIVE D'UN CARNET ET DE SES TICKETS ASSOCIES (POUR L'ADMINISTRATEUR)
+   */
+  const deleteCarnet = async (carnetId: string): Promise<void> => {
+    if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
+      throw new Error('Seul l’administrateur est autorisé à supprimer un carnet.');
+    }
+
+    const db = await getDB();
+    const carnet = (await db.get('carnets', carnetId)) || carnets.find((c) => c.id === carnetId || c.carnetNumber === carnetId);
+    const carnetNumber = carnet?.carnetNumber || carnetId;
+
+    // 1. Enregistrer immédiatement dans les carnets définitivement supprimés (tombstone)
+    recordDeletedCarnet(carnetId, carnetNumber);
+
+    // 2. Mettre à jour l'état React immédiatement pour un retour utilisateur instantané
+    setCarnets((prev) => prev.filter((c) => c.id !== carnetId && c.carnetNumber !== carnetNumber));
+    setTickets((prev) => prev.filter((t) => t.carnetId !== carnetId && t.carnetNumber !== carnetNumber));
+
+    // 3. Supprimer de Supabase via notre API de suppression administrative
+    if (SupabaseDataLayer.isAvailable()) {
+      try {
+        const res = await safeFetchJson<{ success?: boolean; message?: string; error?: string }>(
+          `/api/carnets/${encodeURIComponent(carnetId)}`,
+          {
+            method: 'DELETE',
+          }
+        );
+
+        if (!res.ok) {
+          console.warn('[DataContext] Réponse API suppression distante:', res.error);
+          // Secours en direct via le client Supabase
+          try {
+            const supabase = (await import('../db/supabaseClient')).getSupabase();
+            await supabase?.from('tickets').delete().eq('carnet_id', carnetId);
+            await supabase?.from('carnets').delete().eq('id', carnetId);
+          } catch (fallbackErr: any) {
+            console.warn('[DataContext] Secours suppression distante direct:', fallbackErr?.message);
+          }
+        }
+      } catch (err: any) {
+        console.warn('[DataContext] Échec suppression distante via API backend:', err?.message);
+      }
+    }
+
+    // Récupérer les tickets associés pour en obtenir les IDs et purger localement tous les enregistrements dépendants (évite les orphelins)
+    const allTickets = await db.getAll('tickets');
+    const carnetTickets = allTickets.filter((t) => t.carnetId === carnetId || (carnet && t.carnetNumber === carnet.carnetNumber));
+    const ticketIds = carnetTickets.map((t) => t.id);
+    const ticketNumbers = carnetTickets.map((t) => t.ticketNumber).filter(Boolean) as string[];
+
+    if (ticketIds.length > 0) {
+      // 1. Purger les Ventes locales liées à ces tickets
+      const allSales = await db.getAll('sales');
+      const salesToDelete = allSales.filter((s) => ticketIds.includes(s.ticketId));
+      if (salesToDelete.length > 0) {
+        const txSales = db.transaction('sales', 'readwrite');
+        for (const s of salesToDelete) {
+          await txSales.store.delete(s.id);
+        }
+        await txSales.done;
+      }
+
+      // 2. Purger les Contrôles locaux liés à ces tickets
+      const allControls = await db.getAll('controls');
+      const controlsToDelete = allControls.filter((c) => c.ticketId && ticketIds.includes(c.ticketId));
+      if (controlsToDelete.length > 0) {
+        const txControls = db.transaction('controls', 'readwrite');
+        for (const c of controlsToDelete) {
+          await txControls.store.delete(c.id);
+        }
+        await txControls.done;
+      }
+
+      // 3. Purger les Signalements de fraude locaux liés à ces tickets
+      const allFrauds = await db.getAll('fraud_reports');
+      const fraudsToDelete = allFrauds.filter((f) => f.ticketNumber && ticketNumbers.includes(f.ticketNumber));
+      if (fraudsToDelete.length > 0) {
+        const txFrauds = db.transaction('fraud_reports', 'readwrite');
+        for (const f of fraudsToDelete) {
+          await txFrauds.store.delete(f.id);
+        }
+        await txFrauds.done;
+      }
+
+      // 4. Purger les Assignations de tickets locales
+      const allAssignments = await db.getAll('ticket_assignments');
+      const assignmentsToDelete = allAssignments.filter((a) => a.ticketId && ticketIds.includes(a.ticketId));
+      if (assignmentsToDelete.length > 0) {
+        const txAssignments = db.transaction('ticket_assignments', 'readwrite');
+        for (const a of assignmentsToDelete) {
+          await txAssignments.store.delete(a.id);
+        }
+        await txAssignments.done;
+      }
+
+      // 5. Supprimer enfin les tickets eux-mêmes
+      const txTickets = db.transaction('tickets', 'readwrite');
+      for (const tId of ticketIds) {
+        await txTickets.store.delete(tId);
+      }
+      await txTickets.done;
+    }
+
+    // Supprimer le carnet de la base locale
+    await db.delete('carnets', carnetId);
+
+    // Notification utilisateur visible (Toast) et centre de notification
+    showToast(
+      'success',
+      'Carnet supprimé',
+      `Le carnet ${carnetNumber} et tous ses tickets associés ont été définitivement supprimés.`
+    );
+
+    const notif: NotificationRecord = {
+      id: generateSecureToken('notif', 12),
+      recipientId: currentUser?.id || 'admin',
+      title: 'Carnet Supprimé',
+      message: `Le carnet ${carnetNumber} et tous ses tickets associés ont été définitivement supprimés par ${currentUser?.fullName || 'l’administrateur'}.`,
+      level: 'INFO',
+      type: 'SYSTEM',
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+    setNotifications((prev) => [notif, ...prev]);
+
+    await recordAudit(
+      'CARNET_CANCELLED',
+      'Carnet',
+      carnetId,
+      `Suppression définitive du carnet ${carnetNumber} et de tous ses tickets associés par l'administrateur.`
+    );
+
+    await refreshData(false);
   };
 
   /**
@@ -2344,7 +2569,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       { status: 'CANCELLED' }
     );
 
-    await refreshData();
+    await refreshData(true);
   };
 
   const correctRemiseAdmin = async (
@@ -4133,6 +4358,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         createCarnet,
         assignCarnetToResponsable,
         cancelCarnet,
+        deleteCarnet,
         updateTicketStatus,
         cancelTicket,
         correctRemiseAdmin,

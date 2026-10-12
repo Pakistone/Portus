@@ -28,6 +28,7 @@ import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerat
 import { formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { CarnetGeneratorModal } from './CarnetGeneratorModal';
 import { CarnetPrintModal } from './CarnetPrintModal';
+import { showToast } from '../common/ToastNotification';
 import type { Carnet, Ticket, CarnetStatus, TicketStatus } from '../../types';
 
 interface Props {
@@ -45,6 +46,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     auditLogs,
     assignCarnetToResponsable,
     cancelCarnet,
+    deleteCarnet,
     cancelTicket,
     updateTicketStatus,
     syncAllToSupabase,
@@ -491,6 +493,40 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         <span>Annuler Carnet</span>
                       </button>
                     )}
+                    {currentUser?.role === 'ADMINISTRATEUR' && (
+                      <button
+                        disabled={actionLoading}
+                        onClick={async () => {
+                          if (confirm(`ÊTES-VOUS ABSOLUMENT SÛR de vouloir SUPPRIMER DÉFINITIVEMENT le carnet ${selectedCarnet.carnetNumber} ? Cette action est irréversible, elle détruira le carnet et tous les tickets associés de la base de données.`)) {
+                            setActionLoading(true);
+                            setActionSuccess(null);
+                            setActionError(null);
+                            try {
+                              const carnetNum = selectedCarnet.carnetNumber;
+                              await deleteCarnet(selectedCarnet.id);
+                              setSelectedCarnet(null);
+                              const msg = `Le carnet ${carnetNum} et tous ses tickets associés ont été entièrement supprimés.`;
+                              setActionSuccess(msg);
+                              showToast('success', 'Carnet supprimé avec succès', msg, 6000);
+                              setTimeout(() => setActionSuccess(null), 8000);
+                            } catch (err: any) {
+                              const errMsg = err?.message || 'Erreur lors de la suppression du carnet.';
+                              setActionError(errMsg);
+                              showToast('error', 'Échec de suppression', errMsg, 6000);
+                              setTimeout(() => setActionError(null), 8000);
+                            } finally {
+                              setActionLoading(false);
+                            }
+                          }
+                        }}
+                        className={`flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-md transition ${
+                          actionLoading ? 'bg-red-800 cursor-not-allowed opacity-70' : 'bg-red-600 hover:bg-red-500'
+                        }`}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>{actionLoading ? 'Suppression en cours...' : 'Supprimer Carnet'}</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -765,6 +801,42 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                     title="Annuler le carnet"
                                   >
                                     <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
+                                {/* Supprimer définitivement le carnet */}
+                                {currentUser?.role === 'ADMINISTRATEUR' && (
+                                  <button
+                                    disabled={actionLoading}
+                                    onClick={async () => {
+                                      if (confirm(`ÊTES-VOUS ABSOLUMENT SÛR de vouloir SUPPRIMER DÉFINITIVEMENT le carnet ${c.carnetNumber} et tous ses tickets associés de la base ? Cette action est irréversible.`)) {
+                                        setActionLoading(true);
+                                        setActionSuccess(null);
+                                        setActionError(null);
+                                        try {
+                                          await deleteCarnet(c.id);
+                                          const msg = `Le carnet ${c.carnetNumber} et tous ses tickets associés ont été entièrement supprimés.`;
+                                          setActionSuccess(msg);
+                                          showToast('success', 'Carnet supprimé avec succès', msg, 6000);
+                                          setTimeout(() => setActionSuccess(null), 8000);
+                                        } catch (err: any) {
+                                          const errMsg = err?.message || 'Erreur lors de la suppression du carnet.';
+                                          setActionError(errMsg);
+                                          showToast('error', 'Échec de suppression', errMsg, 6000);
+                                          setTimeout(() => setActionError(null), 8000);
+                                        } finally {
+                                          setActionLoading(false);
+                                        }
+                                      }
+                                    }}
+                                    className={`p-1.5 rounded-lg border transition ${
+                                      actionLoading
+                                        ? 'bg-red-950 text-red-700 border-red-900 cursor-not-allowed opacity-50'
+                                        : 'bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-500/20'
+                                    }`}
+                                    title="Supprimer définitivement le carnet"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
                                   </button>
                                 )}
                               </div>

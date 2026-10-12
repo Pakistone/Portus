@@ -10,9 +10,50 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Augmentation de la limite du corps de requête (50mb) pour les lots et photos
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// En-têtes de sécurité HTTP stricts
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
+// Limite par défaut à 1 Mo pour protéger contre les attaques DoS mémoire (F-06)
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// ------------------------------------------------------------------
+// RATE LIMITING EN MÉMOIRE COMPATIBLE SERVERLESS & CONTAINER (F-04)
+// ------------------------------------------------------------------
+interface RateLimitRecord {
+  count: number;
+  resetAt: number;
+}
+const rateLimitStore = new Map<string, RateLimitRecord>();
+
+function checkRateLimit(key: string, limit: number, windowMs: number): { allowed: boolean; remaining: number; resetInMs: number } {
+  const now = Date.now();
+  const entry = rateLimitStore.get(key);
+  if (!entry || now > entry.resetAt) {
+    rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, remaining: limit - 1, resetInMs: windowMs };
+  }
+  if (entry.count >= limit) {
+    return { allowed: false, remaining: 0, resetInMs: entry.resetAt - now };
+  }
+  entry.count += 1;
+  return { allowed: true, remaining: limit - entry.count, resetInMs: entry.resetAt - now };
+}
+
+// Nettoyage périodique
+const cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of rateLimitStore.entries()) {
+    if (now > v.resetAt) rateLimitStore.delete(k);
+  }
+}, 5 * 60 * 1000);
+if (cleanupInterval.unref) cleanupInterval.unref();
 
 // ------------------------------------------------------------------
 // CONFIGURATION SUPABASE CÔTÉ SERVEUR (EXCLUSIVEMENT PROCESS.ENV)
@@ -36,10 +77,34 @@ const supabaseSecretKey = (
   'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727'
 ).trim();
 
-const PORTUS_HMAC_SECRET = (
-  process.env.PORTUS_HMAC_SECRET ||
-  'portus_production_master_hmac_secret_2026_ujsrv_secure'
-).trim();
+// GESTION DU SECRET HMAC CRITIQUE (S-01 & F-02)
+const REVOKED_DEFAULT_SECRET = 'portus_production_master_hmac_secret_2026_ujsrv_secure';
+
+function resolveServerHmacSecret(): string {
+  const envSecret = (process.env.PORTUS_HMAC_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+
+  if (isProd) {
+    if (!envSecret || envSecret.length < 32 || envSecret === REVOKED_DEFAULT_SECRET) {
+      throw new Error(
+        '[PORTUS Server Security] Démarrage REFUSÉ en production : La variable PORTUS_HMAC_SECRET est obligatoire (>= 32 caractères cryptographiques) et ne doit jamais utiliser l’ancienne valeur révoquée.'
+      );
+    }
+    return envSecret;
+  }
+
+  // En environnement de développement
+  if (!envSecret || envSecret === REVOKED_DEFAULT_SECRET || envSecret.length < 32) {
+    console.warn(
+      '[PORTUS Server Security] AVERTISSEMENT : PORTUS_HMAC_SECRET manquant ou révoqué en dev. Génération d’une clé aléatoire de session (64 hex).'
+    );
+    return crypto.randomBytes(32).toString('hex');
+  }
+
+  return envSecret;
+}
+
+const PORTUS_HMAC_SECRET = resolveServerHmacSecret();
 
 if (!supabaseUrl) {
   console.warn('[PORTUS Server] ATTENTION: VITE_SUPABASE_URL n’est pas configuré dans process.env');
@@ -47,8 +112,7 @@ if (!supabaseUrl) {
 
 console.log('[PORTUS Server] --- DIAGNOSTICS SUPABASE ---');
 console.log('[PORTUS Server] URL:', supabaseUrl);
-console.log('[PORTUS Server] Clé Secrète - Longueur:', supabaseSecretKey ? supabaseSecretKey.length : 0);
-console.log('[PORTUS Server] Clé Secrète - Début:', supabaseSecretKey ? `${supabaseSecretKey.slice(0, 15)}...` : 'nulle');
+console.log('[PORTUS Server] Clé Secrète - Présente:', Boolean(supabaseSecretKey), `(${supabaseSecretKey ? supabaseSecretKey.length : 0} caractères)`);
 if (supabaseSecretKey && supabaseSecretKey.startsWith('sb_publishable_')) {
   console.warn('[PORTUS Server] ATTENTION: La clé configurée est une clé de publication (anon), pas une clé de service ! Les opérations d’administration échoueront.');
 } else if (supabaseSecretKey && supabaseSecretKey.startsWith('eyJ')) {
@@ -131,25 +195,32 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       .maybeSingle();
 
     if (profErr || !profile || !profile.is_active) {
-      // Résilience Administrateur Initial : En cas d'absence de profil physique ou d'erreur RLS,
-      // l'adresse e-mail officielle de l'administrateur conserve son accès root complet
-      const isAdminEmail = 
-        user.email === 'ypaki090@gmail.com' || 
-        user.email === 'admin@ujpas.ci' ||
-        user.email === 'admin@portus-ujpas.online' ||
-        user.email === 'admin@ujpaa.ci' ||
-        user.email === 'admin@portus.ujpaa.ci' ||
-        user.email === 'admin@ujsrv.ci' || 
-        user.email === 'admin@portus.ujsrv.ci' ||
-        (user.user_metadata?.username && ['ypaki090', 'admin'].includes(user.user_metadata.username.toLowerCase()));
+      // Si un profil existe explicitement mais est inactif (désactivé), REFUSER STRICTEMENT (S-02)
+      if (profile && !profile.is_active) {
+        console.warn(`[PORTUS Server Auth] Accès refusé pour compte désactivé: ${user.email} (${user.id})`);
+        return null;
+      }
 
-      if (isAdminEmail) {
-        console.log('[PORTUS Server Auth] Résilience activée : profil virtuel ADMINISTRATEUR attribué à', user.email);
+      // Amorçage Administrateur Initial (S-02) :
+      // UNIQUEMENT si AUCUN profil n'existe en base (!profile),
+      // que l'email est formellement vérifié, et qu'il figure dans la liste blanche configurée.
+      const bootstrapEmails = (
+        process.env.PORTUS_BOOTSTRAP_ADMIN_EMAILS ||
+        'ypaki090@gmail.com,admin@portus-ujpas.online,admin@ujpas.ci'
+      ).split(',').map((e) => e.trim().toLowerCase());
+
+      const userEmail = (user.email || '').toLowerCase();
+      const isEmailConfirmed = Boolean(user.email_confirmed_at || user.confirmed_at);
+      const isWhitelisted = bootstrapEmails.includes(userEmail);
+
+      // SÉCURITÉ : Aucune élévation de privilèges via user_metadata qui est contrôlable par le client
+      if (!profile && isEmailConfirmed && isWhitelisted) {
+        console.log('[PORTUS Server Auth] Amorçage initial autorisé pour nouvel admin vérifié:', user.email);
         return {
           id: user.id,
           email: user.email,
-          username: user.user_metadata?.username || user.email?.split('@')[0] || 'ypaki090',
-          fullName: user.user_metadata?.full_name || 'Administrateur Général PORTUS',
+          username: user.email?.split('@')[0] || 'admin',
+          fullName: 'Administrateur Général PORTUS',
           role: 'ADMINISTRATEUR',
           sectorId: null,
           isActive: true,
@@ -218,9 +289,10 @@ async function requireSupervisorOrAdmin(req: express.Request, res: express.Respo
 // Helper pour convertir un ID frontend (ex: sec-vridi-canal) en UUID Supabase valide
 async function resolveSectorUuid(sectorIdOrCode?: string): Promise<string | null> {
   if (!sectorIdOrCode) return null;
+  const trimmed = sectorIdOrCode.trim();
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (uuidRegex.test(sectorIdOrCode)) {
-    return sectorIdOrCode;
+  if (uuidRegex.test(trimmed)) {
+    return trimmed;
   }
 
   const mapping: Record<string, string> = {
@@ -230,14 +302,19 @@ async function resolveSectorUuid(sectorIdOrCode?: string): Promise<string | null
     'sec-vridi-sir': 'VRD-TERMINAL',
   };
 
-  const code = mapping[sectorIdOrCode] || sectorIdOrCode;
+  const code = mapping[trimmed] || trimmed;
+
+  // Assainissement strict (S-05) : autoriser uniquement les codes alphanumériques sûrs
+  if (!/^[a-zA-Z0-9_-]{1,50}$/.test(code)) {
+    return null;
+  }
 
   if (!supabaseAdmin) return null;
 
   const { data: sector } = await supabaseAdmin
     .from('sectors')
     .select('id')
-    .or(`code.eq.${code},name.ilike.%${sectorIdOrCode}%`)
+    .eq('code', code)
     .maybeSingle();
 
   return sector?.id || null;
@@ -294,6 +371,17 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({
         error: 'Veuillez renseigner votre identifiant et votre mot de passe.',
         code: 'MISSING_CREDENTIALS',
+      });
+    }
+
+    // Rate Limiting (F-04) : 10 tentatives max par minute par IP et par identifiant
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const rateLimitIp = checkRateLimit(`login-ip:${clientIp}`, 10, 60 * 1000);
+    const rateLimitId = checkRateLimit(`login-id:${cleanInput.toLowerCase()}`, 10, 60 * 1000);
+    if (!rateLimitIp.allowed || !rateLimitId.allowed) {
+      return res.status(429).json({
+        error: 'Trop de tentatives de connexion. Veuillez patienter une minute avant de réessayer.',
+        code: 'TOO_MANY_REQUESTS',
       });
     }
 
@@ -515,20 +603,31 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     if (!email || typeof email !== 'string' || !email.includes('@')) {
       return res.status(400).json({ error: 'Adresse e-mail invalide.', code: 'INVALID_EMAIL' });
     }
+
+    // Rate Limiting (F-04) : 5 demandes par minute par IP
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const rateLimit = checkRateLimit(`forgot-ip:${clientIp}`, 5, 60 * 1000);
+    if (!rateLimit.allowed) {
+      return res.status(429).json({ error: 'Trop de requêtes. Veuillez patienter une minute.', code: 'TOO_MANY_REQUESTS' });
+    }
+
     if (!supabaseAdmin) {
       return res.status(503).json({ error: 'Service d’authentification indisponible.' });
     }
 
-    const { error } = await supabaseAdmin.auth.resetPasswordForEmail(email.trim().toLowerCase());
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    // Protection anti-énumération de comptes (F-05) : réponse identique en cas de succès ou d'absence de compte
+    try {
+      await supabaseAdmin.auth.resetPasswordForEmail(email.trim().toLowerCase());
+    } catch (resetErr) {
+      console.warn('[PORTUS Auth] Reset password internal log:', resetErr);
     }
+
     return res.json({
       success: true,
-      message: 'Un lien de réinitialisation sécurisé a été transmis par courrier électronique.',
+      message: 'Si cette adresse correspond à un compte actif, un lien de réinitialisation sécurisé a été transmis par courrier électronique.',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Erreur lors du traitement de la demande de réinitialisation.' });
   }
 });
 
@@ -599,13 +698,23 @@ app.put('/api/pricing', requireAdmin, async (req, res) => {
 // ROUTES API UTILISATEURS & ADMINISTRATEUR (GESTION COMPTES)
 // ------------------------------------------------------------------
 
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', requireAuth, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
-    const { data, error } = await supabaseAdmin
+    const actor = req.authenticatedUser!;
+
+    // Si AGENT ou CONTROLEUR, limiter la visibilité pour respecter le principe de moindre privilège
+    let query = supabaseAdmin
       .from('profiles')
-      .select('*, sector:sectors(name)')
-      .order('full_name', { ascending: true });
+      .select('id, username, full_name, role, sector_id, is_active, phone, matricule, brigade, created_at, sector:sectors(name)');
+
+    if (actor.role === 'AGENT' || actor.role === 'CONTROLEUR') {
+      if (actor.sectorId) {
+        query = query.eq('sector_id', actor.sectorId);
+      }
+    }
+
+    const { data, error } = await query.order('full_name', { ascending: true });
 
     if (error) throw error;
     res.json({ users: data || [] });
@@ -892,11 +1001,11 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
 // GESTION DES CARNETS ET TICKETS SÉCURISÉE (AUTHENTIFICATION OBLIGATOIRE)
 // ------------------------------------------------------------------
 
-// Consultation des carnets et tickets (protégée selon le rôle ou synchro générale)
-app.get('/api/carnets', async (req, res) => {
+// Consultation des carnets et tickets (protégée selon le rôle ou synchro générale - S-04)
+app.get('/api/carnets', requireAuth, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé');
-    const actor = await authenticateSession(req);
+    const actor = req.authenticatedUser!;
 
     let carnetQuery = supabaseAdmin
       .from('carnets')
@@ -981,10 +1090,11 @@ app.post('/api/carnets/:id/cancel', requireAdmin, async (req, res) => {
 
     const carnetId = toValidUuid(id);
     const actor = req.authenticatedUser!;
-    const userClient = getSupabaseUserClient(req);
+
+    if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
 
     // 1. Annuler le carnet
-    const { error: carnetErr } = await userClient
+    const { error: carnetErr } = await supabaseAdmin
       .from('carnets')
       .update({ status: 'CANCELLED' })
       .eq('id', carnetId);
@@ -993,7 +1103,7 @@ app.post('/api/carnets/:id/cancel', requireAdmin, async (req, res) => {
 
     // 2. Annuler les tickets non vendus et non contrôlés du carnet
     const nowIso = new Date().toISOString();
-    const { data: ticketsToCancel, error: fetchErr } = await userClient
+    const { data: ticketsToCancel, error: fetchErr } = await supabaseAdmin
       .from('tickets')
       .select('id, status')
       .eq('carnet_id', carnetId);
@@ -1005,7 +1115,7 @@ app.post('/api/carnets/:id/cancel', requireAdmin, async (req, res) => {
     
     if (targets.length > 0) {
       const targetIds = targets.map(t => t.id);
-      const { error: ticketErr } = await userClient
+      const { error: ticketErr } = await supabaseAdmin
         .from('tickets')
         .update({
           status: 'CANCELLED',
@@ -1030,6 +1140,106 @@ app.post('/api/carnets/:id/cancel', requireAdmin, async (req, res) => {
   }
 });
 
+// Suppression définitive d'un carnet (ADMINISTRATEUR STRICTEMENT)
+app.delete('/api/carnets/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const carnetId = toValidUuid(id);
+
+    // Utiliser à la fois le client utilisateur authentifié et supabaseAdmin
+    const supabaseClient = getSupabaseUserClient(req);
+
+    // 1. Récupérer tous les tickets associés à ce carnet (recherche par carnetId UUID et par id brut)
+    let ticketIds: string[] = [];
+    try {
+      const { data: ticketsA } = await supabaseAdmin!
+        .from('tickets')
+        .select('id')
+        .or(`carnet_id.eq.${carnetId},carnet_id.eq.${id}`);
+      if (ticketsA && ticketsA.length > 0) {
+        ticketIds = ticketsA.map(t => t.id);
+      }
+    } catch {}
+
+    if (ticketIds.length === 0) {
+      try {
+        const { data: ticketsU } = await supabaseClient
+          .from('tickets')
+          .select('id')
+          .or(`carnet_id.eq.${carnetId},carnet_id.eq.${id}`);
+        if (ticketsU && ticketsU.length > 0) {
+          ticketIds = ticketsU.map(t => t.id);
+        }
+      } catch {}
+    }
+
+    // 2. Si le carnet possède des tickets, purger tous leurs enregistrements dépendants pour éviter les violations de FK
+    if (ticketIds.length > 0) {
+      // Purge contrôles et signalements
+      try { await supabaseAdmin?.from('controls').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseClient.from('controls').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseAdmin?.from('fraud_reports').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseClient.from('fraud_reports').delete().in('ticket_id', ticketIds); } catch {}
+
+      // Purge ventes associées
+      try {
+        await supabaseClient.from('sales').delete().in('ticket_id', ticketIds);
+      } catch (saleErr: any) {
+        console.warn('[API Carnets] Tentative suppression ventes via supabaseClient:', saleErr?.message);
+        try { await supabaseAdmin?.from('sales').delete().in('ticket_id', ticketIds); } catch {}
+      }
+
+      // Purge historique et attributions
+      try { await supabaseAdmin?.from('ticket_status_history').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseClient.from('ticket_status_history').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseAdmin?.from('ticket_assignments').delete().in('ticket_id', ticketIds); } catch {}
+      try { await supabaseClient.from('ticket_assignments').delete().in('ticket_id', ticketIds); } catch {}
+
+      // 3. Supprimer les tickets eux-mêmes
+      let delTicketSuccess = false;
+      if (supabaseAdmin) {
+        const { error: errAdmTickets } = await supabaseAdmin
+          .from('tickets')
+          .delete()
+          .in('id', ticketIds);
+        if (!errAdmTickets) delTicketSuccess = true;
+      }
+      if (!delTicketSuccess) {
+        const { error: errTickets } = await supabaseClient
+          .from('tickets')
+          .delete()
+          .in('id', ticketIds);
+        if (errTickets && !delTicketSuccess) throw errTickets;
+      }
+    }
+
+    // 4. Supprimer enfin le carnet lui-même
+    let delCarnetSuccess = false;
+    if (supabaseAdmin) {
+      const { error: errAdmCarnet } = await supabaseAdmin
+        .from('carnets')
+        .delete()
+        .or(`id.eq.${carnetId},id.eq.${id}`);
+      if (!errAdmCarnet) delCarnetSuccess = true;
+    }
+    if (!delCarnetSuccess) {
+      const { error: errCarnet } = await supabaseClient
+        .from('carnets')
+        .delete()
+        .or(`id.eq.${carnetId},id.eq.${id}`);
+      if (errCarnet && !delCarnetSuccess) throw errCarnet;
+    }
+
+    res.json({
+      success: true,
+      message: 'Le carnet et tous ses tickets et données dépendantes ont été entièrement supprimés de Supabase.'
+    });
+  } catch (err: any) {
+    console.error('[API Carnets] Erreur suppression carnet:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Annulation d'un ticket individuel (ADMINISTRATEUR STRICTEMENT)
 app.post('/api/tickets/:id/cancel', requireAdmin, async (req, res) => {
   try {
@@ -1041,10 +1251,11 @@ app.post('/api/tickets/:id/cancel', requireAdmin, async (req, res) => {
 
     const ticketId = toValidUuid(id);
     const actor = req.authenticatedUser!;
-    const userClient = getSupabaseUserClient(req);
+
+    if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
 
     const nowIso = new Date().toISOString();
-    const { error: ticketErr } = await userClient
+    const { error: ticketErr } = await supabaseAdmin
       .from('tickets')
       .update({
         status: 'CANCELLED',
@@ -1066,7 +1277,88 @@ app.post('/api/tickets/:id/cancel', requireAdmin, async (req, res) => {
   }
 });
 
-// Création de carnet (ADMINISTRATEUR STRICTEMENT)
+// Réinitialisation complète de la base de données (ADMINISTRATEUR STRICTEMENT - F-01)
+app.post('/api/admin/reset', requireAdmin, async (req, res) => {
+  try {
+    if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
+
+    const actor = req.authenticatedUser!;
+    const { confirmationPhrase } = req.body;
+
+    // 1. Validation de confirmation explicite
+    if (confirmationPhrase !== 'CONFIRMER' && confirmationPhrase !== 'CONFIRMER_PURGE_PORTUS') {
+      return res.status(400).json({
+        error: 'Confirmation refusée : Vous devez fournir la confirmationPhrase exacte ("CONFIRMER" ou "CONFIRMER_PURGE_PORTUS").',
+        code: 'CONFIRMATION_REQUIRED',
+      });
+    }
+
+    // 2. Protection en environnement de production
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DATABASE_RESET !== 'true') {
+      return res.status(403).json({
+        error: 'Opération interdite : La réinitialisation est bloquée en production (ALLOW_DATABASE_RESET=true requis).',
+        code: 'FORBIDDEN_IN_PRODUCTION',
+      });
+    }
+
+    console.log('[API Admin] Début de la réinitialisation opérationnelle demandée par:', actor.email);
+
+    // 3. Ordre de suppression respectant les contraintes FK (audit_logs STRICTEMENT PRÉSERVÉ)
+    const tablesToPurge = [
+      'controls',
+      'fraud_reports',
+      'sales',
+      'ticket_status_history',
+      'ticket_assignments',
+      'remittance_adjustments',
+      'remittances',
+      'expenses',
+      'tickets',
+      'carnets',
+      'notifications',
+      'login_attempts',
+    ];
+
+    for (const table of tablesToPurge) {
+      const { error: delErr } = await supabaseAdmin
+        .from(table)
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (delErr) {
+        console.error(`[API Admin Reset] Échec suppression dans ${table}:`, delErr.message);
+        throw new Error(`Échec de la suppression dans la table ${table} : ${delErr.message}`);
+      }
+    }
+
+    // 4. Inscription immuable dans audit_logs
+    try {
+      await supabaseAdmin.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        user_id: actor.id,
+        user_email: actor.email,
+        action: 'SYSTEM_RESET',
+        entity: 'DATABASE',
+        entity_id: 'ALL_OPERATIONAL_DATA',
+        details: `Purge complète des données opérationnelles effectuée par l’administrateur ${actor.email}. Table audit_logs préservée.`,
+        created_at: new Date().toISOString(),
+      });
+    } catch (auditErr) {
+      console.warn('[API Admin Reset] Avertissement écriture audit log:', auditErr);
+    }
+
+    console.log('[API Admin] Réinitialisation opérationnelle terminée avec succès.');
+
+    res.json({
+      success: true,
+      message: 'Base de données opérationnelle réinitialisée avec succès. Piste d’audit préservée.',
+    });
+  } catch (err: any) {
+    console.error('[API Admin] Erreur réinitialisation base:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Création de carnet (ADMINISTRATEUR STRICTEMENT - F-02)
 app.post('/api/carnets', requireAdmin, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé');
@@ -1078,7 +1370,19 @@ app.post('/api/carnets', requireAdmin, async (req, res) => {
     const actor = req.authenticatedUser!;
     const carnetId = toValidUuid(carnet.id);
     const assignedToResp = ensureUuidOrNull(carnet.assignedToResponsableId);
-    const sectorId = ensureUuidOrNull(carnet.sectorId);
+    const sectorId = await resolveSectorUuid(carnet.sectorId);
+
+    // S'assurer de la présence du profil créateur dans la table 'profiles' pour respecter la contrainte FK
+    try {
+      await supabaseAdmin.from('profiles').upsert({
+        id: actor.id,
+        username: actor.username || 'admin',
+        full_name: actor.fullName || 'ADMINISTRATEUR',
+        role: 'ADMINISTRATEUR',
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+    } catch {}
 
     const { error: carnetErr } = await supabaseAdmin.from('carnets').upsert({
       id: carnetId,
@@ -1088,7 +1392,7 @@ app.post('/api/carnets', requireAdmin, async (req, res) => {
       size: Number(carnet.size) || 30,
       start_number: Number(carnet.startNumber) || 1,
       end_number: Number(carnet.endNumber) || (Number(carnet.startNumber || 1) + Number(carnet.size || 30) - 1),
-      created_by: actor.id, // Déduit de la session
+      created_by: actor.id,
       assigned_to_responsable: assignedToResp,
       sector_id: sectorId,
       status: carnet.status || 'GENERATED',
@@ -1099,31 +1403,19 @@ app.post('/api/carnets', requireAdmin, async (req, res) => {
     if (carnetErr) throw carnetErr;
 
     if (Array.isArray(tickets) && tickets.length > 0) {
+      // Autorité HMAC unifiée (F-02) :
+      // On insère sans qr_payload préalable pour que le trigger PostgreSQL trg_generate_secure_ticket_qr
+      // calcule et enregistre la signature HMAC officielle de manière autoritaire.
       const formattedTickets = tickets.map((t: any) => {
         const tid = toValidUuid(t.id);
         const price = Number(t.price) || 5000;
-        // Signature HMAC autoritaire générée par le serveur
-        const canonical = `PORTUS|v1|${tid}|${carnet.carnetNumber}|${t.ticketNumber}|${price}`;
-        const signature = signCanonicalPayload(canonical);
-        const qrPayload = JSON.stringify({
-          v: 1,
-          ticket_id: tid,
-          carnet_number: carnet.carnetNumber,
-          ticket_number: t.ticketNumber,
-          price,
-          signature,
-          tid,
-          ref: carnet.carnetNumber,
-          num: t.ticketNumber,
-          sig: signature,
-        });
 
         return {
           id: tid,
           ticket_number: t.ticketNumber,
           carnet_id: carnetId,
           generation_batch: t.generationBatch || 'GEN-1',
-          qr_payload: qrPayload,
+          qr_payload: null, // Généré et signé authoritairement par PostgreSQL
           status: t.status || 'GENERATED',
           price,
           assigned_responsable_id: assignedToResp,
@@ -1136,17 +1428,29 @@ app.post('/api/carnets', requireAdmin, async (req, res) => {
 
       for (let i = 0; i < formattedTickets.length; i += 50) {
         const chunk = formattedTickets.slice(i, i + 50);
-        await supabaseAdmin.from('tickets').upsert(chunk, { onConflict: 'id' });
+        const { error: tickErr } = await supabaseAdmin.from('tickets').upsert(chunk, { onConflict: 'id' });
+        if (tickErr) throw tickErr;
       }
     }
 
-    res.json({ success: true, carnetId, ticketsCount: tickets?.length || 0 });
+    // Récupérer les tickets avec les payloads signés par PostgreSQL
+    const { data: savedTickets } = await supabaseAdmin
+      .from('tickets')
+      .select('id, ticket_number, qr_payload, price, status')
+      .eq('carnet_id', carnetId);
+
+    res.json({
+      success: true,
+      carnetId,
+      ticketsCount: tickets?.length || 0,
+      tickets: savedTickets || [],
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Synchronisation par lot (AUTHENTIFICATION OBLIGATOIRE - Acteur validé)
+// Synchronisation par lot (AUTHENTIFICATION OBLIGATOIRE - F-03)
 app.post('/api/carnets/sync', requireAuth, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé');
@@ -1155,8 +1459,9 @@ app.post('/api/carnets/sync', requireAuth, async (req, res) => {
     let syncedCarnets = 0;
     let syncedTickets = 0;
     let syncedSales = 0;
+    const syncResults: Array<{ saleId: string; ticketId?: string; status: 'SUCCESS' | 'ERROR'; message?: string }> = [];
 
-    // Seul un admin ou superviseur peut synchroniser des carnets entiers
+    // 1. Synchronisation des carnets entiers (Admin ou Superviseur)
     if (Array.isArray(carnets) && carnets.length > 0 && (actor.role === 'ADMINISTRATEUR' || actor.role === 'RESPONSABLE')) {
       for (const carnet of carnets) {
         const carnetId = toValidUuid(carnet.id);
@@ -1177,31 +1482,135 @@ app.post('/api/carnets/sync', requireAuth, async (req, res) => {
       }
     }
 
-    // Synchronisation des ventes (L'agent authentifié est l'autorité)
+    // 2. Récupérer le tarif officiel configurable (F-03)
+    let officialTicketPrice = 5000;
+    try {
+      const { data: priceSetting } = await supabaseAdmin
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'ticket_price_fcfa')
+        .maybeSingle();
+      if (priceSetting?.value) {
+        officialTicketPrice = typeof priceSetting.value === 'number' ? priceSetting.value : Number(priceSetting.value) || 5000;
+      }
+    } catch {}
+
+    // 3. Synchronisation des ventes (Validation par élément, sans interruption du lot - F-03)
     if (Array.isArray(sales) && sales.length > 0) {
       for (const sale of sales) {
-        const ticketId = toValidUuid(sale.ticketId);
         const saleId = toValidUuid(sale.id);
+        const cleanPlate = (sale.plateNumber || '').toUpperCase().trim();
+
+        // Plaque d'immatriculation strictement obligatoire
+        if (!cleanPlate) {
+          syncResults.push({
+            saleId,
+            status: 'ERROR',
+            message: 'Plaque d’immatriculation manquante ou vide.',
+          });
+          continue;
+        }
+
+        const ticketId = toValidUuid(sale.ticketId);
         const idempotencyKey = toValidUuid(sale.syncIdempotencyKey || sale.id);
+
+        // Vérification de l'existence et de l'appartenance du ticket
+        const { data: existingTicket, error: tktErr } = await supabaseAdmin
+          .from('tickets')
+          .select('id, ticket_number, status, assigned_agent_id, sector_id')
+          .eq('id', ticketId)
+          .maybeSingle();
+
+        if (tktErr || !existingTicket) {
+          syncResults.push({
+            saleId,
+            ticketId,
+            status: 'ERROR',
+            message: 'Ticket inexistant dans le registre officiel.',
+          });
+          continue;
+        }
+
+        // Vérification des droits d'émission : assigné à l'agent ou au secteur
+        const isOwner = existingTicket.assigned_agent_id === actor.id;
+        const isSectorMatch = actor.sectorId && existingTicket.sector_id === actor.sectorId;
+        const isPrivileged = actor.role === 'ADMINISTRATEUR' || actor.role === 'RESPONSABLE';
+
+        if (!isOwner && !isSectorMatch && !isPrivileged) {
+          syncResults.push({
+            saleId,
+            ticketId,
+            status: 'ERROR',
+            message: 'Ticket non attribué à cet agent ou à son secteur.',
+          });
+          continue;
+        }
+
+        // Vérification de compatibilité de statut (AVAILABLE, ASSIGNED_TO_AGENT ou déjà SOLD)
+        if (existingTicket.status !== 'AVAILABLE' && existingTicket.status !== 'ASSIGNED_TO_AGENT' && existingTicket.status !== 'SOLD') {
+          syncResults.push({
+            saleId,
+            ticketId,
+            status: 'ERROR',
+            message: `Statut de ticket incompatible (${existingTicket.status}) pour validation de vente.`,
+          });
+          continue;
+        }
+
+        const soldAtIso = sale.soldAt || new Date().toISOString();
+        const driverPhone = sale.driverPhone?.trim() || null;
 
         const { error: saleErr } = await supabaseAdmin.from('sales').upsert({
           id: saleId,
           ticket_id: ticketId,
-          ticket_number: sale.ticketNumber,
-          agent_id: actor.id, // Déduit de la session!
-          sector_id: ensureUuidOrNull(sale.sectorId || actor.sectorId),
-          plate_number: sale.plateNumber.toUpperCase().trim(),
-          driver_phone: sale.driverPhone?.trim() || null,
-          sold_at: sale.soldAt || new Date().toISOString(),
-          price: 5000, // Imposé côté serveur
+          ticket_number: sale.ticketNumber || existingTicket.ticket_number,
+          agent_id: actor.id,
+          sector_id: ensureUuidOrNull(sale.sectorId || existingTicket.sector_id || actor.sectorId),
+          plate_number: cleanPlate,
+          driver_phone: driverPhone,
+          sold_at: soldAtIso,
+          price: officialTicketPrice,
           sync_idempotency_key: idempotencyKey,
         }, { onConflict: 'sync_idempotency_key' });
 
-        if (!saleErr) syncedSales++;
+        if (saleErr) {
+          syncResults.push({
+            saleId,
+            ticketId,
+            status: 'ERROR',
+            message: saleErr.message,
+          });
+          continue;
+        }
+
+        // Mise à jour synchrone du ticket vers l'état VENDU
+        await supabaseAdmin
+          .from('tickets')
+          .update({
+            status: 'SOLD',
+            plate_number: cleanPlate,
+            driver_phone: driverPhone,
+            sold_at: soldAtIso,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', ticketId);
+
+        syncedSales++;
+        syncResults.push({
+          saleId,
+          ticketId,
+          status: 'SUCCESS',
+        });
       }
     }
 
-    res.json({ success: true, syncedCarnets, syncedTickets, syncedSales });
+    res.json({
+      success: true,
+      syncedCarnets,
+      syncedTickets,
+      syncedSales,
+      results: syncResults,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1416,13 +1825,20 @@ app.patch('/api/expenses/:id/approve', requireAdmin, async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// VÉRIFICATION PRIVACY-AWARE DES QR CODES (Section 15)
+// VÉRIFICATION PRIVACY-AWARE DES QR CODES (Section 15 & F-04)
 // ------------------------------------------------------------------
 app.post('/api/verify', async (req, res) => {
   try {
     const { identifier, scannedToken, plateNumber } = req.body;
     if (!identifier || identifier.trim() === '') {
       return res.status(400).json({ valid: false, message: 'Identifiant requis.' });
+    }
+
+    // Rate Limiting (F-04) : 60 vérifications par minute par IP
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+    const rateLimit = checkRateLimit(`verify-ip:${clientIp}`, 60, 60 * 1000);
+    if (!rateLimit.allowed) {
+      return res.status(429).json({ valid: false, message: 'Trop de vérifications rapprochées. Veuillez patienter.' });
     }
 
     // Vérifier si appelant authentifié (contrôleur)
@@ -1610,8 +2026,8 @@ export async function ssrfSafeFetch(urlStr: string, init?: any): Promise<any> {
   return fetchFn(validation.url.toString(), init);
 }
 
-// Endpoint de proxy sécurisé pour toute requête externe ou de workflow agentique
-app.post('/api/assistant/fetch-safe', requireAuth, async (req, res) => {
+// Endpoint de proxy sécurisé pour toute requête externe ou de workflow agentique (ADMINISTRATEUR STRICTEMENT - F-07)
+app.post('/api/assistant/fetch-safe', requireAdmin, async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) {
@@ -1627,12 +2043,21 @@ app.post('/api/assistant/fetch-safe', requireAuth, async (req, res) => {
     const response = await ssrfSafeFetch(url);
     const contentType = response.headers.get('content-type') || '';
     
+    // Plafond strict de taille de réponse à 500 Ko pour prévenir l'épuisement mémoire (F-07)
+    const rawText = await response.text();
+    if (rawText.length > 512_000) {
+      return res.status(413).json({ error: 'La réponse distante dépasse le plafond autorisé de 500 Ko.' });
+    }
+
     if (contentType.includes('application/json')) {
-      const data = await response.json();
-      return res.json({ success: true, contentType, data });
+      try {
+        const data = JSON.parse(rawText);
+        return res.json({ success: true, contentType, data });
+      } catch {
+        return res.json({ success: true, contentType, data: rawText });
+      }
     } else {
-      const text = await response.text();
-      return res.json({ success: true, contentType, data: text.slice(0, 100000) });
+      return res.json({ success: true, contentType, data: rawText });
     }
   } catch (err: any) {
     res.status(500).json({ error: `Erreur d’appel sécurisé : ${err.message}` });
@@ -1640,7 +2065,7 @@ app.post('/api/assistant/fetch-safe', requireAuth, async (req, res) => {
 });
 
 // ------------------------------------------------------------------
-// ASSISTANT OPÉRATIONNEL EN LECTURE SEULE (Section 66)
+// ASSISTANT OPÉRATIONNEL EN LECTURE SEULE (Section 66 & F-08)
 // ------------------------------------------------------------------
 app.post('/api/assistant/query', requireAuth, async (req, res) => {
   try {
@@ -1665,9 +2090,23 @@ app.post('/api/assistant/query', requireAuth, async (req, res) => {
         .gte('sold_at', `${today}T00:00:00`);
 
       const totalSold = count || 0;
-      const revenue = totalSold * 5000;
+
+      // Récupération dynamique du tarif officiel configuré (F-08)
+      let currentPrice = 5000;
+      try {
+        const { data: priceSetting } = await supabaseAdmin
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'ticket_price_fcfa')
+          .maybeSingle();
+        if (priceSetting?.value) {
+          currentPrice = typeof priceSetting.value === 'number' ? priceSetting.value : Number(priceSetting.value) || 5000;
+        }
+      } catch {}
+
+      const revenue = totalSold * currentPrice;
       return res.json({
-        answer: `Aujourd'hui (${today}), un total de **${totalSold} ticket(s)** a été vendu sur le corridor de Vridi, représentant une recette brute de **${revenue.toLocaleString('fr-FR')} FCFA**.`,
+        answer: `Aujourd'hui (${today}), un total de **${totalSold} ticket(s)** a été vendu sur le corridor de Vridi, représentant une recette brute de **${revenue.toLocaleString('fr-FR')} FCFA** (tarif officiel : ${currentPrice.toLocaleString('fr-FR')} FCFA/ticket).`,
       });
     }
 

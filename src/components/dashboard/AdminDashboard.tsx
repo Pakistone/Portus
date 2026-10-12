@@ -546,6 +546,14 @@ export const AdminDashboard: React.FC = () => {
             <span>Paramètres & Tarifs</span>
           </button>
           <button
+            onClick={() => setAdminSettingsModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-xl bg-rose-600/20 border border-rose-500/40 px-3.5 py-2 text-xs font-bold text-rose-300 hover:bg-rose-600/30 transition cursor-pointer shadow-xs"
+            title="Réinitialiser l'application (DANGER ZONE : Purge totale des données)"
+          >
+            <AlertTriangle className="w-4 h-4 text-rose-400" />
+            <span>Réinitialiser l'Appli</span>
+          </button>
+          <button
             onClick={async () => {
               setSyncingCloud(true);
               const res = await syncAllToSupabase();

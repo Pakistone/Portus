@@ -509,7 +509,7 @@ export const AgentBadgeModal: React.FC<AgentBadgeModalProps> = ({ isOpen, onClos
                 {/* Photo row */}
                 <div className="flex justify-between items-center px-2 mt-1">
                   {/* Miniature Logo */}
-                  <img src="/public/logo-ujpas.png" alt="UJPAS Logo" className="w-6 h-6 object-contain shrink-0" onError={(e) => { e.currentTarget.src = 'https://placehold.co/100x100?text=UJPAS'; }} />
+                  <img src="/logo-ujpas.png" alt="UJPAS Logo" className="w-6 h-6 object-contain shrink-0" onError={(e) => { e.currentTarget.src = 'https://placehold.co/100x100?text=UJPAS'; }} />
                   
                   {/* Card photo frame */}
                   <div className="w-16 h-20 bg-slate-100 border border-slate-900 rounded overflow-hidden flex items-center justify-center shrink-0">

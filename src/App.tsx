@@ -5,6 +5,7 @@ import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 import { Header } from './components/common/Header';
 import { LoginView } from './components/auth/LoginView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { ToastNotificationContainer } from './components/common/ToastNotification';
 
 // Dashboards par rôle
 import { AdminDashboard } from './components/dashboard/AdminDashboard';
@@ -95,6 +96,9 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-white">
+      {/* Toast notifications flottantes système */}
+      <ToastNotificationContainer />
+
       {/* Indicateur de connectivité PWA */}
       <OfflineIndicator />
 

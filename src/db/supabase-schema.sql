@@ -1146,7 +1146,7 @@ BEGIN
   v_expected_sig := public.sign_ticket_canonical(v_canonical);
 
   IF p_scanned_token IS NOT NULL AND TRIM(p_scanned_token) != '' THEN
-    IF TRIM(p_scanned_token) = v_expected_sig OR TRIM(p_scanned_token) = v_stored_sig THEN
+    IF TRIM(p_scanned_token) = v_expected_sig THEN
       v_sig_valid := TRUE;
     ELSE
       RETURN jsonb_build_object(
@@ -1158,7 +1158,7 @@ BEGIN
       );
     END IF;
   ELSE
-    v_sig_valid := (v_stored_sig = v_expected_sig);
+    v_sig_valid := (v_stored_sig IS NOT NULL AND v_stored_sig = v_expected_sig);
   END IF;
 
   -- 3. Historique des contrôles préalables
