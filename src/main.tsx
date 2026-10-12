@@ -1,7 +1,10 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import { inject } from '@vercel/analytics';
 import App from './App.tsx';
 import './index.css';
+
+inject();
 
 window.addEventListener('unhandledrejection', (event) => {
   if (event.reason && (event.reason.name === 'AbortError' || event.reason.message?.includes('AbortError'))) {
