@@ -38,6 +38,7 @@ import {
 } from '../../utils/normalization';
 import { CEDEAO_COUNTRIES, generateWhatsAppReceiptUrl } from '../../utils/cedeao';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
+import { showToast } from '../common/ToastNotification';
 import type { Ticket, Sale } from '../../types';
 
 interface Props {
@@ -187,7 +188,7 @@ export const SaleFormModal: React.FC<Props> = ({
     } catch (err: any) {
       console.warn('Erreur caméra ANPR:', err);
       setAnprScanning(false);
-      alert("Impossible d'accéder à la caméra : " + (err.message || 'Permissions manquantes'));
+      showToast('error', 'Accès Caméra Impossible', err.message || 'Permissions manquantes');
     }
   };
 

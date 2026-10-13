@@ -163,7 +163,8 @@ export function isSupabaseConfigured(): boolean {
 }
 
 /**
- * Teste la connectivité directe avec Supabase PostgreSQL et Supabase Auth
+ * Teste la connectivité avec Supabase PostgreSQL et Supabase Auth
+ * Combine le diagnostic backend autoritaire et le diagnostic client direct.
  */
 export async function testSupabaseConnection(): Promise<{
   success: boolean;
@@ -171,10 +172,41 @@ export async function testSupabaseConnection(): Promise<{
   tableCount?: number;
   tablesFound?: string[];
   latencyMs?: number;
+  serverOverview?: {
+    connected: boolean;
+    tables: Record<string, number>;
+    hasRlsIssue?: boolean;
+    url?: string;
+  };
 }> {
   const startTime = Date.now();
-  const supabase = getSupabase();
 
+  // 1. Tenter le diagnostic serveur prioritaire via /api/database/status
+  try {
+    const res = await fetch('/api/database/status');
+    if (res.ok) {
+      const serverStatus = await res.json();
+      if (serverStatus.connected) {
+        const latency = Date.now() - startTime;
+        const tableEntries = Object.entries(serverStatus.tables || {}) as [string, number][];
+        const accessibleTables = tableEntries.filter(([, count]) => count >= 0).map(([t]) => t);
+        const totalRecords = tableEntries.reduce((sum, [, count]) => sum + (count > 0 ? count : 0), 0);
+
+        return {
+          success: true,
+          message: `Connexion PostgreSQL et Supabase Auth active et opérationnelle (${latency}ms). Total de ${totalRecords} enregistrements identifiés sur ${accessibleTables.length} tables principales.`,
+          tableCount: totalRecords,
+          tablesFound: accessibleTables,
+          latencyMs: latency,
+          serverOverview: serverStatus,
+        };
+      }
+    }
+  } catch {
+    // Si l'API serveur n'est pas joignable (ex: mode statique offline), basculer sur le client direct
+  }
+
+  const supabase = getSupabase();
   if (!supabase) {
     return {
       success: false,
@@ -183,48 +215,30 @@ export async function testSupabaseConnection(): Promise<{
   }
 
   try {
-    // 1. Tester la table sectors
-    const sectorsRes = await supabase
-      .from('sectors')
-      .select('id, code, name')
-      .limit(5);
+    // 2. Tester app_settings et sectors côté client
+    const [sectorsRes, settingsRes] = await Promise.all([
+      supabase.from('sectors').select('id, code, name').limit(5),
+      supabase.from('app_settings').select('key, value').limit(5),
+    ]);
 
-    if (!sectorsRes.error) {
-      const profRes = await supabase.from('profiles').select('id').limit(1);
-      const tables = ['sectors'];
-      if (!profRes.error) tables.push('profiles');
+    const tables: string[] = [];
+    if (!sectorsRes.error) tables.push('sectors');
+    if (!settingsRes.error) tables.push('app_settings');
 
-      const latency = Date.now() - startTime;
+    const latency = Date.now() - startTime;
+    if (tables.length > 0) {
       return {
         success: true,
-        message: `Connexion Supabase PostgreSQL et Auth validée avec succès (${latency}ms).`,
-        tableCount: sectorsRes.data?.length || 0,
+        message: `Connexion Supabase client active (${latency}ms - Tables accessibles : ${tables.join(', ')}).`,
+        tableCount: (sectorsRes.data?.length || 0) + (settingsRes.data?.length || 0),
         tablesFound: tables,
         latencyMs: latency,
       };
     }
 
-    // 2. Tester app_settings en repli
-    const settingsRes = await supabase
-      .from('app_settings')
-      .select('key, value')
-      .limit(5);
-
-    if (!settingsRes.error) {
-      const latency = Date.now() - startTime;
-      return {
-        success: true,
-        message: `Connexion Supabase validée avec succès (${latency}ms - Paramètres accessibles).`,
-        tableCount: settingsRes.data?.length || 0,
-        tablesFound: ['app_settings'],
-        latencyMs: latency,
-      };
-    }
-
-    const latency = Date.now() - startTime;
     return {
       success: false,
-      message: `Erreur d'accès Supabase: ${sectorsRes.error?.message || settingsRes.error?.message || 'Erreur inconnue'}`,
+      message: `Erreur d'accès Supabase: ${sectorsRes.error?.message || settingsRes.error?.message || 'Erreur RLS ou permission inconnue'}`,
       latencyMs: latency,
     };
   } catch (err: any) {

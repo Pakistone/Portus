@@ -24,10 +24,20 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
   };
 
   const handlePrintImage = (src: string, title: string, subtitle: string) => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.name = 'stamp-print-iframe';
+    document.body.appendChild(iframe);
 
-    printWindow.document.write(`
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) return;
+
+    doc.write(`
       <!DOCTYPE html>
       <html>
         <head>
@@ -56,13 +66,25 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
               <div class="footer-legal">Document officiel certifié — ${ORG_INFO.FULL_ORG_NAME} (${ORG_INFO.SHORT_ORG_NAME})</div>
             </div>
           </div>
-          <script>
-            window.onload = () => { setTimeout(() => { window.print(); }, 250); };
-          </script>
         </body>
       </html>
     `);
-    printWindow.document.close();
+    doc.close();
+
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (err) {
+        console.warn('Erreur impression iframe:', err);
+      } finally {
+        setTimeout(() => {
+          if (document.body.contains(iframe)) {
+            document.body.removeChild(iframe);
+          }
+        }, 3000);
+      }
+    }, 350);
   };
 
   return (

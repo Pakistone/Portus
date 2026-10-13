@@ -30,6 +30,8 @@ import { ORG_INFO } from '../../config/constants';
 import { formatDateTime } from '../../utils/normalization';
 import type { Role } from '../../types';
 
+import { showToast } from './ToastNotification';
+
 interface HeaderProps {
   onOpenAudit?: () => void;
   onOpenUsers?: () => void;
@@ -75,9 +77,9 @@ export const Header: React.FC<HeaderProps> = ({
     try {
       await triggerSOSAlert(sosMessage);
       setSosConfirmOpen(false);
-      alert("⚠️ Alerte SOS envoyée avec succès ! Les coordinateurs et superviseurs ont été notifiés de votre position GPS et de l'état de détresse.");
+      showToast('success', 'Alerte SOS transmise', "Les coordinateurs et superviseurs ont été notifiés de votre position GPS et de l'état de détresse.");
     } catch (err: any) {
-      alert("Échec de l'envoi de l'alerte SOS : " + (err.message || 'Erreur inconnue'));
+      showToast('error', "Échec de l'alerte SOS", err.message || 'Erreur inconnue');
     } finally {
       setSosSending(false);
     }

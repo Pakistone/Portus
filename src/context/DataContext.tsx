@@ -1193,10 +1193,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setLatestRealtimeIncident(testIncident);
       window.dispatchEvent(new CustomEvent('portus-road-safety-alert', { detail: testIncident }));
 
-      if (SupabaseDataLayer.isAvailable()) {
-        await SupabaseDataLayer.broadcastIncident(testIncident);
-        await SupabaseDataLayer.insertFraudReport(testIncident);
-      }
+      // SÉCURITÉ DE PRODUCTION : Ne jamais persister d'incident fictif dans la table fraud_reports officielle
+      // La simulation déclenche uniquement l'alerte sensorielle locale sans polluer le registre réel
     },
     [currentUser]
   );

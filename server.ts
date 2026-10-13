@@ -658,6 +658,71 @@ app.get('/api/pricing', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------------
+// ÉTAT & STATISTIQUES DE LA BASE DE DONNÉES (SUPABASE POSTGRESQL)
+// ------------------------------------------------------------------
+app.get('/api/database/status', async (req, res) => {
+  const startTime = Date.now();
+  if (!supabaseAdmin) {
+    return res.json({
+      connected: false,
+      error: 'Supabase n’est pas configuré sur le serveur (SUPABASE_SERVICE_ROLE_KEY ou URL manquante).',
+      tables: {},
+      latencyMs: 0,
+    });
+  }
+
+  try {
+    const [
+      profilesRes,
+      sectorsRes,
+      carnetsRes,
+      ticketsRes,
+      salesRes,
+      remisesRes,
+      expensesRes,
+      controlsRes,
+      fraudsRes,
+    ] = await Promise.all([
+      supabaseAdmin.from('profiles').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('sectors').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('carnets').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('tickets').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('sales').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('remittances').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('expenses').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('controls').select('id', { count: 'exact', head: true }),
+      supabaseAdmin.from('fraud_reports').select('id', { count: 'exact', head: true }),
+    ]);
+
+    const latencyMs = Date.now() - startTime;
+    return res.json({
+      connected: true,
+      url: supabaseUrl.replace(/^https?:\/\//, '').split('.')[0] + '.supabase.co',
+      latencyMs,
+      tables: {
+        profiles: profilesRes.count ?? 0,
+        sectors: sectorsRes.count ?? 0,
+        carnets: carnetsRes.count ?? 0,
+        tickets: ticketsRes.count ?? 0,
+        sales: salesRes.count ?? 0,
+        remittances: remisesRes.count ?? 0,
+        expenses: expensesRes.count ?? 0,
+        controls: controlsRes.count ?? 0,
+        fraud_reports: fraudsRes.count ?? 0,
+      },
+      hasRlsIssue: Boolean(profilesRes.error || ticketsRes.error || carnetsRes.error),
+    });
+  } catch (err: any) {
+    return res.json({
+      connected: false,
+      error: err?.message || 'Erreur inconnue de connexion à la base de données',
+      tables: {},
+      latencyMs: Date.now() - startTime,
+    });
+  }
+});
+
 app.put('/api/pricing', requireAdmin, async (req, res) => {
   try {
     const { price } = req.body;

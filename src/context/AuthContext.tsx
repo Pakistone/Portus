@@ -192,6 +192,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             setCurrentUser(formattedUser);
             touchActivity();
 
+            // Synchroniser le jeton Bearer pour les appels API backend
+            if (session.access_token) {
+              try {
+                sessionStorage.setItem('portus_access_token', session.access_token);
+                localStorage.setItem('portus_access_token', session.access_token);
+                if (session.refresh_token) {
+                  sessionStorage.setItem('portus_refresh_token', session.refresh_token);
+                  localStorage.setItem('portus_refresh_token', session.refresh_token);
+                }
+              } catch {}
+            }
+
             // Cache local de consultation
             try {
               const db = await getDB();
@@ -201,6 +213,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             // Aucun profil valide ou compte désactivé : accès refusé
             await supabase.auth.signOut();
             sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            sessionStorage.removeItem('portus_access_token');
+            sessionStorage.removeItem('portus_refresh_token');
+            localStorage.removeItem('portus_access_token');
+            localStorage.removeItem('portus_refresh_token');
             setCurrentUser(null);
           }
         } else {
@@ -215,14 +231,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                 touchActivity();
               } else {
                 sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+                sessionStorage.removeItem('portus_access_token');
+                sessionStorage.removeItem('portus_refresh_token');
+                localStorage.removeItem('portus_access_token');
+                localStorage.removeItem('portus_refresh_token');
                 setCurrentUser(null);
               }
             } catch {
               sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+              sessionStorage.removeItem('portus_access_token');
+              sessionStorage.removeItem('portus_refresh_token');
+              localStorage.removeItem('portus_access_token');
+              localStorage.removeItem('portus_refresh_token');
               setCurrentUser(null);
             }
           } else {
             sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            sessionStorage.removeItem('portus_access_token');
+            sessionStorage.removeItem('portus_refresh_token');
+            localStorage.removeItem('portus_access_token');
+            localStorage.removeItem('portus_refresh_token');
             setCurrentUser(null);
           }
         }
@@ -231,7 +259,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const { data: sub } = supabase.auth.onAuthStateChange(async (event, newSession) => {
           if (event === 'SIGNED_OUT' || !newSession) {
             sessionStorage.removeItem(CURRENT_USER_SESSION_KEY);
+            sessionStorage.removeItem('portus_access_token');
+            sessionStorage.removeItem('portus_refresh_token');
+            localStorage.removeItem('portus_access_token');
+            localStorage.removeItem('portus_refresh_token');
             setCurrentUser(null);
+          } else if (newSession.access_token) {
+            try {
+              sessionStorage.setItem('portus_access_token', newSession.access_token);
+              localStorage.setItem('portus_access_token', newSession.access_token);
+              if (newSession.refresh_token) {
+                sessionStorage.setItem('portus_refresh_token', newSession.refresh_token);
+                localStorage.setItem('portus_refresh_token', newSession.refresh_token);
+              }
+            } catch {}
           }
         });
         authSubscription = sub.subscription;
@@ -543,12 +584,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       // Résilience Administrateur Initial : En cas d'erreur de privilèges RLS ou absence de profil physique,
-      // l'administrateur conserve l'accès root pour pouvoir corriger les tables
+      // l'administrateur conserve l'accès root pour pouvoir corriger les tables (vérification stricte de l'e-mail ou identifiant système)
       const isAdminUser = 
         authData.user.email === 'ypaki090@gmail.com' || 
         cleanInput.toLowerCase() === 'ypaki090' || 
-        cleanInput.toLowerCase() === 'admin' ||
-        authData.user.user_metadata?.role === 'ADMINISTRATEUR';
+        cleanInput.toLowerCase() === 'admin';
 
       if (!profile && isAdminUser) {
         console.log('[PORTUS Auth] Résilience activée : profil virtuel ADMINISTRATEUR attribué à', authData.user.email);
@@ -643,6 +683,16 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       sessionStorage.setItem(CURRENT_USER_SESSION_KEY, formattedUser.id);
       sessionStorage.setItem(SESSION_START_KEY, Date.now().toString());
+      if (authData.session?.access_token) {
+        try {
+          sessionStorage.setItem('portus_access_token', authData.session.access_token);
+          localStorage.setItem('portus_access_token', authData.session.access_token);
+          if (authData.session.refresh_token) {
+            sessionStorage.setItem('portus_refresh_token', authData.session.refresh_token);
+            localStorage.setItem('portus_refresh_token', authData.session.refresh_token);
+          }
+        } catch {}
+      }
       touchActivity();
 
       setCurrentUser(formattedUser);

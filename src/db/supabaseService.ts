@@ -276,7 +276,7 @@ export const SupabaseDataLayer = {
       });
 
       if (signUpErr) {
-        throw new Error(signUpErr.message);
+        throw new Error(`Échec de création dans Supabase Auth : ${signUpErr.message}`);
       }
 
       if (signUpData?.user) {
@@ -294,7 +294,7 @@ export const SupabaseDataLayer = {
           updatedAt: new Date().toISOString(),
         };
 
-        await supabase.from('profiles').upsert({
+        const { error: profErr } = await supabase.from('profiles').upsert({
           id: newProf.id,
           username: newProf.username,
           full_name: newProf.fullName,
@@ -307,11 +307,15 @@ export const SupabaseDataLayer = {
           updated_at: newProf.updatedAt,
         });
 
+        if (profErr) {
+          throw new Error(`Utilisateur créé dans Auth mais échec du profil : ${profErr.message}`);
+        }
+
         return newProf;
       }
     }
 
-    throw new Error('Erreur lors de la création de l’utilisateur dans Supabase.');
+    throw new Error('Erreur lors de la création de l’utilisateur : Session administrateur non authentifiée ou serveur d’authentification indisponible.');
   },
 
   /**

@@ -46,6 +46,13 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
     loading?: boolean;
     latencyMs?: number;
     tablesFound?: string[];
+    tableCount?: number;
+    serverOverview?: {
+      connected: boolean;
+      tables: Record<string, number>;
+      hasRlsIssue?: boolean;
+      url?: string;
+    };
   }>({ tested: false });
 
   // Synchro globale
@@ -61,13 +68,15 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
       if (isRlsPermissionIssue) {
         setActiveTab('permissions');
       }
+      // Test automatique pour afficher les données immédiatement
+      handleTestConnection();
     }
   }, [isOpen, isRlsPermissionIssue]);
 
   if (!isOpen) return null;
 
   const handleTestConnection = async () => {
-    setTestResult({ tested: true, loading: true });
+    setTestResult((prev) => ({ ...prev, tested: true, loading: true }));
     const res = await testSupabaseConnection();
     setTestResult({
       tested: true,
@@ -76,6 +85,8 @@ export const SupabaseModal: React.FC<Props> = ({ isOpen, onClose }) => {
       message: res.message,
       latencyMs: res.latencyMs,
       tablesFound: res.tablesFound,
+      tableCount: res.tableCount,
+      serverOverview: res.serverOverview,
     });
   };
 
@@ -605,20 +616,17 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
 
--- 2. Accorder l'exécution de toutes les fonctions RLS aux utilisateurs authentifiés et anon
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
-
--- 3. Fonctions critiques garanties
+-- 2. Fonctions de sécurité sans récursion (SECURITY DEFINER avec search_path sécurisé)
 CREATE OR REPLACE FUNCTION public.get_current_role()
 RETURNS user_role AS $$
   SELECT role FROM public.profiles WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.get_current_role() TO authenticated, anon, service_role;
 
 CREATE OR REPLACE FUNCTION public.get_current_sector_id()
 RETURNS UUID AS $$
   SELECT sector_id FROM public.profiles WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.get_current_sector_id() TO authenticated, anon, service_role;
 
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -627,7 +635,7 @@ RETURNS BOOLEAN AS $$
     SELECT 1 FROM public.profiles 
     WHERE id = auth.uid() AND role = 'ADMINISTRATEUR' AND is_active = TRUE
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon, service_role;
 
 CREATE OR REPLACE FUNCTION public.is_responsable()
@@ -636,7 +644,7 @@ RETURNS BOOLEAN AS $$
     SELECT 1 FROM public.profiles 
     WHERE id = auth.uid() AND role = 'RESPONSABLE' AND is_active = TRUE
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.is_responsable() TO authenticated, anon, service_role;
 
 CREATE OR REPLACE FUNCTION public.get_my_profile()
@@ -656,8 +664,32 @@ BEGIN
 
   RETURN to_jsonb(v_prof);
 END;
-$$ LANGUAGE plpgsql STABLE SECURITY DEFINER;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, service_role;
+
+-- 3. Accorder l'exécution de toutes les fonctions RLS et RPC
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+
+-- 4. Rétablissement des politiques RLS propres sans récursion infinie sur 'profiles'
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admin full access profiles" ON public.profiles;
+CREATE POLICY "Admin full access profiles" ON public.profiles FOR ALL TO authenticated USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Responsable read sector profiles" ON public.profiles;
+CREATE POLICY "Responsable read sector profiles" ON public.profiles FOR SELECT TO authenticated
+  USING (
+    public.is_admin() OR 
+    (public.is_responsable() AND (sector_id = public.get_current_sector_id() OR id = auth.uid()))
+  );
+
+DROP POLICY IF EXISTS "User read own profile" ON public.profiles;
+CREATE POLICY "User read own profile" ON public.profiles FOR SELECT TO authenticated
+  USING (id = auth.uid());
+
+DROP POLICY IF EXISTS "User update own phone" ON public.profiles;
+CREATE POLICY "User update own phone" ON public.profiles FOR UPDATE TO authenticated
+  USING (id = auth.uid())
+  WITH CHECK (id = auth.uid());
 `;
 
   const handleCopy = () => {
@@ -982,7 +1014,22 @@ GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, servic
                       )}
                     </p>
                     <p className="text-[11px] opacity-90">{testResult.message}</p>
-                    {testResult.tablesFound && testResult.tablesFound.length > 0 && (
+                    {testResult.serverOverview?.tables && (
+                      <div className="pt-2">
+                        <span className="text-[11px] font-bold text-slate-300 block mb-1.5">
+                          Décompte réel en base PostgreSQL ({testResult.tableCount ?? 0} enregistrements) :
+                        </span>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[11px]">
+                          {Object.entries(testResult.serverOverview.tables).map(([table, count]) => (
+                            <div key={table} className="flex items-center justify-between rounded bg-slate-900 border border-slate-800 px-2 py-1">
+                              <span className="text-slate-400">{table}</span>
+                              <span className="font-bold text-emerald-400">{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {testResult.tablesFound && testResult.tablesFound.length > 0 && !testResult.serverOverview && (
                       <div className="flex items-center gap-1.5 pt-1">
                         <span className="text-[10px] text-slate-400">Tables accessibles :</span>
                         {testResult.tablesFound.map((tbl) => (

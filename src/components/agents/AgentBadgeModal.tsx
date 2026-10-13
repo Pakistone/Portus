@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useData } from '../../context/DataContext';
 import { generateAgentBadgePDF, type BadgeParams } from '../../utils/badgePdfGenerator';
+import { showToast } from '../common/ToastNotification';
 import { 
   Camera, 
   Upload, 
@@ -163,7 +164,7 @@ export const AgentBadgeModal: React.FC<AgentBadgeModalProps> = ({ isOpen, onClos
   // Print A4 Planche PDF
   const handlePrintBadge = async () => {
     if (!name || !firstName || !matricule) {
-      alert("Veuillez renseigner au moins le Nom, le Prénom et le Matricule de l'agent.");
+      showToast('warning', 'Champs Obligatoires Requis', "Veuillez renseigner au moins le Nom, le Prénom et le Matricule de l'agent.");
       return;
     }
 
@@ -193,7 +194,7 @@ export const AgentBadgeModal: React.FC<AgentBadgeModalProps> = ({ isOpen, onClos
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Error printing badge:', err);
-      alert("Une erreur est survenue lors de la génération du badge PDF.");
+      showToast('error', 'Erreur Génération Badge', 'Une erreur est survenue lors de la génération du badge PDF.');
     } finally {
       setIsGenerating(false);
     }
