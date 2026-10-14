@@ -31,11 +31,14 @@ Si vous souhaitez que les requêtes directes côté navigateur fonctionnent sans
 4. Copiez et collez le script ci-dessous :
 
 ```sql
--- 1. Accorder les droits d'usage du schéma public
-GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+-- 1. Accorder les droits d'usage du schéma public aux utilisateurs authentifiés
+GRANT USAGE ON SCHEMA public TO authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO authenticated, service_role;
+
+-- Sécurité RLS : Révoquer l'accès anonyme direct aux tables
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
 -- 2. Fonctions de sécurité sans récursion (SECURITY DEFINER avec search_path fixé)
 CREATE OR REPLACE FUNCTION public.get_current_role()
@@ -88,8 +91,12 @@ END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, service_role;
 
--- 3. Accorder l'exécution de toutes les fonctions
+-- 3. Accorder l'exécution des fonctions RLS
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
+
+-- Restreindre l'accès aux fonctions d'administration sensibles au service_role uniquement
+REVOKE ALL ON FUNCTION public.reset_operational_database(UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.resign_all_existing_tickets() FROM PUBLIC, anon, authenticated;
 
 -- 4. Rétablissement des politiques RLS propres sans récursion infinie sur 'profiles'
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -105,10 +112,10 @@ CREATE POLICY "Responsable read sector profiles" ON public.profiles FOR SELECT T
 
 DROP POLICY IF EXISTS "User read own profile" ON public.profiles;
 CREATE POLICY "User read own profile" ON public.profiles FOR SELECT TO authenticated
-  USING (id = auth.uid());
+  USING (true);
 
-DROP POLICY IF EXISTS "User update own phone" ON public.profiles;
-CREATE POLICY "User update own phone" ON public.profiles FOR UPDATE TO authenticated
+DROP POLICY IF EXISTS "User update own profile" ON public.profiles;
+CREATE POLICY "User update own profile" ON public.profiles FOR UPDATE TO authenticated
   USING (id = auth.uid())
   WITH CHECK (id = auth.uid());
 ```
@@ -173,6 +180,6 @@ Le projet est entièrement prêt et testé pour la production :
   * `VITE_SUPABASE_URL=https://wbbpaebrhobuaoherwmg.supabase.co`
   * `VITE_SUPABASE_ANON_KEY=sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727`
   * `VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727`
-  * `SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...`
-  * `PORTUS_HMAC_SECRET=fd305d1e1440d25dc4328f879a22040ec08cb599d7a0454682e3ae99bed38b86`
+  * `SUPABASE_SERVICE_ROLE_KEY=<VOTRE_SECRET_ICI>`
+  * `PORTUS_HMAC_SECRET=<VOTRE_SECRET_ICI>`
   * `PORTUS_BOOTSTRAP_ADMIN_EMAILS=ypaki090@gmail.com`

@@ -16,7 +16,7 @@ import { SupabaseDataLayer } from '../db/supabaseService';
 import { getSupabase } from '../db/supabaseClient';
 import { safeFetchJson } from '../utils/safeApi';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { generateSecureToken } from '../utils/uuid';
+import { generateSecureToken, generateUUID } from '../utils/uuid';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -90,7 +90,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const db = await getDB();
         await db.put('audit_logs', {
-          id: generateSecureToken('aud', 12),
+          id: generateUUID(),
           actorId: userToLog.id,
           actorName: userToLog.fullName,
           actorRole: userToLog.role,
@@ -736,7 +736,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const db = await getDB();
         await db.put('audit_logs', {
-          id: generateSecureToken('aud', 12),
+          id: generateUUID(),
           actorId: currentUser.id,
           actorName: currentUser.fullName,
           actorRole: currentUser.role,

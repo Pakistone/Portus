@@ -27,6 +27,7 @@ import type {
 
 let rlsPermissionIssueDetected = false;
 let lastRlsErrorMessage = '';
+let expensesTableMissing = false;
 
 export function isRlsPermissionIssueDetected(): boolean {
   return rlsPermissionIssueDetected;
@@ -1519,9 +1520,13 @@ export const SupabaseDataLayer = {
     const supabase = getSupabase();
     if (!supabase) return false;
 
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const validLogId = (log.id && uuidRegex.test(log.id)) ? log.id : crypto.randomUUID();
+    const validActorId = (log.actorId && uuidRegex.test(log.actorId)) ? log.actorId : null;
+
     const { error } = await supabase.from('audit_logs').insert({
-      id: log.id,
-      actor_id: log.actorId.startsWith('usr-') ? null : log.actorId, // Supabase UUID guard
+      id: validLogId,
+      actor_id: validActorId,
       actor_name: log.actorName,
       actor_role: log.actorRole,
       action: log.action,
@@ -1841,6 +1846,7 @@ export const SupabaseDataLayer = {
   // 14. DÉPENSES (EXPENSES)
   // ------------------------------------------------------------------
   async fetchExpenses(): Promise<Expense[]> {
+    if (expensesTableMissing) return [];
     const supabase = getSupabase();
     if (!supabase) return [];
 
@@ -1851,6 +1857,9 @@ export const SupabaseDataLayer = {
         .order('expense_date', { ascending: false });
 
       if (error) {
+        if (error.code === 'PGRST205' || error.code === '42P01' || error.message?.includes('404') || error.message?.includes('does not exist') || error.message?.includes('Could not find')) {
+          expensesTableMissing = true;
+        }
         console.warn('Supabase fetchExpenses error:', error.message);
         return [];
       }
@@ -1883,7 +1892,10 @@ export const SupabaseDataLayer = {
         updatedAt: r.updated_at,
         syncedAt: r.updated_at,
       }));
-    } catch {
+    } catch (err: any) {
+      if (err?.code === 'PGRST205' || err?.message?.includes('404') || err?.message?.includes('does not exist')) {
+        expensesTableMissing = true;
+      }
       return [];
     }
   },

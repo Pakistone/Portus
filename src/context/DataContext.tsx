@@ -57,6 +57,7 @@ import { getCurrentCoordinates } from '../utils/geolocation';
 import { generateUUID, generateSecureToken } from '../utils/uuid';
 import { useAuth } from './AuthContext';
 import { useOnlineStatus } from '../components/pwa/usePWAInstall';
+import { getSupabase } from '../db/supabaseClient';
 import { SupabaseDataLayer, isRlsPermissionIssueDetected, getLastRlsErrorMessage } from '../db/supabaseService';
 import { safeFetchJson } from '../utils/safeApi';
 import { playIncidentAlertSound } from '../utils/audioAlert';
@@ -401,15 +402,33 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     [ticketPrice]
   );
 
+  const isFetchingRef = React.useRef(false);
+
   // Charger toutes les données depuis IndexedDB
   const refreshData = useCallback(async (forceSync = false) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       await initializeDatabase();
       const db = await getDB();
 
-      // Synchroniser les données depuis Supabase
-      const shouldSyncNetwork = forceSync || (Date.now() - lastSyncTime > 15000);
+      // Synchroniser les données depuis Supabase UNIQUEMENT si un utilisateur est authentifié et actif,
+      // ET que Supabase dispose d'une session de jeton valide (évite les requêtes fantômes avec auth_user: null)
+      const isAuthenticated = Boolean(currentUser && currentUser.isActive);
+      let hasActiveSupabaseSession = false;
+      const client = getSupabase();
+      if (client) {
+        try {
+          const { data: { session } } = await client.auth.getSession();
+          hasActiveSupabaseSession = Boolean(session && session.user);
+        } catch {
+          hasActiveSupabaseSession = false;
+        }
+      }
+
+      const shouldSyncNetwork = isAuthenticated && hasActiveSupabaseSession && (forceSync || (Date.now() - lastSyncTime > 5000));
       if (SupabaseDataLayer.isAvailable() && shouldSyncNetwork) {
+        lastSyncTime = Date.now();
         try {
           const [
             remoteProfiles,
@@ -746,6 +765,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       calculateFinancialAlerts(allUsers, allTickets, allRemises);
     } catch (err) {
       console.error('Erreur chargement données', err);
+    } finally {
+      isFetchingRef.current = false;
     }
   }, [currentUser, ticketPrice]);
 
@@ -890,7 +911,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         lastSyncedNumber = sale.ticketNumber;
 
         const audit: AuditLog = {
-          id: `aud-sync-${sale.id}-${Date.now()}`,
+          id: generateUUID(),
           actorId: sale.agentId,
           actorName: sale.agentName,
           actorRole: 'AGENT',
@@ -911,7 +932,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await tx.objectStore('controls').put(ctrl);
 
         const audit: AuditLog = {
-          id: `aud-sync-ctrl-${ctrl.id}-${Date.now()}`,
+          id: generateUUID(),
           actorId: ctrl.controleurId,
           actorName: ctrl.controleurName,
           actorRole: 'CONTROLEUR',
@@ -932,7 +953,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await tx.objectStore('fraud_reports').put(fraud);
 
         const audit: AuditLog = {
-          id: `aud-sync-frd-${fraud.id}-${Date.now()}`,
+          id: generateUUID(),
           actorId: fraud.controleurId,
           actorName: fraud.controleurName,
           actorRole: 'CONTROLEUR',
@@ -1450,8 +1471,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       const db = await getDB();
       const log: AuditLog = {
-        id: generateSecureToken('aud', 12),
-        actorId: currentUser?.id || 'system',
+        id: generateUUID(),
+        actorId: currentUser?.id || '00000000-0000-0000-0000-000000000000',
         actorName: currentUser?.fullName || 'SYSTÈME',
         actorRole: currentUser?.role || 'ADMINISTRATEUR',
         action,

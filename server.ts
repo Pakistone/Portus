@@ -168,6 +168,12 @@ function getSupabaseUserClient(req: express.Request) {
   });
 }
 
+interface AuthCacheRecord {
+  user: AuthenticatedUser | null;
+  expiresAt: number;
+}
+const authSessionCache = new Map<string, AuthCacheRecord>();
+
 async function authenticateSession(req: express.Request): Promise<AuthenticatedUser | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -177,6 +183,15 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
   const token = authHeader.split(' ')[1];
   if (!token || token.trim() === '') return null;
 
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const cached = authSessionCache.get(tokenHash);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.user;
+  }
+
+  if (authSessionCache.size > 500) authSessionCache.clear();
+
   if (!supabaseAdmin) {
     // Si Supabase n'est pas encore initialisé avec les clés, rejeter
     return null;
@@ -185,12 +200,13 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
   try {
     const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
     if (authErr || !user) {
+      authSessionCache.set(tokenHash, { user: null, expiresAt: now + 10000 });
       return null;
     }
 
     const { data: profile, error: profErr } = await supabaseAdmin
       .from('profiles')
-      .select('id, username, full_name, role, sector_id, is_active')
+      .select('*, sector:sectors(name)')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -198,6 +214,7 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       // Si un profil existe explicitement mais est inactif (désactivé), REFUSER STRICTEMENT (S-02)
       if (profile && !profile.is_active) {
         console.warn(`[PORTUS Server Auth] Accès refusé pour compte désactivé: ${user.email} (${user.id})`);
+        authSessionCache.set(tokenHash, { user: null, expiresAt: now + 10000 });
         return null;
       }
 
@@ -216,7 +233,7 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       // SÉCURITÉ : Aucune élévation de privilèges via user_metadata qui est contrôlable par le client
       if (!profile && isEmailConfirmed && isWhitelisted) {
         console.log('[PORTUS Server Auth] Amorçage initial autorisé pour nouvel admin vérifié:', user.email);
-        return {
+        const bootUser: AuthenticatedUser = {
           id: user.id,
           email: user.email,
           username: user.email?.split('@')[0] || 'admin',
@@ -225,11 +242,14 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
           sectorId: null,
           isActive: true,
         };
+        authSessionCache.set(tokenHash, { user: bootUser, expiresAt: now + 30000 });
+        return bootUser;
       }
+      authSessionCache.set(tokenHash, { user: null, expiresAt: now + 10000 });
       return null;
     }
 
-    return {
+    const authUser: AuthenticatedUser = {
       id: profile.id,
       email: user.email,
       username: profile.username,
@@ -238,6 +258,9 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       sectorId: profile.sector_id,
       isActive: profile.is_active,
     };
+
+    authSessionCache.set(tokenHash, { user: authUser, expiresAt: now + 30000 });
+    return authUser;
   } catch (err) {
     console.error('[PORTUS Server Auth] Erreur validation jeton:', err);
     return null;
@@ -771,7 +794,7 @@ app.get('/api/users', requireAuth, async (req, res) => {
     // Si AGENT ou CONTROLEUR, limiter la visibilité pour respecter le principe de moindre privilège
     let query = supabaseAdmin
       .from('profiles')
-      .select('id, username, full_name, role, sector_id, is_active, phone, matricule, brigade, created_at, sector:sectors(name)');
+      .select('*, sector:sectors(name)');
 
     if (actor.role === 'AGENT' || actor.role === 'CONTROLEUR') {
       if (actor.sectorId) {

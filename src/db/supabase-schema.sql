@@ -114,6 +114,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   role user_role NOT NULL DEFAULT 'AGENT',
   sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
   phone TEXT,
+  matricule TEXT,
+  brigade TEXT,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   failed_attempts INT NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
   locked_until TIMESTAMPTZ,
@@ -121,6 +123,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS matricule TEXT, ADD COLUMN IF NOT EXISTS brigade TEXT;
 
 -- --------------------------------------------------------------------
 -- 6. TABLE DES TENTATIVES DE CONNEXION (SÉCURITÉ & AUDIT BRUTE-FORCE)
@@ -447,6 +451,33 @@ ON CONFLICT (key) DO UPDATE SET
   value = EXCLUDED.value,
   description = EXCLUDED.description;
 
+-- --------------------------------------------------------------------
+-- 20. TABLE EXPENSES (DÉPENSES ET TRÉSORERIE)
+-- --------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_number TEXT,
+  title TEXT,
+  category TEXT,
+  amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+  description TEXT,
+  beneficiary TEXT,
+  payment_method TEXT DEFAULT 'ESPECES',
+  expense_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  receipt_url TEXT,
+  status TEXT NOT NULL DEFAULT 'APPROVED',
+  created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  approved_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  responsible_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
+  rejection_reason TEXT,
+  cancellation_reason TEXT,
+  correction_reason TEXT,
+  approved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ====================================================================
 -- TRIGGERS & SÉCURITÉ BASE DE DONNÉES (IMMUABILITÉ & COHÉRENCE)
 -- ====================================================================
@@ -606,47 +637,81 @@ ALTER TABLE public.sync_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.login_attempts ENABLE ROW LEVEL SECURITY;
 
--- Fonctions utilitaires SECURITY DEFINER pour évaluer les privilèges sans contournement
-DROP FUNCTION IF EXISTS public.get_current_role() CASCADE;
+-- Fonctions utilitaires SECURITY DEFINER pour évaluer les privilèges sans récursion ni échec
 CREATE OR REPLACE FUNCTION public.get_current_role()
 RETURNS user_role AS $$
-  SELECT role FROM public.profiles WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+DECLARE
+  v_role user_role;
+BEGIN
+  SELECT role INTO v_role FROM public.profiles WHERE id = auth.uid();
+  RETURN v_role;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, auth, pg_temp;
 
-DROP FUNCTION IF EXISTS public.get_current_sector_id() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_current_sector_id()
 RETURNS UUID AS $$
-  SELECT sector_id FROM public.profiles WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+DECLARE
+  v_sector_id UUID;
+BEGIN
+  SELECT sector_id INTO v_sector_id FROM public.profiles WHERE id = auth.uid();
+  RETURN v_sector_id;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, auth, pg_temp;
 
-DROP FUNCTION IF EXISTS public.is_admin() CASCADE;
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
+BEGIN
+  RETURN EXISTS (
     SELECT 1 FROM public.profiles 
     WHERE id = auth.uid() AND role = 'ADMINISTRATEUR' AND is_active = TRUE
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, auth, pg_temp;
 
-DROP FUNCTION IF EXISTS public.is_responsable() CASCADE;
 CREATE OR REPLACE FUNCTION public.is_responsable()
 RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
+BEGIN
+  RETURN EXISTS (
     SELECT 1 FROM public.profiles 
     WHERE id = auth.uid() AND role = 'RESPONSABLE' AND is_active = TRUE
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+EXCEPTION
+  WHEN OTHERS THEN
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, auth, pg_temp;
+
+ALTER FUNCTION public.get_current_role() OWNER TO postgres;
+ALTER FUNCTION public.get_current_sector_id() OWNER TO postgres;
+ALTER FUNCTION public.is_admin() OWNER TO postgres;
+ALTER FUNCTION public.is_responsable() OWNER TO postgres;
 
 -- Autorisations d'exécution indispensables pour évaluer les politiques RLS sans erreur PostgreSQL
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO authenticated, service_role;
 
-GRANT EXECUTE ON FUNCTION public.get_current_role() TO authenticated, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.get_current_sector_id() TO authenticated, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, anon, service_role;
-GRANT EXECUTE ON FUNCTION public.is_responsable() TO authenticated, anon, service_role;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
+
+REVOKE ALL ON FUNCTION public.reset_operational_database(UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.resign_all_existing_tickets() FROM PUBLIC, anon, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.get_current_role() TO PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.get_current_sector_id() TO PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_responsable() TO PUBLIC, anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
 
 -- Fonction autoritaire get_my_profile pour récupération immédiate de profil sans blocage RLS
 CREATE OR REPLACE FUNCTION public.get_my_profile()
