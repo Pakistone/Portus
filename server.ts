@@ -130,6 +130,18 @@ if (supabaseUrl && supabaseSecretKey) {
   });
 }
 
+export const isServiceRoleKeyAvailable = Boolean(
+  (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY) &&
+  !(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY)?.startsWith('sb_publishable_')
+);
+
+export function getDatabaseClient(req: express.Request): SupabaseClient {
+  if (isServiceRoleKeyAvailable && supabaseAdmin) {
+    return supabaseAdmin;
+  }
+  return getSupabaseUserClient(req);
+}
+
 // ------------------------------------------------------------------
 // MIDDLEWARES D'AUTHENTIFICATION ET D'AUTORISATION STRICTS
 // RÈGLE CRITIQUE : L'acteur est toujours déduit de la session validée
@@ -204,11 +216,46 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       return null;
     }
 
-    const { data: profile, error: profErr } = await supabaseAdmin
-      .from('profiles')
-      .select('*, sector:sectors(name)')
-      .eq('id', user.id)
-      .maybeSingle();
+    let profile: any = null;
+    let profErr: any = null;
+
+    if (isServiceRoleKeyAvailable && supabaseAdmin) {
+      const res = await supabaseAdmin
+        .from('profiles')
+        .select('*, sector:sectors(name)')
+        .eq('id', user.id)
+        .maybeSingle();
+      profile = res.data;
+      profErr = res.error;
+    }
+
+    // Si supabaseAdmin n'a pas accès RLS ou pas de profil trouvé, requêter avec le jeton Bearer de l'utilisateur
+    if (!profile) {
+      try {
+        const userClient = getSupabaseUserClient(req);
+        const res = await userClient
+          .from('profiles')
+          .select('*, sector:sectors(name)')
+          .eq('id', user.id)
+          .maybeSingle();
+        if (res.data) {
+          profile = res.data;
+          profErr = null;
+        } else {
+          // Tenter la fonction RPC autoritaire SECURITY DEFINER get_my_profile
+          const { data: rpcProf } = await userClient.rpc('get_my_profile');
+          if (rpcProf && typeof rpcProf === 'object') {
+            profile = {
+              ...rpcProf,
+              sector: rpcProf.sector_name ? { name: rpcProf.sector_name } : null,
+            };
+            profErr = null;
+          }
+        }
+      } catch (userClientErr) {
+        console.warn('[PORTUS Server Auth] Échec résolution profil via userClient:', userClientErr);
+      }
+    }
 
     if (profErr || !profile || !profile.is_active) {
       // Si un profil existe explicitement mais est inactif (désactivé), REFUSER STRICTEMENT (S-02)
@@ -537,11 +584,52 @@ app.post('/api/auth/login', async (req, res) => {
     const authUserId = authData.user.id;
 
     // 5. Récupération du profil
-    let { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('*, sector:sectors(name)')
-      .eq('id', authUserId)
-      .maybeSingle();
+    let profile: any = null;
+    if (isServiceRoleKeyAvailable && supabaseAdmin) {
+      const { data: p } = await supabaseAdmin
+        .from('profiles')
+        .select('*, sector:sectors(name)')
+        .eq('id', authUserId)
+        .maybeSingle();
+      profile = p;
+    }
+
+    let loginUserClient: SupabaseClient | null = null;
+    if (authData.session?.access_token) {
+      try {
+        loginUserClient = createClient(supabaseUrl, process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727', {
+          auth: { persistSession: false, autoRefreshToken: false },
+          global: {
+            headers: {
+              Authorization: `Bearer ${authData.session.access_token}`
+            }
+          }
+        });
+      } catch {}
+    }
+
+    if (!profile && loginUserClient) {
+      try {
+        const { data: p } = await loginUserClient
+          .from('profiles')
+          .select('*, sector:sectors(name)')
+          .eq('id', authUserId)
+          .maybeSingle();
+        if (p) {
+          profile = p;
+        } else {
+          const { data: myProf } = await loginUserClient.rpc('get_my_profile');
+          if (myProf && typeof myProf === 'object') {
+            profile = {
+              ...myProf,
+              sector: myProf.sector_name ? { name: myProf.sector_name } : null,
+            };
+          }
+        }
+      } catch (err: any) {
+        console.warn('[PORTUS Server Login] Erreur récupération profil via user token:', err?.message);
+      }
+    }
 
     if (!profile) {
       // Profil initial si premier accès
@@ -561,11 +649,14 @@ app.post('/api/auth/login', async (req, res) => {
       };
 
       try {
-        const { error: upsertErr } = await supabaseAdmin.from('profiles').upsert(initialProfile);
-        if (upsertErr) {
-          console.error('[PORTUS Server Login] Erreur lors de l’upsert du profil initial:', upsertErr.message, upsertErr);
-        } else {
-          console.log('[PORTUS Server Login] Profil initial upserted avec succès pour:', initialProfile.username);
+        const writerClient = (isServiceRoleKeyAvailable && supabaseAdmin) ? supabaseAdmin : loginUserClient;
+        if (writerClient) {
+          const { error: upsertErr } = await writerClient.from('profiles').upsert(initialProfile);
+          if (upsertErr) {
+            console.error('[PORTUS Server Login] Erreur lors de l’upsert du profil initial:', upsertErr.message, upsertErr);
+          } else {
+            console.log('[PORTUS Server Login] Profil initial upserted avec succès pour:', initialProfile.username);
+          }
         }
       } catch (err: any) {
         console.error('[PORTUS Server Login] Exception lors de l’upsert du profil initial:', err.message, err);
@@ -696,6 +787,10 @@ app.get('/api/database/status', async (req, res) => {
   }
 
   try {
+    const dbClient = (req.headers.authorization && req.headers.authorization.startsWith('Bearer '))
+      ? getDatabaseClient(req)
+      : (supabaseAdmin || getDatabaseClient(req));
+
     const [
       profilesRes,
       sectorsRes,
@@ -707,15 +802,15 @@ app.get('/api/database/status', async (req, res) => {
       controlsRes,
       fraudsRes,
     ] = await Promise.all([
-      supabaseAdmin.from('profiles').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('sectors').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('carnets').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('tickets').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('sales').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('remittances').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('expenses').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('controls').select('id', { count: 'exact', head: true }),
-      supabaseAdmin.from('fraud_reports').select('id', { count: 'exact', head: true }),
+      dbClient.from('profiles').select('id', { count: 'exact', head: true }),
+      dbClient.from('sectors').select('id', { count: 'exact', head: true }),
+      dbClient.from('carnets').select('id', { count: 'exact', head: true }),
+      dbClient.from('tickets').select('id', { count: 'exact', head: true }),
+      dbClient.from('sales').select('id', { count: 'exact', head: true }),
+      dbClient.from('remittances').select('id', { count: 'exact', head: true }),
+      dbClient.from('expenses').select('id', { count: 'exact', head: true }),
+      dbClient.from('controls').select('id', { count: 'exact', head: true }),
+      dbClient.from('fraud_reports').select('id', { count: 'exact', head: true }),
     ]);
 
     const latencyMs = Date.now() - startTime;
@@ -723,18 +818,22 @@ app.get('/api/database/status', async (req, res) => {
       connected: true,
       url: supabaseUrl.replace(/^https?:\/\//, '').split('.')[0] + '.supabase.co',
       latencyMs,
+      isServiceRoleMode: isServiceRoleKeyAvailable,
       tables: {
-        profiles: profilesRes.count ?? 0,
-        sectors: sectorsRes.count ?? 0,
-        carnets: carnetsRes.count ?? 0,
-        tickets: ticketsRes.count ?? 0,
-        sales: salesRes.count ?? 0,
-        remittances: remisesRes.count ?? 0,
-        expenses: expensesRes.count ?? 0,
-        controls: controlsRes.count ?? 0,
-        fraud_reports: fraudsRes.count ?? 0,
+        profiles: profilesRes.count ?? (profilesRes.error ? -1 : 0),
+        sectors: sectorsRes.count ?? (sectorsRes.error ? -1 : 0),
+        carnets: carnetsRes.count ?? (carnetsRes.error ? -1 : 0),
+        tickets: ticketsRes.count ?? (ticketsRes.error ? -1 : 0),
+        sales: salesRes.count ?? (salesRes.error ? -1 : 0),
+        remittances: remisesRes.count ?? (remisesRes.error ? -1 : 0),
+        expenses: expensesRes.count ?? (expensesRes.error ? -1 : 0),
+        controls: controlsRes.count ?? (controlsRes.error ? -1 : 0),
+        fraud_reports: fraudsRes.count ?? (fraudsRes.error ? -1 : 0),
       },
-      hasRlsIssue: Boolean(profilesRes.error || ticketsRes.error || carnetsRes.error),
+      hasRlsIssue: Boolean(!isServiceRoleKeyAvailable && (profilesRes.error || ticketsRes.error || carnetsRes.error)),
+      rlsNotice: !isServiceRoleKeyAvailable
+        ? 'Serveur en mode publishable/anon : les opérations globales utilisent le contexte utilisateur connecté ou requièrent SUPABASE_SERVICE_ROLE_KEY pour le contournement RLS complet.'
+        : undefined,
     });
   } catch (err: any) {
     return res.json({
@@ -1092,10 +1191,10 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
 // Consultation des carnets et tickets (protégée selon le rôle ou synchro générale - S-04)
 app.get('/api/carnets', requireAuth, async (req, res) => {
   try {
-    if (!supabaseAdmin) throw new Error('Supabase non initialisé');
+    const dbClient = getDatabaseClient(req);
     const actor = req.authenticatedUser!;
 
-    let carnetQuery = supabaseAdmin
+    let carnetQuery = dbClient
       .from('carnets')
       .select('*, created_profile:profiles!created_by(full_name), resp_profile:profiles!assigned_to_responsable(full_name), sectors(name)')
       .order('created_at', { ascending: false });
@@ -1108,7 +1207,7 @@ app.get('/api/carnets', requireAuth, async (req, res) => {
     const { data: carnetsData, error: carnetErr } = await carnetQuery;
     if (carnetErr) throw carnetErr;
 
-    let ticketQuery = supabaseAdmin
+    let ticketQuery = dbClient
       .from('tickets')
       .select('*, carnets(carnet_number), resp:profiles!assigned_responsable_id(full_name), agent:profiles!assigned_agent_id(full_name, phone), sectors(name)')
       .order('ticket_number', { ascending: true })
@@ -1809,10 +1908,10 @@ app.post('/api/tickets/assign', requireAuth, async (req, res) => {
 // ------------------------------------------------------------------
 app.get('/api/expenses', requireAuth, async (req, res) => {
   try {
-    if (!supabaseAdmin) throw new Error('Supabase non initialisé');
+    const dbClient = getDatabaseClient(req);
     const actor = req.authenticatedUser!;
 
-    let query = supabaseAdmin
+    let query = dbClient
       .from('expenses')
       .select('*, creator:profiles!created_by(full_name, role), approver:profiles!approved_by(full_name), resp:profiles!responsible_id(full_name), sectors(name)')
       .order('expense_date', { ascending: false });
@@ -2270,8 +2369,8 @@ async function startServer() {
   });
 }
 
-// Ne pas démarrer le serveur autonome sous environnement Serverless Vercel
-if (!process.env.VERCEL) {
+// Ne pas démarrer le serveur autonome sous environnement Serverless Vercel ou lors des tests
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   startServer();
 }
 

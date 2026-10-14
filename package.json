@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "NODE_ENV=test tsx --test tests/**/*.test.ts",
     "test:supabase": "tsx src/db/testSupabaseConnection.ts",
     "start:prod": "node dist/server.cjs"
   },

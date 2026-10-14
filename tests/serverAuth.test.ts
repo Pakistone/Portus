@@ -143,4 +143,44 @@ describe('Suite de Tests Sécurité Authentification et Middlewares (PORTUS)', (
     assert.equal(bootstrapRes.allowed, true);
     assert.equal(bootstrapRes.role, 'ADMINISTRATEUR');
   });
+
+  it('doit bloquer strictement les adresses IP privées, locales et AWS/Cloud metadata (Anti-SSRF)', async () => {
+    const { isPrivateIP } = await import('../server');
+
+    // Loopback & Local
+    assert.equal(isPrivateIP('127.0.0.1'), true, '127.0.0.1 doit être bloqué');
+    assert.equal(isPrivateIP('127.0.1.1'), true, '127.0.1.1 doit être bloqué');
+    assert.equal(isPrivateIP('::1'), true, 'IPv6 loopback ::1 doit être bloqué');
+    assert.equal(isPrivateIP('0.0.0.0'), true, '0.0.0.0 doit être bloqué');
+
+    // Cloud Metadata endpoint critique (169.254.169.254)
+    assert.equal(isPrivateIP('169.254.169.254'), true, 'AWS/GCP/Azure metadata 169.254.169.254 doit être bloqué');
+
+    // Plages privées RFC 1918
+    assert.equal(isPrivateIP('10.0.0.1'), true, '10.0.0.1 doit être bloqué');
+    assert.equal(isPrivateIP('172.16.0.1'), true, '172.16.0.1 doit être bloqué');
+    assert.equal(isPrivateIP('172.31.255.255'), true, '172.31.255.255 doit être bloqué');
+    assert.equal(isPrivateIP('192.168.1.1'), true, '192.168.1.1 doit être bloqué');
+
+    // Adresses IP publiques routables (légitimes)
+    assert.equal(isPrivateIP('8.8.8.8'), false, '8.8.8.8 (Google DNS) est publique');
+    assert.equal(isPrivateIP('1.1.1.1'), false, '1.1.1.1 (Cloudflare) est publique');
+  });
+
+  it('doit vérifier la configuration stricte de vercel.json avec routage prioritaire /api/(.*)', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const vercelConfig = JSON.parse(fs.readFileSync(path.resolve('vercel.json'), 'utf-8'));
+
+    assert.ok(Array.isArray(vercelConfig.rewrites), 'vercel.json doit contenir une liste de rewrites');
+    
+    // Le rewrite /api/(.*) doit exister
+    const apiRewriteIndex = vercelConfig.rewrites.findIndex((r: any) => r.source === '/api/(.*)');
+    assert.ok(apiRewriteIndex !== -1, 'vercel.json doit contenir la règle /api/(.*)');
+    assert.equal(vercelConfig.rewrites[apiRewriteIndex].destination, '/api');
+
+    // Le catch-all /(.*) doit se trouver APRÈS /api/(.*)
+    const catchAllIndex = vercelConfig.rewrites.findIndex((r: any) => r.source === '/(.*)');
+    assert.ok(catchAllIndex > apiRewriteIndex, 'Le catch-all /(.*) doit obligatoirement être placé après /api/(.*)');
+  });
 });
