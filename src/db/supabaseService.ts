@@ -1217,7 +1217,8 @@ export const SupabaseDataLayer = {
     const { data, error } = await supabase
       .from('controls')
       .select('*, controleur:profiles!controleur_id(full_name)')
-      .order('controlled_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(200);
 
     if (error) {
       console.warn('Supabase fetchControls error:', error.message);
@@ -1278,7 +1279,8 @@ export const SupabaseDataLayer = {
     const { data, error } = await supabase
       .from('fraud_reports')
       .select('*, controleur:profiles!controleur_id(full_name)')
-      .order('reported_at', { ascending: false });
+      .order('reported_at', { ascending: false })
+      .limit(200);
 
     if (error) {
       console.warn('Supabase fetchFraudReports error:', error.message);
@@ -1491,7 +1493,7 @@ export const SupabaseDataLayer = {
     const { data, error } = await supabase
       .from('audit_logs')
       .select('*')
-      .order('timestamp', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(200);
 
     if (error) {

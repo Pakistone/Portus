@@ -100,6 +100,7 @@ interface DuplicateCheckResult {
 
 interface DataContextType {
   // Données
+  isLoading: boolean;
   users: User[];
   carnets: Carnet[];
   tickets: Ticket[];
@@ -373,6 +374,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setLatestRealtimeIncident(null);
   }, []);
 
+  const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [lastSyncedSaleNumber, setLastSyncedSaleNumber] = useState<string | null>(null);
@@ -402,211 +404,58 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     [ticketPrice]
   );
 
-  const isFetchingRef = React.useRef(false);
+  // Calcul dynamique des alertes financières (10, 15, 20... tickets sans remise)
+  const calculateFinancialAlerts = useCallback(
+    (allUsers: User[], allTickets: Ticket[], allRemises: Remise[]) => {
+      const calculatedAlerts: FinancialAlert[] = [];
+      const agents = allUsers.filter((u) => u.role === 'AGENT' && u.isActive);
 
-  // Charger toutes les données depuis IndexedDB
-  const refreshData = useCallback(async (forceSync = false) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    try {
-      await initializeDatabase();
-      const db = await getDB();
+      agents.forEach((agent) => {
+        // Tickets vendus par cet agent
+        const agentSoldTickets = allTickets.filter(
+          (t) => t.assignedAgentId === agent.id && (t.status === 'SOLD' || t.status === 'CONTROLLED')
+        );
+        const totalSoldAmount = agentSoldTickets.length * ticketPrice;
 
-      // Synchroniser les données depuis Supabase UNIQUEMENT si un utilisateur est authentifié et actif,
-      // ET que Supabase dispose d'une session de jeton valide (évite les requêtes fantômes avec auth_user: null)
-      const isAuthenticated = Boolean(currentUser && currentUser.isActive);
-      let hasActiveSupabaseSession = false;
-      const client = getSupabase();
-      if (client) {
-        try {
-          const { data: { session } } = await client.auth.getSession();
-          hasActiveSupabaseSession = Boolean(session && session.user);
-        } catch {
-          hasActiveSupabaseSession = false;
+        // Montant total remis par cet agent
+        const agentRemises = allRemises.filter((r) => r.agentId === agent.id);
+        const totalRemittedAmount = agentRemises.reduce((sum, r) => sum + r.amount, 0);
+
+        // Solde restant à verser
+        const remainingBalance = Math.max(0, totalSoldAmount - totalRemittedAmount);
+        const unremittedTicketsCount = Math.ceil(remainingBalance / ticketPrice);
+
+        // Vérifier les seuils d'alerte (10, 15, 20...)
+        if (unremittedTicketsCount >= REMISE_ALERT_START_THRESHOLD) {
+          // Trouver le plus haut palier franchi
+          const stepsAbove = Math.floor(
+            (unremittedTicketsCount - REMISE_ALERT_START_THRESHOLD) / REMISE_ALERT_STEP
+          );
+          const highestThreshold = REMISE_ALERT_START_THRESHOLD + stepsAbove * REMISE_ALERT_STEP;
+
+          calculatedAlerts.push({
+            id: `alert-${agent.id}-${highestThreshold}`,
+            agentId: agent.id,
+            agentName: agent.fullName,
+            sectorId: agent.sectorId,
+            sectorName: agent.sectorName,
+            unremittedTicketsCount,
+            unremittedAmount: remainingBalance,
+            thresholdPassed: highestThreshold,
+            level: unremittedTicketsCount >= 20 ? 'CRITICAL' : 'WARNING',
+            createdAt: new Date().toISOString(),
+          });
         }
-      }
+      });
 
-      const shouldSyncNetwork = isAuthenticated && hasActiveSupabaseSession && (forceSync || (Date.now() - lastSyncTime > 5000));
-      if (SupabaseDataLayer.isAvailable() && shouldSyncNetwork) {
-        lastSyncTime = Date.now();
-        try {
-          const [
-            remoteProfiles,
-            remoteCarnets,
-            remoteTickets,
-            remoteSales,
-            remoteRemises,
-            remoteExpenses,
-            remoteClosings,
-            remoteVehicles,
-          ] = await Promise.all([
-            SupabaseDataLayer.fetchProfiles(),
-            SupabaseDataLayer.fetchCarnets(),
-            SupabaseDataLayer.fetchTickets(),
-            SupabaseDataLayer.fetchSales(),
-            SupabaseDataLayer.fetchRemittances(),
-            SupabaseDataLayer.fetchExpenses(),
-            SupabaseDataLayer.fetchDailyClosings(),
-            SupabaseDataLayer.fetchVehicles(),
-          ]);
+      setAlerts(calculatedAlerts);
+    },
+    [ticketPrice]
+  );
 
-          if (isRlsPermissionIssueDetected()) {
-            setIsRlsPermissionIssue(true);
-            setLastRlsError(getLastRlsErrorMessage());
-          } else {
-            setIsRlsPermissionIssue(false);
-            setLastRlsError('');
-          }
-          if (remoteProfiles && remoteProfiles.length > 0) {
-            const tx = db.transaction('users', 'readwrite');
-            for (const p of remoteProfiles) {
-              await tx.store.put(p);
-            }
-            await tx.done;
-          }
-          if (remoteCarnets && Array.isArray(remoteCarnets)) {
-            const deletedSet = getStoredDeletedCarnetIds();
-            // Dé-duplication stricte des carnets distants avant injection en ignorant les carnets supprimés
-            const uniqueRemoteCarnets: Carnet[] = [];
-            const seenCarnetIds = new Set<string>();
-            const seenCarnetNums = new Set<string>();
-            for (const c of remoteCarnets) {
-              if (
-                c &&
-                c.id &&
-                !seenCarnetIds.has(c.id) &&
-                !deletedSet.has(c.id) &&
-                !(c.carnetNumber && deletedSet.has(c.carnetNumber))
-              ) {
-                seenCarnetIds.add(c.id);
-                let safeNum = c.carnetNumber;
-                if (!safeNum) {
-                  safeNum = `C-REC-${c.id.slice(0, 6)}`;
-                } else if (seenCarnetNums.has(safeNum)) {
-                  safeNum = `${safeNum}-${c.id.slice(0, 4)}`;
-                }
-                seenCarnetNums.add(safeNum);
-                uniqueRemoteCarnets.push({
-                  ...c,
-                  carnetNumber: safeNum,
-                });
-              }
-            }
-
-            const remoteCarnetIds = new Set(uniqueRemoteCarnets.map((c) => c.id));
-            const currentLocalCarnets = await db.getAll('carnets');
-            const tx = db.transaction('carnets', 'readwrite');
-            for (const lc of currentLocalCarnets) {
-              const isDeleted = deletedSet.has(lc.id) || (lc.carnetNumber && deletedSet.has(lc.carnetNumber));
-              const isRecent = lc.createdAt && (Date.now() - new Date(lc.createdAt).getTime() < 15 * 60 * 1000);
-              if (isDeleted) {
-                await tx.store.delete(lc.id);
-              } else if (!remoteCarnetIds.has(lc.id) && !isRecent) {
-                await tx.store.delete(lc.id);
-              }
-            }
-            for (const c of uniqueRemoteCarnets) {
-              await tx.store.put(c);
-            }
-            await tx.done;
-          }
-          if (remoteTickets && Array.isArray(remoteTickets)) {
-            const deletedSet = getStoredDeletedCarnetIds();
-            const validRemoteTickets = remoteTickets.filter(
-              (t) => !deletedSet.has(t.carnetId) && !(t.carnetNumber && deletedSet.has(t.carnetNumber))
-            );
-            const remoteTicketIds = new Set(validRemoteTickets.map((t) => t.id));
-            const currentLocalTickets = await db.getAll('tickets');
-            const tx = db.transaction('tickets', 'readwrite');
-            for (const lt of currentLocalTickets) {
-              const isDeleted = deletedSet.has(lt.carnetId) || (lt.carnetNumber && deletedSet.has(lt.carnetNumber));
-              const isRecent = lt.createdAt && (Date.now() - new Date(lt.createdAt).getTime() < 15 * 60 * 1000);
-              if (isDeleted) {
-                await tx.store.delete(lt.id);
-              } else if (!remoteTicketIds.has(lt.id) && !isRecent) {
-                await tx.store.delete(lt.id);
-              }
-            }
-            for (const t of validRemoteTickets) {
-              await tx.store.put(t);
-            }
-            await tx.done;
-          }
-
-          if (remoteExpenses && remoteExpenses.length > 0) {
-            const tx = db.transaction('expenses', 'readwrite');
-            for (const exp of remoteExpenses) {
-              await tx.store.put(exp);
-            }
-            await tx.done;
-          }
-
-          if (remoteClosings && remoteClosings.length > 0 && db.objectStoreNames.contains('daily_closings')) {
-            const tx = db.transaction('daily_closings', 'readwrite');
-            for (const cl of remoteClosings) {
-              await tx.store.put(cl);
-            }
-            await tx.done;
-          }
-
-          if (remoteVehicles && remoteVehicles.length > 0 && db.objectStoreNames.contains('vehicles')) {
-            const tx = db.transaction('vehicles', 'readwrite');
-            for (const v of remoteVehicles) {
-              await tx.store.put(v);
-            }
-            await tx.done;
-          }
-
-          // Nettoyage de sécurité : retirer tout ticket de test synthétique (f0000000-...)
-          // ou ticket anormal (> 3) accidentellement associé au carnet démo initial
-          const allLocalTicketsBefore = await db.getAll('tickets');
-          const txClean = db.transaction('tickets', 'readwrite');
-          for (const lt of allLocalTicketsBefore) {
-            if (
-              lt.id?.startsWith('f0000000-') ||
-              (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' &&
-               lt.ticketNumber &&
-               !['VRD-000001', 'VRD-000002', 'VRD-000003'].includes(lt.ticketNumber))
-            ) {
-              await txClean.store.delete(lt.id);
-            }
-          }
-          await txClean.done;
-
-          // Synchronisation automatique des tickets locaux réels vers Supabase
-          // (permet de propager immédiatement les carnets créés localement vers l'app publiée)
-          const allLocalTktsAfter = await db.getAll('tickets');
-          const remoteTicketIds = new Set((remoteTickets || []).map((t) => t.id));
-          const unsyncedTkts = allLocalTktsAfter.filter((t) => !remoteTicketIds.has(t.id));
-          if (unsyncedTkts.length > 0) {
-            const allLocalCarnets = await db.getAll('carnets');
-            console.log(`[PORTUS AutoSync] Synchronisation de ${unsyncedTkts.length} tickets locaux vers Supabase...`);
-            await SupabaseDataLayer.syncCarnetsBatch(allLocalCarnets, unsyncedTkts).catch((e) =>
-              console.warn('[PORTUS AutoSync] Erreur synchro tickets:', e)
-            );
-          }
-
-          if (remoteSales && remoteSales.length > 0) {
-            const tx = db.transaction('sales', 'readwrite');
-            for (const s of remoteSales) {
-              await tx.store.put(s);
-            }
-            await tx.done;
-          }
-          if (remoteRemises && remoteRemises.length > 0) {
-            const tx = db.transaction('remises', 'readwrite');
-            for (const r of remoteRemises) {
-              await tx.store.put(r);
-            }
-            await tx.done;
-          }
-          // Enregistrer le timestamp de synchronisation réussie
-          lastSyncTime = Date.now();
-        } catch (syncErr) {
-          console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
-        }
-      }
-
+  // 1. Lecture instantanée et application des données locales d'IndexedDB vers l'état React (RBAC)
+  const applyLocalData = useCallback(
+    async (db: any) => {
       const [
         allUsers,
         allCarnets,
@@ -617,6 +466,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         allRemises,
         allExpenses,
         allAudits,
+        allNotifications,
+        allClosings,
+        allVehicles,
+        allReprints,
+        allSos,
+        allLitiges,
+        allPlannings,
       ] = await Promise.all([
         db.getAll('users'),
         db.getAll('carnets'),
@@ -627,17 +483,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         db.getAll('remises'),
         db.getAll('expenses'),
         db.getAll('audit_logs'),
+        db.objectStoreNames.contains('notifications') ? db.getAll('notifications') : Promise.resolve([]),
+        db.objectStoreNames.contains('daily_closings') ? db.getAll('daily_closings') : Promise.resolve([]),
+        db.objectStoreNames.contains('vehicles') ? db.getAll('vehicles') : Promise.resolve([]),
+        db.objectStoreNames.contains('ticket_reprints') ? db.getAll('ticket_reprints') : Promise.resolve([]),
+        db.objectStoreNames.contains('sos_alerts') ? db.getAll('sos_alerts') : Promise.resolve([]),
+        db.objectStoreNames.contains('litiges_chauffeurs') ? db.getAll('litiges_chauffeurs') : Promise.resolve([]),
+        db.objectStoreNames.contains('brigades_plannings') ? db.getAll('brigades_plannings') : Promise.resolve([]),
       ]);
 
-      // ====================================================================
-      // CONTRÔLE D'ACCÈS & ISOLATION STRICTE (HORIZONTALE & VERTICALE)
-      // RÈGLE CRITIQUE : NE JAMAIS FAIRE CONFIANCE AU CLIENT
-      // - Un agent ne doit jamais lire les ventes d'un autre agent
-      // - Un responsable ne doit jamais accéder aux données d'un autre secteur
-      // - Les journaux d'audit et la gestion système sont réservés à l'admin
-      // ====================================================================
-      const activeSessionUserId = sessionStorage.getItem('portus_session_user_id') || sessionStorage.getItem('portus_current_user_id');
-      const activeUser = currentUser || allUsers.find((u) => u.id === activeSessionUserId) || null;
+      const activeSessionUserId =
+        sessionStorage.getItem('portus_session_user_id') || sessionStorage.getItem('portus_current_user_id');
+      const activeUser = currentUser || allUsers.find((u: User) => u.id === activeSessionUserId) || null;
 
       let visibleUsers = allUsers;
       let visibleCarnets = allCarnets;
@@ -656,102 +513,71 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         } else if (activeUser.role === 'RESPONSABLE') {
           // Responsable : cloisonnement strict au secteur attribué
           const secId = activeUser.sectorId;
-          visibleUsers = allUsers.filter((u) => u.sectorId === secId || u.id === activeUser.id);
-          visibleCarnets = allCarnets.filter((c) => c.sectorId === secId || c.assignedToResponsableId === activeUser.id);
-          visibleTickets = allTickets.filter((t) => t.sectorId === secId || t.assignedResponsableId === activeUser.id);
-          visibleSales = allSales.filter((s) => s.sectorId === secId);
-          visibleRemises = allRemises.filter((r) => r.sectorId === secId || r.responsableId === activeUser.id);
-          visibleExpenses = allExpenses.filter((e) => e.sectorId === secId || e.responsibleId === activeUser.id || e.createdBy === activeUser.id);
-          visibleFrauds = allFrauds.filter((f) => !f.sectorId || f.sectorId === secId);
-          visibleControls = allControls.filter((c) => {
-            const tkt = allTickets.find((t) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
+          visibleUsers = allUsers.filter((u: User) => u.sectorId === secId || u.id === activeUser.id);
+          visibleCarnets = allCarnets.filter((c: Carnet) => c.sectorId === secId || c.assignedToResponsableId === activeUser.id);
+          visibleTickets = allTickets.filter((t: Ticket) => t.sectorId === secId || t.assignedResponsableId === activeUser.id);
+          visibleSales = allSales.filter((s: Sale) => s.sectorId === secId);
+          visibleRemises = allRemises.filter((r: Remise) => r.sectorId === secId || r.responsableId === activeUser.id);
+          visibleExpenses = allExpenses.filter(
+            (e: Expense) => e.sectorId === secId || e.responsibleId === activeUser.id || e.createdBy === activeUser.id
+          );
+          visibleFrauds = allFrauds.filter((f: FraudReport) => !f.sectorId || f.sectorId === secId);
+          visibleControls = allControls.filter((c: Control) => {
+            const tkt = allTickets.find((t: Ticket) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
             return !tkt || tkt.sectorId === secId;
           });
-          visibleAudits = []; // Strictement réservé à l'administrateur
+          visibleAudits = [];
         } else if (activeUser.role === 'AGENT') {
           // Agent : isolation totale de ses propres ventes, tickets et remises
-          visibleUsers = allUsers.filter((u) => u.id === activeUser.id);
-          visibleCarnets = []; // Les agents ne manipulent jamais de carnets
-          visibleTickets = allTickets.filter((t) => t.assignedAgentId === activeUser.id);
-          visibleSales = allSales.filter((s) => s.agentId === activeUser.id); // Ne jamais voir les ventes d'un autre agent !
-          visibleRemises = allRemises.filter((r) => r.agentId === activeUser.id);
-          visibleExpenses = allExpenses.filter((e) => e.createdBy === activeUser.id);
+          visibleUsers = allUsers.filter((u: User) => u.id === activeUser.id);
+          visibleCarnets = [];
+          visibleTickets = allTickets.filter((t: Ticket) => t.assignedAgentId === activeUser.id);
+          visibleSales = allSales.filter((s: Sale) => s.agentId === activeUser.id);
+          visibleRemises = allRemises.filter((r: Remise) => r.agentId === activeUser.id);
+          visibleExpenses = allExpenses.filter((e: Expense) => e.createdBy === activeUser.id);
           visibleFrauds = [];
-          visibleControls = allControls.filter((c) => {
-            const tkt = allTickets.find((t) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
+          visibleControls = allControls.filter((c: Control) => {
+            const tkt = allTickets.find((t: Ticket) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
             return tkt && tkt.assignedAgentId === activeUser.id;
           });
-          visibleAudits = []; // Aucune visibilité sur l'audit d'entreprise
+          visibleAudits = [];
         } else if (activeUser.role === 'CONTROLEUR') {
           // Contrôleur : uniquement ses vérifications et fraudes signalées
-          visibleUsers = allUsers.filter((u) => u.id === activeUser.id);
+          visibleUsers = allUsers.filter((u: User) => u.id === activeUser.id);
           visibleCarnets = [];
-          visibleTickets = []; // Les contrôles s'effectuent par scan / recherche unitaire sécurisée
+          visibleTickets = [];
           visibleSales = [];
           visibleRemises = [];
           visibleExpenses = [];
-          visibleControls = allControls.filter((c) => c.controleurId === activeUser.id);
-          visibleFrauds = allFrauds.filter((f) => f.controleurId === activeUser.id);
+          visibleControls = allControls.filter((c: Control) => c.controleurId === activeUser.id);
+          visibleFrauds = allFrauds.filter((f: FraudReport) => f.controleurId === activeUser.id);
           visibleAudits = [];
         }
       }
 
       setUsers(visibleUsers);
-      setCarnets(visibleCarnets.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-      setTickets(visibleTickets.sort((a, b) => a.ticketNumber.localeCompare(b.ticketNumber)));
-      setSales(visibleSales.sort((a, b) => b.soldAt.localeCompare(a.soldAt)));
-      setControls(visibleControls.sort((a, b) => b.controlledAt.localeCompare(a.controlledAt)));
-      setFraudReports(visibleFrauds.sort((a, b) => b.reportedAt.localeCompare(a.reportedAt)));
-      setRemises(visibleRemises.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-      setExpenses(visibleExpenses.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-      setAuditLogs(visibleAudits.sort((a, b) => b.timestamp.localeCompare(a.timestamp)));
+      setCarnets(visibleCarnets.sort((a: Carnet, b: Carnet) => b.createdAt.localeCompare(a.createdAt)));
+      setTickets(visibleTickets.sort((a: Ticket, b: Ticket) => a.ticketNumber.localeCompare(b.ticketNumber)));
+      setSales(visibleSales.sort((a: Sale, b: Sale) => b.soldAt.localeCompare(a.soldAt)));
+      setControls(visibleControls.sort((a: Control, b: Control) => b.controlledAt.localeCompare(a.controlledAt)));
+      setFraudReports(visibleFrauds.sort((a: FraudReport, b: FraudReport) => b.reportedAt.localeCompare(a.reportedAt)));
+      setRemises(visibleRemises.sort((a: Remise, b: Remise) => b.createdAt.localeCompare(a.createdAt)));
+      setExpenses(visibleExpenses.sort((a: Expense, b: Expense) => b.createdAt.localeCompare(a.createdAt)));
+      setAuditLogs(visibleAudits.sort((a: AuditLog, b: AuditLog) => b.timestamp.localeCompare(a.timestamp)));
 
-      let allNotifications: NotificationRecord[] = [];
-      if (db.objectStoreNames.contains('notifications')) {
-        allNotifications = await db.getAll('notifications');
-      }
-      setNotifications(allNotifications.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-
-      let allClosings: DailyClosing[] = [];
-      if (db.objectStoreNames.contains('daily_closings')) {
-        allClosings = await db.getAll('daily_closings');
-      }
-      setDailyClosings(allClosings.sort((a, b) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || '')));
-
-      let allVehicles: Vehicle[] = [];
-      if (db.objectStoreNames.contains('vehicles')) {
-        allVehicles = await db.getAll('vehicles');
-      }
+      setNotifications(allNotifications.sort((a: NotificationRecord, b: NotificationRecord) => b.createdAt.localeCompare(a.createdAt)));
+      setDailyClosings(
+        allClosings.sort((a: DailyClosing, b: DailyClosing) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || ''))
+      );
       setVehicles(allVehicles);
-
-      let allReprints: TicketReprint[] = [];
-      if (db.objectStoreNames.contains('ticket_reprints')) {
-        allReprints = await db.getAll('ticket_reprints');
-      }
       setTicketReprints(allReprints);
+      setSosAlerts(allSos.sort((a: SOSAlert, b: SOSAlert) => b.alertedAt.localeCompare(a.alertedAt)));
+      setLitigesChauffeurs(allLitiges.sort((a: LitigeChauffeur, b: LitigeChauffeur) => b.createdAt.localeCompare(a.createdAt)));
+      setBrigadeAssignments(allPlannings.sort((a: BrigadeAssignment, b: BrigadeAssignment) => b.shiftDate.localeCompare(a.shiftDate)));
 
-      let allSos: SOSAlert[] = [];
-      if (db.objectStoreNames.contains('sos_alerts')) {
-        allSos = await db.getAll('sos_alerts');
-      }
-      setSosAlerts(allSos.sort((a, b) => b.alertedAt.localeCompare(a.alertedAt)));
-
-      let allLitiges: LitigeChauffeur[] = [];
-      if (db.objectStoreNames.contains('litiges_chauffeurs')) {
-        allLitiges = await db.getAll('litiges_chauffeurs');
-      }
-      setLitigesChauffeurs(allLitiges.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-
-      let allPlannings: BrigadeAssignment[] = [];
-      if (db.objectStoreNames.contains('brigades_plannings')) {
-        allPlannings = await db.getAll('brigades_plannings');
-      }
-      setBrigadeAssignments(allPlannings.sort((a, b) => b.shiftDate.localeCompare(a.shiftDate)));
-
-      // Compter les ventes, contrôles et signalements de fraude en attente de synchro
-      const pendingSales = allSales.filter((s) => s.syncStatus === 'PENDING_SYNC');
-      const pendingControls = allControls.filter((c) => c.syncStatus === 'PENDING_SYNC');
-      const pendingFrauds = allFrauds.filter((f) => f.syncStatus === 'PENDING_SYNC');
+      const pendingSales = allSales.filter((s: Sale) => s.syncStatus === 'PENDING_SYNC');
+      const pendingControls = allControls.filter((c: Control) => c.syncStatus === 'PENDING_SYNC');
+      const pendingFrauds = allFrauds.filter((f: FraudReport) => f.syncStatus === 'PENDING_SYNC');
       setPendingSyncCount(pendingSales.length + pendingControls.length + pendingFrauds.length);
 
       if (db.objectStoreNames.contains('settings')) {
@@ -761,64 +587,276 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       }
 
-      // Calculer les alertes financières par agent
       calculateFinancialAlerts(allUsers, allTickets, allRemises);
-    } catch (err) {
-      console.error('Erreur chargement données', err);
-    } finally {
-      isFetchingRef.current = false;
-    }
-  }, [currentUser, ticketPrice]);
+    },
+    [currentUser, calculateFinancialAlerts]
+  );
 
-  // Calcul dynamique des alertes financières (10, 15, 20... tickets sans remise)
-  const calculateFinancialAlerts = (
-    allUsers: User[],
-    allTickets: Ticket[],
-    allRemises: Remise[]
-  ) => {
-    const calculatedAlerts: FinancialAlert[] = [];
-    const agents = allUsers.filter((u) => u.role === 'AGENT' && u.isActive);
+  const isSyncingRemoteRef = React.useRef(false);
 
-    agents.forEach((agent) => {
-      // Tickets vendus par cet agent
-      const agentSoldTickets = allTickets.filter(
-        (t) => t.assignedAgentId === agent.id && (t.status === 'SOLD' || t.status === 'CONTROLLED')
-      );
-      const totalSoldAmount = agentSoldTickets.length * ticketPrice;
+  // 2. Synchronisation parallèle avec Supabase et écriture groupée (bulk put) dans IndexedDB
+  const syncRemoteData = useCallback(async (db: any): Promise<boolean> => {
+    if (isSyncingRemoteRef.current) return false;
+    isSyncingRemoteRef.current = true;
+    try {
+      // Parallélisation de l'ensemble des requêtes distantes
+      const [
+        profilesResult,
+        sectorsResult,
+        carnetsResult,
+        ticketsResult,
+        salesResult,
+        remittancesResult,
+        controlsResult,
+        fraudsResult,
+        auditLogsResult,
+        expensesResult,
+        closingsResult,
+        vehiclesResult,
+      ] = await Promise.allSettled([
+        SupabaseDataLayer.fetchProfiles(),
+        SupabaseDataLayer.fetchSectors(),
+        SupabaseDataLayer.fetchCarnets(),
+        SupabaseDataLayer.fetchTickets(),
+        SupabaseDataLayer.fetchSales(),
+        SupabaseDataLayer.fetchRemittances(),
+        SupabaseDataLayer.fetchControls(),
+        SupabaseDataLayer.fetchFraudReports(),
+        SupabaseDataLayer.fetchAuditLogs(),
+        SupabaseDataLayer.fetchExpenses(),
+        SupabaseDataLayer.fetchDailyClosings(),
+        SupabaseDataLayer.fetchVehicles(),
+      ]);
 
-      // Montant total remis par cet agent
-      const agentRemises = allRemises.filter((r) => r.agentId === agent.id);
-      const totalRemittedAmount = agentRemises.reduce((sum, r) => sum + r.amount, 0);
-
-      // Solde restant à verser
-      const remainingBalance = Math.max(0, totalSoldAmount - totalRemittedAmount);
-      const unremittedTicketsCount = Math.ceil(remainingBalance / ticketPrice);
-
-      // Vérifier les seuils d'alerte (10, 15, 20...)
-      if (unremittedTicketsCount >= REMISE_ALERT_START_THRESHOLD) {
-        // Trouver le plus haut palier franchi
-        const stepsAbove = Math.floor(
-          (unremittedTicketsCount - REMISE_ALERT_START_THRESHOLD) / REMISE_ALERT_STEP
-        );
-        const highestThreshold = REMISE_ALERT_START_THRESHOLD + stepsAbove * REMISE_ALERT_STEP;
-
-        calculatedAlerts.push({
-          id: `alert-${agent.id}-${highestThreshold}`,
-          agentId: agent.id,
-          agentName: agent.fullName,
-          sectorId: agent.sectorId,
-          sectorName: agent.sectorName,
-          unremittedTicketsCount,
-          unremittedAmount: remainingBalance,
-          thresholdPassed: highestThreshold,
-          level: unremittedTicketsCount >= 20 ? 'CRITICAL' : 'WARNING',
-          createdAt: new Date().toISOString(),
-        });
+      if (isRlsPermissionIssueDetected()) {
+        setIsRlsPermissionIssue(true);
+        setLastRlsError(getLastRlsErrorMessage());
+      } else {
+        setIsRlsPermissionIssue(false);
+        setLastRlsError('');
       }
-    });
 
-    setAlerts(calculatedAlerts);
-  };
+      const remoteProfiles = profilesResult.status === 'fulfilled' ? profilesResult.value : [];
+      const remoteCarnets = carnetsResult.status === 'fulfilled' ? carnetsResult.value : [];
+      const remoteTickets = ticketsResult.status === 'fulfilled' ? ticketsResult.value : [];
+      const remoteSales = salesResult.status === 'fulfilled' ? salesResult.value : [];
+      const remoteRemises = remittancesResult.status === 'fulfilled' ? remittancesResult.value : [];
+      const remoteControls = controlsResult.status === 'fulfilled' ? controlsResult.value : [];
+      const remoteFrauds = fraudsResult.status === 'fulfilled' ? fraudsResult.value : [];
+      const remoteAuditLogs = auditLogsResult.status === 'fulfilled' ? auditLogsResult.value : [];
+      const remoteExpenses = expensesResult.status === 'fulfilled' ? expensesResult.value : [];
+      const remoteClosings = closingsResult.status === 'fulfilled' ? closingsResult.value : [];
+      const remoteVehicles = vehiclesResult.status === 'fulfilled' ? vehiclesResult.value : [];
+
+      // 3. Transactions groupées (bulk put) dans IndexedDB - Une seule transaction par store
+      if (remoteProfiles && remoteProfiles.length > 0) {
+        const tx = db.transaction('users', 'readwrite');
+        const store = tx.objectStore('users');
+        await Promise.all([...remoteProfiles.map((p: User) => store.put(p)), tx.done]);
+      }
+
+      if (remoteCarnets && Array.isArray(remoteCarnets)) {
+        const deletedSet = getStoredDeletedCarnetIds();
+        const uniqueRemoteCarnets: Carnet[] = [];
+        const seenCarnetIds = new Set<string>();
+        const seenCarnetNums = new Set<string>();
+        for (const c of remoteCarnets) {
+          if (
+            c &&
+            c.id &&
+            !seenCarnetIds.has(c.id) &&
+            !deletedSet.has(c.id) &&
+            !(c.carnetNumber && deletedSet.has(c.carnetNumber))
+          ) {
+            seenCarnetIds.add(c.id);
+            let safeNum = c.carnetNumber;
+            if (!safeNum) {
+              safeNum = `C-REC-${c.id.slice(0, 6)}`;
+            } else if (seenCarnetNums.has(safeNum)) {
+              safeNum = `${safeNum}-${c.id.slice(0, 4)}`;
+            }
+            seenCarnetNums.add(safeNum);
+            uniqueRemoteCarnets.push({
+              ...c,
+              carnetNumber: safeNum,
+            });
+          }
+        }
+
+        const remoteCarnetIds = new Set(uniqueRemoteCarnets.map((c) => c.id));
+        const currentLocalCarnets = await db.getAll('carnets');
+        const carnetsToDelete: string[] = [];
+        for (const lc of currentLocalCarnets) {
+          const isDeleted = deletedSet.has(lc.id) || (lc.carnetNumber && deletedSet.has(lc.carnetNumber));
+          const isRecent = lc.createdAt && (Date.now() - new Date(lc.createdAt).getTime() < 15 * 60 * 1000);
+          if (isDeleted || (!remoteCarnetIds.has(lc.id) && !isRecent)) {
+            carnetsToDelete.push(lc.id);
+          }
+        }
+
+        const tx = db.transaction('carnets', 'readwrite');
+        const store = tx.objectStore('carnets');
+        await Promise.all([
+          ...carnetsToDelete.map((id) => store.delete(id)),
+          ...uniqueRemoteCarnets.map((c) => store.put(c)),
+          tx.done,
+        ]);
+      }
+
+      if (remoteTickets && Array.isArray(remoteTickets)) {
+        const deletedSet = getStoredDeletedCarnetIds();
+        const validRemoteTickets = remoteTickets.filter(
+          (t: Ticket) => !deletedSet.has(t.carnetId) && !(t.carnetNumber && deletedSet.has(t.carnetNumber))
+        );
+        const remoteTicketIds = new Set(validRemoteTickets.map((t: Ticket) => t.id));
+        const currentLocalTickets = await db.getAll('tickets');
+        const ticketsToDelete: string[] = [];
+        for (const lt of currentLocalTickets) {
+          const isDeleted = deletedSet.has(lt.carnetId) || (lt.carnetNumber && deletedSet.has(lt.carnetNumber));
+          const isRecent = lt.createdAt && (Date.now() - new Date(lt.createdAt).getTime() < 15 * 60 * 1000);
+          const isSyntheticTest =
+            lt.id?.startsWith('f0000000-') ||
+            (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' &&
+              lt.ticketNumber &&
+              !['VRD-000001', 'VRD-000002', 'VRD-000003'].includes(lt.ticketNumber));
+
+          if (isDeleted || isSyntheticTest || (!remoteTicketIds.has(lt.id) && !isRecent)) {
+            ticketsToDelete.push(lt.id);
+          }
+        }
+
+        const tx = db.transaction('tickets', 'readwrite');
+        const store = tx.objectStore('tickets');
+        await Promise.all([
+          ...ticketsToDelete.map((id) => store.delete(id)),
+          ...validRemoteTickets.map((t: Ticket) => store.put(t)),
+          tx.done,
+        ]);
+      }
+
+      if (remoteExpenses && remoteExpenses.length > 0) {
+        const tx = db.transaction('expenses', 'readwrite');
+        const store = tx.objectStore('expenses');
+        await Promise.all([...remoteExpenses.map((exp: Expense) => store.put(exp)), tx.done]);
+      }
+
+      if (remoteClosings && remoteClosings.length > 0 && db.objectStoreNames.contains('daily_closings')) {
+        const tx = db.transaction('daily_closings', 'readwrite');
+        const store = tx.objectStore('daily_closings');
+        await Promise.all([...remoteClosings.map((cl: DailyClosing) => store.put(cl)), tx.done]);
+      }
+
+      if (remoteVehicles && remoteVehicles.length > 0 && db.objectStoreNames.contains('vehicles')) {
+        const tx = db.transaction('vehicles', 'readwrite');
+        const store = tx.objectStore('vehicles');
+        await Promise.all([...remoteVehicles.map((v: Vehicle) => store.put(v)), tx.done]);
+      }
+
+      if (remoteSales && remoteSales.length > 0) {
+        const tx = db.transaction('sales', 'readwrite');
+        const store = tx.objectStore('sales');
+        await Promise.all([...remoteSales.map((s: Sale) => store.put(s)), tx.done]);
+      }
+
+      if (remoteRemises && remoteRemises.length > 0) {
+        const tx = db.transaction('remises', 'readwrite');
+        const store = tx.objectStore('remises');
+        await Promise.all([...remoteRemises.map((r: Remise) => store.put(r)), tx.done]);
+      }
+
+      if (remoteControls && remoteControls.length > 0) {
+        const tx = db.transaction('controls', 'readwrite');
+        const store = tx.objectStore('controls');
+        await Promise.all([...remoteControls.map((c: Control) => store.put(c)), tx.done]);
+      }
+
+      if (remoteFrauds && remoteFrauds.length > 0) {
+        const tx = db.transaction('fraud_reports', 'readwrite');
+        const store = tx.objectStore('fraud_reports');
+        await Promise.all([...remoteFrauds.map((f: FraudReport) => store.put(f)), tx.done]);
+      }
+
+      if (remoteAuditLogs && remoteAuditLogs.length > 0) {
+        const tx = db.transaction('audit_logs', 'readwrite');
+        const store = tx.objectStore('audit_logs');
+        await Promise.all([...remoteAuditLogs.map((a: AuditLog) => store.put(a)), tx.done]);
+      }
+
+      // Synchronisation asynchrone des tickets locaux réels vers Supabase en tâche de fond
+      const allLocalTktsAfter = await db.getAll('tickets');
+      const remoteTicketIds = new Set((remoteTickets || []).map((t: Ticket) => t.id));
+      const unsyncedTkts = allLocalTktsAfter.filter((t: Ticket) => !remoteTicketIds.has(t.id));
+      if (unsyncedTkts.length > 0) {
+        const allLocalCarnets = await db.getAll('carnets');
+        SupabaseDataLayer.syncCarnetsBatch(allLocalCarnets, unsyncedTkts).catch((e) =>
+          console.warn('[PORTUS AutoSync] Erreur synchro tickets:', e)
+        );
+      }
+
+      lastSyncTime = Date.now();
+      return true;
+    } catch (syncErr) {
+      console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
+      return false;
+    } finally {
+      isSyncingRemoteRef.current = false;
+    }
+  }, []);
+
+  // 4. Pattern Stale-While-Revalidate : Affichage instantané puis synchronisation transparente en tâche de fond
+  const refreshData = useCallback(
+    async (forceSync = false) => {
+      try {
+        await initializeDatabase();
+        const db = await getDB();
+
+        // ÉTAPE 1 : Affichage instantané "Stale" depuis IndexedDB
+        await applyLocalData(db);
+        setIsLoading(false);
+
+        // ÉTAPE 2 : "Revalidate" - Synchronisation avec Supabase
+        const isAuthenticated = Boolean(currentUser && currentUser.isActive);
+        let hasActiveSupabaseSession = false;
+        const client = getSupabase();
+        if (client) {
+          try {
+            const {
+              data: { session },
+            } = await client.auth.getSession();
+            hasActiveSupabaseSession = Boolean(session && session.user);
+          } catch {
+            hasActiveSupabaseSession = false;
+          }
+        }
+
+        const shouldSyncNetwork =
+          isAuthenticated && hasActiveSupabaseSession && (forceSync || Date.now() - lastSyncTime > 5000);
+
+        if (SupabaseDataLayer.isAvailable() && shouldSyncNetwork) {
+          if (forceSync) {
+            // Si forcé (par exemple clic utilisateur "Actualiser"), attendre la synchro
+            const didSync = await syncRemoteData(db);
+            if (didSync) {
+              await applyLocalData(db);
+            }
+          } else {
+            // Sinon synchro transparente en arrière-plan sans bloquer l'interface
+            syncRemoteData(db)
+              .then((didSync) => {
+                if (didSync) {
+                  applyLocalData(db).catch(() => {});
+                }
+              })
+              .catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error('Erreur chargement données', err);
+        setIsLoading(false);
+      }
+    },
+    [currentUser, applyLocalData, syncRemoteData]
+  );
 
   useEffect(() => {
     refreshData();
@@ -899,18 +937,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const syncTimestamp = new Date().toISOString();
       let lastSyncedNumber = '';
 
-      // 1. Mettre à jour IndexedDB d'abord (transaction rapide sans appels réseau)
+      // 1. Mettre à jour IndexedDB d'abord (transaction groupée rapide sans appels réseau)
       const tx = db.transaction(['sales', 'controls', 'fraud_reports', 'audit_logs'], 'readwrite');
-      
-      const updatedSales = pendingSales.map(sale => {
-        const updated = { ...sale, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
-        return updated;
-      });
-      for (const sale of updatedSales) {
-        await tx.objectStore('sales').put(sale);
-        lastSyncedNumber = sale.ticketNumber;
+      const salesStore = tx.objectStore('sales');
+      const controlsStore = tx.objectStore('controls');
+      const fraudStore = tx.objectStore('fraud_reports');
+      const auditStore = tx.objectStore('audit_logs');
 
-        const audit: AuditLog = {
+      const allAudits: AuditLog[] = [];
+
+      const updatedSales = pendingSales.map((sale) => {
+        const updated = { ...sale, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
+        lastSyncedNumber = sale.ticketNumber;
+        allAudits.push({
           id: generateUUID(),
           actorId: sale.agentId,
           actorName: sale.agentName,
@@ -920,18 +959,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           targetEntity: 'Sale',
           targetId: sale.id,
           details: `Synchronisation de la vente hors ligne pour le ticket ${sale.ticketNumber} (Immat: ${sale.plateNumber}). Date originale conservée: ${sale.soldAt}`,
-        };
-        await tx.objectStore('audit_logs').put(audit);
-      }
-
-      const updatedControls = pendingControls.map(ctrl => {
-        const updated = { ...ctrl, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
+        });
         return updated;
       });
-      for (const ctrl of updatedControls) {
-        await tx.objectStore('controls').put(ctrl);
 
-        const audit: AuditLog = {
+      const updatedControls = pendingControls.map((ctrl) => {
+        const updated = { ...ctrl, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
+        allAudits.push({
           id: generateUUID(),
           actorId: ctrl.controleurId,
           actorName: ctrl.controleurName,
@@ -941,18 +975,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           targetEntity: 'Control',
           targetId: ctrl.id,
           details: `Synchronisation du contrôle routier hors ligne pour le ticket ${ctrl.ticketNumber} (Immat: ${ctrl.plateNumber}).`,
-        };
-        await tx.objectStore('audit_logs').put(audit);
-      }
-
-      const updatedFrauds = pendingFrauds.map(fraud => {
-        const updated = { ...fraud, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
+        });
         return updated;
       });
-      for (const fraud of updatedFrauds) {
-        await tx.objectStore('fraud_reports').put(fraud);
 
-        const audit: AuditLog = {
+      const updatedFrauds = pendingFrauds.map((fraud) => {
+        const updated = { ...fraud, syncedAt: syncTimestamp, syncStatus: 'SYNCED' as const };
+        allAudits.push({
           id: generateUUID(),
           actorId: fraud.controleurId,
           actorName: fraud.controleurName,
@@ -962,11 +991,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           targetEntity: 'FraudReport',
           targetId: fraud.id,
           details: `Synchronisation du signalement de fraude pour le véhicule ${fraud.plateNumber} (Type: ${fraud.typeLabel}). ${fraud.photos?.length || 0} photo(s) transmise(s).`,
-        };
-        await tx.objectStore('audit_logs').put(audit);
-      }
+        });
+        return updated;
+      });
 
-      await tx.done;
+      await Promise.all([
+        ...updatedSales.map((s) => salesStore.put(s)),
+        ...updatedControls.map((c) => controlsStore.put(c)),
+        ...updatedFrauds.map((f) => fraudStore.put(f)),
+        ...allAudits.map((a) => auditStore.put(a)),
+        tx.done,
+      ]);
 
       // 2. Effectuer les appels réseau Supabase en dehors de toute transaction IndexedDB
       if (SupabaseDataLayer.isAvailable()) {
@@ -1684,6 +1719,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           destinationResp = allUsers.find((u) => u.role === 'ADMINISTRATEUR' && u.isActive) || (currentUser ?? undefined);
         }
 
+        const updatedTkts: Ticket[] = [];
+        const asgRecords: any[] = [];
         for (const tkt of agentUnsoldTickets) {
           const respId = tkt.assignedResponsableId || destinationResp?.id || 'usr-resp-01';
           const respName = tkt.assignedResponsableName || destinationResp?.fullName || 'RESPONSABLE';
@@ -1693,11 +1730,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           tkt.assignedResponsableName = respName;
           tkt.assignedAgentId = undefined;
           tkt.assignedAgentName = undefined;
-
-          await db.put('tickets', tkt);
+          updatedTkts.push(tkt);
 
           if (db.objectStoreNames.contains('ticket_assignments')) {
-            await db.put('ticket_assignments', {
+            asgRecords.push({
               id: generateSecureToken('asg', 12),
               ticketId: tkt.id,
               carnetId: tkt.carnetId,
@@ -1719,6 +1755,18 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             }).catch(() => {});
           }
         }
+
+        const tx = (db as any).transaction(
+          db.objectStoreNames.contains('ticket_assignments') ? ['tickets', 'ticket_assignments'] : ['tickets'],
+          'readwrite'
+        );
+        const tktStore = tx.objectStore('tickets');
+        const promises = updatedTkts.map((t) => tktStore.put(t));
+        if (db.objectStoreNames.contains('ticket_assignments')) {
+          const asgStore = tx.objectStore('ticket_assignments');
+          promises.push(...asgRecords.map((a) => asgStore.put(a)));
+        }
+        await Promise.all([...promises, tx.done]);
 
         await recordAudit(
           'USER_DEACTIVATED',
@@ -1744,6 +1792,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           (t) => t.assignedResponsableId === user.id && t.status !== 'SOLD' && t.status !== 'CANCELLED'
         );
 
+        const updatedRespTkts: Ticket[] = [];
+        const respAsgRecords: any[] = [];
         for (const tkt of respUnsoldTickets) {
           tkt.assignedResponsableId = adminUser.id;
           tkt.assignedResponsableName = adminUser.fullName;
@@ -1751,10 +1801,10 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (tkt.status === 'ASSIGNED_TO_RESPONSIBLE') {
             tkt.status = 'AVAILABLE';
           }
-          await db.put('tickets', tkt);
+          updatedRespTkts.push(tkt);
 
           if (db.objectStoreNames.contains('ticket_assignments')) {
-            await db.put('ticket_assignments', {
+            respAsgRecords.push({
               id: generateSecureToken('asg', 12),
               ticketId: tkt.id,
               carnetId: tkt.carnetId,
@@ -1782,8 +1832,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         for (const carnet of respCarnets) {
           carnet.assignedToResponsableId = adminUser.id;
           carnet.assignedToResponsableName = adminUser.fullName;
-          await db.put('carnets', carnet);
         }
+
+        const storesList = ['tickets', 'carnets'];
+        if (db.objectStoreNames.contains('ticket_assignments')) storesList.push('ticket_assignments');
+        const respTx = (db as any).transaction(storesList, 'readwrite');
+        const tStore = respTx.objectStore('tickets');
+        const cStart = respTx.objectStore('carnets');
+        const txPromises = [
+          ...updatedRespTkts.map((t) => tStore.put(t)),
+          ...respCarnets.map((c) => cStart.put(c)),
+        ];
+        if (db.objectStoreNames.contains('ticket_assignments')) {
+          const aStore = respTx.objectStore('ticket_assignments');
+          txPromises.push(...respAsgRecords.map((a) => aStore.put(a)));
+        }
+        await Promise.all([...txPromises, respTx.done]);
 
         await recordAudit(
           'USER_DEACTIVATED',
@@ -2110,11 +2174,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         controlCount: 0,
         createdAt: nowIso,
       };
-
-      await tx.store.put(tkt);
       createdTickets.push(tkt);
     }
-    await tx.done;
+    await Promise.all([...createdTickets.map((t) => tx.store.put(t)), tx.done]);
 
     // Si attribué immédiatement au responsable, enregistrer dans l'historique d'attribution
     if (params.assignedResponsableId && responsableName) {
@@ -2219,7 +2281,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const carnetTickets = allTickets.filter((t) => t.carnetId === carnet.id);
 
     const tx = db.transaction('tickets', 'readwrite');
+    const store = tx.objectStore('tickets');
     let updatedCount = 0;
+    const modifiedTickets: Ticket[] = [];
     for (const t of carnetTickets) {
       // Uniquement les tickets vierges ou disponibles (ne pas altérer ceux déjà vendus)
       if (t.status === 'GENERATED' || t.status === 'AVAILABLE') {
@@ -2228,11 +2292,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         t.assignedResponsableName = responsable.fullName;
         t.sectorId = responsable.sectorId;
         t.sectorName = responsable.sectorName;
-        await tx.store.put(t);
+        modifiedTickets.push(t);
         updatedCount++;
       }
     }
-    await tx.done;
+    await Promise.all([...modifiedTickets.map((t) => store.put(t)), tx.done]);
 
     // Enregistrer l'attribution dans ticket_assignments
     if (db.objectStoreNames.contains('ticket_assignments')) {
@@ -2319,19 +2383,21 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const carnetTickets = allTickets.filter((t) => t.carnetId === carnet.id);
 
     const tx = db.transaction('tickets', 'readwrite');
+    const store = tx.objectStore('tickets');
     let cancelledCount = 0;
     const nowIso = new Date().toISOString();
+    const cancelledTickets: Ticket[] = [];
     for (const t of carnetTickets) {
       if (t.status !== 'SOLD' && t.status !== 'CONTROLLED') {
         t.status = 'CANCELLED';
         t.cancelledAt = nowIso;
         t.cancelledBy = currentUser?.fullName;
         t.cancellationReason = cleanReason;
-        await tx.store.put(t);
+        cancelledTickets.push(t);
         cancelledCount++;
       }
     }
-    await tx.done;
+    await Promise.all([...cancelledTickets.map((t) => store.put(t)), tx.done]);
 
     await recordAudit(
       'CARNET_CANCELLED',
@@ -2740,6 +2806,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const actorName = currentUser?.fullName || currentUser?.username || 'RESPONSABLE';
 
     const updatedTickets: Ticket[] = [];
+    const assignmentRecords: any[] = [];
     const previousAgentsSet = new Set<string>();
 
     const tx = db.transaction(['tickets', 'ticket_assignments'], 'readwrite');
@@ -2763,10 +2830,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ticket.sectorName = agent.sectorName || ticket.sectorName;
       ticket.status = 'ASSIGNED_TO_AGENT';
 
-      await tx.objectStore('tickets').put(ticket);
       updatedTickets.push(ticket);
 
-      const assignmentRecord: any = {
+      assignmentRecords.push({
         id: generateSecureToken('asg', 12),
         ticketId: ticket.id,
         carnetId: ticket.carnetId,
@@ -2778,10 +2844,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           ? `Réattribution du ticket ${ticket.ticketNumber} de ${oldAgentName} vers ${agent.fullName}`
           : `Attribution initiale du ticket ${ticket.ticketNumber} à ${agent.fullName}`,
         assignedAt: nowIso,
-      };
-      await tx.objectStore('ticket_assignments').put(assignmentRecord);
+      });
     }
-    await tx.done;
+
+    await Promise.all([
+      ...updatedTickets.map((t) => tx.objectStore('tickets').put(t)),
+      ...assignmentRecords.map((a) => tx.objectStore('ticket_assignments').put(a)),
+      tx.done,
+    ]);
 
     const count = updatedTickets.length;
     const isReassignment = previousAgentsSet.size > 0;
@@ -2890,17 +2960,20 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const targetId = recipientId || currentUser?.id;
     const db = await getDB();
     if (db.objectStoreNames.contains('notifications')) {
-      const allNotifs = await db.getAll('notifications');
-      const tx = db.transaction('notifications', 'readwrite');
-      const nowIso = new Date().toISOString();
-      for (const notif of allNotifs) {
-        if ((!targetId || notif.recipientId === targetId) && !notif.isRead) {
+      const allNotifs: NotificationRecord[] = await db.getAll('notifications');
+      const unreadNotifs = allNotifs.filter(
+        (notif: NotificationRecord) => (!targetId || notif.recipientId === targetId) && !notif.isRead
+      );
+      if (unreadNotifs.length > 0) {
+        const tx = db.transaction('notifications', 'readwrite');
+        const store = tx.objectStore('notifications');
+        const nowIso = new Date().toISOString();
+        for (const notif of unreadNotifs) {
           notif.isRead = true;
           notif.readAt = nowIso;
-          await tx.store.put(notif);
         }
+        await Promise.all([...unreadNotifs.map((n: NotificationRecord) => store.put(n)), tx.done]);
       }
-      await tx.done;
       await refreshData();
     }
   };
@@ -3009,24 +3082,27 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await db.put('remises', remise);
 
-    // Marquer les tickets comme couverts
-    const tx = db.transaction('tickets', 'readwrite');
-    for (const t of ticketsToCover) {
-      t.coveredByRemiseId = remiseId;
-      await tx.store.put(t);
-    }
-    await tx.done;
-
-    // Marquer les ventes correspondantes comme couvertes
-    const allSales = await db.getAll('sales');
-    const salesTx = db.transaction('sales', 'readwrite');
-    for (const s of allSales) {
-      if (ticketIdsCovered.includes(s.ticketId)) {
-        s.coveredByRemiseId = remiseId;
-        await salesTx.store.put(s);
+    // Marquer les tickets comme couverts en transaction groupée
+    if (ticketsToCover.length > 0) {
+      const tx = db.transaction('tickets', 'readwrite');
+      const store = tx.objectStore('tickets');
+      for (const t of ticketsToCover) {
+        t.coveredByRemiseId = remiseId;
       }
+      await Promise.all([...ticketsToCover.map((t) => store.put(t)), tx.done]);
     }
-    await salesTx.done;
+
+    // Marquer les ventes correspondantes comme couvertes en transaction groupée
+    const allSales = await db.getAll('sales');
+    const coveredSales = allSales.filter((s) => ticketIdsCovered.includes(s.ticketId));
+    if (coveredSales.length > 0) {
+      const salesTx = db.transaction('sales', 'readwrite');
+      const salesStore = salesTx.objectStore('sales');
+      for (const s of coveredSales) {
+        s.coveredByRemiseId = remiseId;
+      }
+      await Promise.all([...coveredSales.map((s) => salesStore.put(s)), salesTx.done]);
+    }
 
     // NOTIFICATION AGENT :
     // notifier l'agent avec : montant, date, heure, responsable, référence
@@ -4348,6 +4424,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         notifications,
         dailyClosings,
         vehicles,
+        isLoading,
         ticketReprints,
         sosAlerts,
         litigesChauffeurs,

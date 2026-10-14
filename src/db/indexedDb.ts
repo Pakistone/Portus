@@ -417,10 +417,8 @@ export async function cleanDuplicateCarnets(db: IDBPDatabase<PortusDB>): Promise
     if (idsToDelete.length > 0) {
       console.log(`[PORTUS IndexedDB] Nettoyage de ${idsToDelete.length} carnet(s) dupliqué(s)...`);
       const tx = db.transaction('carnets', 'readwrite');
-      for (const id of idsToDelete) {
-        await tx.store.delete(id);
-      }
-      await tx.done;
+      const store = tx.objectStore('carnets');
+      await Promise.all([...idsToDelete.map((id) => store.delete(id)), tx.done]);
     }
   } catch (err) {
     console.warn('[PORTUS IndexedDB] Erreur nettoyage carnets dupliqués:', err);
@@ -456,4 +454,39 @@ export async function initializeDatabase(): Promise<void> {
 
   // Marquer la base comme initialisée (carnets, tickets, ventes restent synchronisés avec Supabase)
   await db.put('settings', true, 'is_initialized');
+}
+
+/**
+ * Écriture groupée optimisée dans un store IndexedDB au sein d'une transaction unique.
+ * Évite les blocages de thread causés par des centaines de transactions individuelles.
+ */
+export async function bulkPut<T = any>(
+  storeName: any,
+  items: T[],
+  existingDb?: IDBPDatabase<PortusDB>
+): Promise<void> {
+  if (!items || items.length === 0) return;
+  const db = existingDb || (await getDB());
+  if (!db.objectStoreNames.contains(storeName)) return;
+
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  await Promise.all([...items.map((item) => store.put(item as any)), tx.done]);
+}
+
+/**
+ * Suppression groupée optimisée dans un store IndexedDB au sein d'une transaction unique.
+ */
+export async function bulkDelete(
+  storeName: any,
+  keys: string[],
+  existingDb?: IDBPDatabase<PortusDB>
+): Promise<void> {
+  if (!keys || keys.length === 0) return;
+  const db = existingDb || (await getDB());
+  if (!db.objectStoreNames.contains(storeName)) return;
+
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  await Promise.all([...keys.map((key) => store.delete(key)), tx.done]);
 }
