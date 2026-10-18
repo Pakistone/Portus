@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useData } from '../../context/DataContext';
 import { generateAgentBadgePDF, type BadgeParams } from '../../utils/badgePdfGenerator';
 import { showToast } from '../common/ToastNotification';
+import { ORG_INFO } from '../../config/constants';
 import { 
   Camera, 
   Upload, 
@@ -510,7 +511,7 @@ export const AgentBadgeModal: React.FC<AgentBadgeModalProps> = ({ isOpen, onClos
                 {/* Photo row */}
                 <div className="flex justify-between items-center px-2 mt-1">
                   {/* Miniature Logo */}
-                  <img src="/logo-ujpas.png" alt="UJPAS Logo" className="w-6 h-6 object-contain shrink-0" onError={(e) => { e.currentTarget.src = 'https://placehold.co/100x100?text=UJPAS'; }} />
+                  <img src={ORG_INFO.LOGO_PATH} alt="UJPAS Logo" className="w-6 h-6 object-contain shrink-0" />
                   
                   {/* Card photo frame */}
                   <div className="w-16 h-20 bg-slate-100 border border-slate-900 rounded overflow-hidden flex items-center justify-center shrink-0">
@@ -604,7 +605,7 @@ export const AgentBadgeModal: React.FC<AgentBadgeModalProps> = ({ isOpen, onClos
                   </div>
                   
                   {/* Sceau administratif mini-overlay */}
-                  <img src="/public/cachet-ujpas.png" alt="Stamp Cachet" className="w-11 h-11 object-contain shrink-0 rotate-12 -mb-2" onError={(e) => { e.currentTarget.src = 'https://placehold.co/100x100?text=UJPAS+Stamp'; }} />
+                  <img src={ORG_INFO.STAMP_PATH} alt="Stamp Cachet" className="w-11 h-11 object-contain shrink-0 rotate-12 -mb-2" />
                 </div>
 
                 {/* Verso Dark Footer */}

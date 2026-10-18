@@ -34,7 +34,7 @@ interface Props {
 }
 
 export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
-  const { verifyTicket, searchTicketsByPlate, recordControl, tickets, isOnline } = useData();
+  const { verifyTicket, searchTicketsByPlate, recordControl, tickets, carnets, isOnline } = useData();
 
   // Mode actif : 'CAMERA' ou 'MANUAL'
   const [mode, setMode] = useState<'CAMERA' | 'MANUAL'>('CAMERA');
@@ -654,6 +654,21 @@ export const ControlScanModal: React.FC<Props> = ({ isOpen, onClose }) => {
                       <span>Carnet d'origine :</span>
                       <span className="font-mono text-slate-300">{result.ticket.carnetNumber}</span>
                     </div>
+                    {(() => {
+                      const originCarnet = carnets.find(
+                        (c) => c.id === result.ticket?.carnetId || c.carnetNumber === result.ticket?.carnetNumber
+                      );
+                      const carnetDate = originCarnet?.createdAt || (result.ticket as any).carnetCreatedAt;
+                      if (!carnetDate) return null;
+                      return (
+                        <div className="flex items-center justify-between text-[11px] text-slate-400">
+                          <span>Date création carnet :</span>
+                          <span className="font-mono text-emerald-400 font-semibold">
+                            {formatDateTime(carnetDate)}
+                          </span>
+                        </div>
+                      );
+                    })()}
                     {result.ticket.sectorName && (
                       <div className="flex items-center justify-between text-[11px] text-slate-400">
                         <span>Secteur de vente :</span>

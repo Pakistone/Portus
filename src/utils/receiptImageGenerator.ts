@@ -113,8 +113,8 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
 
   // Chargement asynchrone des assets images UJPAS
   const [logoImg, stampImg] = await Promise.all([
-    loadImageSafe(ORG_INFO.LOGO_PATH).then((img) => img || loadImageSafe('/logoss.jpg')),
-    loadImageSafe(ORG_INFO.STAMP_PATH).then((img) => img || loadImageSafe('/cachet-ujpas.png')),
+    loadImageSafe(ORG_INFO.LOGO_PATH),
+    loadImageSafe(ORG_INFO.STAMP_PATH),
   ]);
 
   // 1. Fond sécurisé ivoire clair

@@ -18,6 +18,8 @@ export interface TicketQRPayload {
   ticket_id: string; // UUID interne du ticket
   carnet_number: string; // Numéro du carnet (ex: C-2026-001)
   ticket_number: string; // Numéro visible du ticket (ex: VRD-000101)
+  carnet_date?: string; // Date de création du carnet formatée (ex: 18/10/2026 14:30)
+  carnet_created_at?: string; // Date ISO de création du carnet
   price: number; // Prix officiel en FCFA (5000)
   signature: string | null; // Signature HMAC-SHA256 autoritaire
   created_at?: string;
@@ -62,6 +64,68 @@ export function generateTicketSecurityToken(ticketId: string, carnetId: string, 
 }
 
 /**
+ * Construit un texte de QR code structuré et optimisé pour lecture immédiate
+ * par l'appareil photo d'un smartphone (iPhone / Android) ainsi que par le scanner Portus.
+ * Affiche clairement :
+ * - Le numéro officiel du ticket
+ * - La date et heure de création du carnet
+ * - Le numéro de carnet
+ * - Le prix officiel et la mention de sécurité
+ */
+export function formatTicketQrForCameraScan(params: {
+  ticketNumber: string;
+  carnetNumber?: string;
+  carnetCreatedAt?: string;
+  createdAt?: string;
+  price?: number;
+  ticketId?: string;
+  signature?: string | null;
+}): string {
+  const tNum = (params.ticketNumber || '').trim().toUpperCase();
+  const cNum = (params.carnetNumber || '').trim().toUpperCase();
+  const price = params.price || 5000;
+
+  let dateStr = '—';
+  const rawDate = params.carnetCreatedAt || params.createdAt;
+  if (rawDate) {
+    try {
+      const d = new Date(rawDate);
+      if (!isNaN(d.getTime())) {
+        const datePart = d.toLocaleDateString('fr-FR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        });
+        const timePart = d.toLocaleTimeString('fr-FR', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        dateStr = `${datePart} ${timePart}`;
+      } else {
+        dateStr = String(rawDate);
+      }
+    } catch {
+      dateStr = String(rawDate);
+    }
+  }
+
+  const lines: string[] = [
+    'PORTUS — UJPAS 🇨🇮',
+    `TICKET N° : ${tNum}`,
+    `DATE CRÉATION CARNET : ${dateStr}`,
+  ];
+
+  if (cNum) {
+    lines.push(`CARNET N° : ${cNum}`);
+  }
+
+  lines.push(`PRIX : ${price.toLocaleString('fr-FR')} FCFA`);
+  lines.push('SÉCURITÉ : AUTHENTIQUE');
+
+  return lines.join('\n');
+}
+
+/**
  * Construit le payload officiel du QR Code pour un ticket
  */
 export function buildTicketQRPayload(params: {
@@ -69,17 +133,48 @@ export function buildTicketQRPayload(params: {
   carnetId?: string;
   carnetNumber: string;
   ticketNumber: string;
+  carnetCreatedAt?: string;
   price?: number;
   signature?: string | null;
+  asPlainTextForCamera?: boolean;
 }): string {
   const price = params.price || 5000;
   const token = generateTicketSecurityToken(params.ticketId, params.carnetId || '', params.ticketNumber);
+
+  if (params.asPlainTextForCamera) {
+    return formatTicketQrForCameraScan({
+      ticketNumber: params.ticketNumber,
+      carnetNumber: params.carnetNumber,
+      carnetCreatedAt: params.carnetCreatedAt,
+      price,
+      ticketId: params.ticketId,
+      signature: params.signature,
+    });
+  }
+
+  let formattedDate: string | undefined = undefined;
+  if (params.carnetCreatedAt) {
+    try {
+      const d = new Date(params.carnetCreatedAt);
+      if (!isNaN(d.getTime())) {
+        formattedDate = `${d.toLocaleDateString('fr-FR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        })} ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
+      }
+    } catch {
+      formattedDate = params.carnetCreatedAt;
+    }
+  }
 
   const payload: TicketQRPayload = {
     v: 1,
     ticket_id: params.ticketId,
     carnet_number: params.carnetNumber,
     ticket_number: params.ticketNumber,
+    carnet_date: formattedDate,
+    carnet_created_at: params.carnetCreatedAt,
     price,
     signature: params.signature || null,
     // Alias compacts pour scanners et rétrocompatibilité
@@ -94,7 +189,7 @@ export function buildTicketQRPayload(params: {
 }
 
 /**
- * Décode et normalise un payload de QR Code scanné (JSON ou texte brut)
+ * Décode et normalise un payload de QR Code scanné (JSON, format appareil photo lisible ou texte brut)
  */
 export function parseTicketQRPayload(qrRaw: string): TicketQRPayload | null {
   if (!qrRaw) return null;
@@ -119,7 +214,64 @@ export function parseTicketQRPayload(qrRaw: string): TicketQRPayload | null {
     }
   }
 
-  // 2. Détection format JSON
+  // 2. Détection format texte lisible smartphone / appareil photo (ex: TICKET N° : VRDCH-000001 ...)
+  if (rawTrimmed.includes('\n') || rawTrimmed.toUpperCase().includes('TICKET') || rawTrimmed.toUpperCase().includes('CARNET')) {
+    const lines = rawTrimmed.split(/\r?\n/);
+    let ticketNum = '';
+    let carnetNum = '';
+    let dateStr = '';
+    let price = 5000;
+    let ticketId = '';
+
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      const tMatch = cleanLine.match(/^(?:PORTUS\s*[-—]\s*)?(?:TICKET|NUMERO|NUMÉRO|TKT|N°)\s*(?:N°|NUMÉRO|NUMERO)?\s*[:=\-]\s*([A-Z0-9\-_]+)/i);
+      if (tMatch && !ticketNum) {
+        ticketNum = tMatch[1].trim().toUpperCase();
+      }
+
+      const dMatch = cleanLine.match(/^DATE\s*(?:CRÉATION|CREATION)?\s*(?:DU\s*)?(?:CARNET)?\s*[:=\-]\s*(.+)/i);
+      if (dMatch && !dateStr) {
+        dateStr = dMatch[1].trim();
+      }
+
+      const cMatch = cleanLine.match(/^CARNET\s*(?:N°|NUMÉRO|NUMERO)?\s*[:=\-]\s*([A-Z0-9\-_]+)/i);
+      if (cMatch && !carnetNum) {
+        carnetNum = cMatch[1].trim().toUpperCase();
+      }
+
+      const pMatch = cleanLine.match(/^PRIX\s*[:=\-]\s*([0-9\s]+)/i);
+      if (pMatch) {
+        price = Number(pMatch[1].replace(/\s/g, '')) || 5000;
+      }
+
+      const iMatch = cleanLine.match(/^(?:ID|TID)\s*[:=\-]\s*([A-Z0-9\-_]+)/i);
+      if (iMatch && !ticketId) {
+        ticketId = iMatch[1].trim();
+      }
+    }
+
+    if (ticketNum) {
+      return {
+        v: 1,
+        ticket_id: ticketId || ticketNum,
+        carnet_number: carnetNum,
+        ticket_number: ticketNum,
+        carnet_date: dateStr,
+        carnet_created_at: dateStr,
+        price,
+        signature: null,
+        tid: ticketId || ticketNum,
+        cid: '',
+        ref: carnetNum,
+        num: ticketNum,
+        tok: '',
+        sig: null,
+      };
+    }
+  }
+
+  // 3. Détection format JSON
   try {
     const parsed = JSON.parse(rawTrimmed);
     if (parsed && typeof parsed === 'object') {
@@ -128,6 +280,7 @@ export function parseTicketQRPayload(qrRaw: string): TicketQRPayload | null {
       const ticketNum = parsed.ticket_number || parsed.num || parsed.ticketNumber || parsed.t || '';
       const price = Number(parsed.price) || 5000;
       const signature = parsed.signature || parsed.sig || parsed.tok || null;
+      const carnetDate = parsed.carnet_date || parsed.carnet_created_at || parsed.date || '';
 
       if (ticketId || ticketNum) {
         return {
@@ -135,6 +288,8 @@ export function parseTicketQRPayload(qrRaw: string): TicketQRPayload | null {
           ticket_id: ticketId,
           carnet_number: carnetNum,
           ticket_number: ticketNum,
+          carnet_date: carnetDate,
+          carnet_created_at: parsed.carnet_created_at || carnetDate,
           price,
           signature,
           tid: ticketId,

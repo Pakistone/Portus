@@ -4,7 +4,8 @@
  * 
  * RÈGLES MÉTIER & IMPRESSION :
  * 1. Format physique : A4 Paysage (297 x 210 mm)
- * 2. Disposition : 9 tickets par page (grille 3 colonnes x 3 lignes de 99 x 70 mm)
+ * 2. Disposition : 6 tickets par page (grille 3 colonnes x 2 lignes, soit 3 tickets par ligne)
+ *    Format de chaque ticket : 93 x 66 mm (respectant le ratio d'aspect haute fidélité 1.414 de l'officiel 2376 x 1680 px)
  * 3. Fond graphique officiel : /ticket_bg_ujpas_hd.jpg
  * 4. Surimpressions dynamiques :
  *    - Numéro de ticket séquentiel dans le cartouche bleu en haut à gauche (ex. : N° VRDCH-000001)
@@ -20,136 +21,14 @@ import QRCode from 'qrcode';
 import type { Carnet, Ticket, TicketStatus, Remise } from '../types';
 import { ORG_INFO } from '../config/constants';
 import { formatFCFA, formatDate, formatDateTime } from './normalization';
-
-let cachedBgDataUrl: string | null = null;
-
-/**
- * Convertit de façon robuste toute source (URL ou Blob) en DataURL PNG pure via Canvas
- */
-async function convertToPngDataUrl(source: string | Blob): Promise<string> {
-  return new Promise((resolve) => {
-    if (typeof Image === 'undefined' || typeof document === 'undefined') {
-      return resolve('');
-    }
-
-    const img = new Image();
-
-    let objectUrl: string | null = null;
-    if (typeof source !== 'string') {
-      try {
-        objectUrl = URL.createObjectURL(source);
-        img.src = objectUrl;
-      } catch {
-        return resolve('');
-      }
-    } else {
-      img.src = source;
-    }
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve('');
-    }, 3000);
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      if (objectUrl) {
-        try {
-          URL.revokeObjectURL(objectUrl);
-        } catch {
-          // ignore
-        }
-      }
-    };
-
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth || 2376;
-        canvas.height = img.naturalHeight || 1680;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const pngUrl = canvas.toDataURL('image/png');
-          cleanup();
-          return resolve(pngUrl);
-        }
-      } catch (err) {
-        console.warn('Erreur rasterisation canvas vers PNG:', err);
-      }
-      cleanup();
-      resolve('');
-    };
-
-    img.onerror = () => {
-      cleanup();
-      resolve('');
-    };
-  });
-}
+import { renderTicketToDataUrl, preloadTicketAssets } from './ticketImageRenderer';
+import { formatTicketQrForCameraScan } from './ticketSecurity';
 
 /**
- * Charge le fond graphique officiel UJPAS et garantit une DataURL PNG/JPEG pure et valide
+ * Charge directement le fond graphique officiel UJPAS
  */
 async function loadTicketBgImage(): Promise<string> {
-  if (cachedBgDataUrl) {
-    return cachedBgDataUrl;
-  }
-
-  const candidateUrls = [
-    '/ticket_bg_ujpas_hd.jpg',
-    '/ticket-ujpas-specimen.png',
-    '/ticket_bg_ujpas_hd.png',
-  ];
-
-  for (const url of candidateUrls) {
-    try {
-      // 1. Essai Fetch direct avec timeout
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = setTimeout(() => controller?.abort(), 3000);
-      const res = await fetch(url, { signal: controller ? controller.signal : undefined }).catch(() => null);
-      clearTimeout(timer);
-
-      if (res && res.ok) {
-        const blob = await res.blob().catch(() => null);
-        if (blob && blob.size > 0) {
-          // Lecture directe ultra-rapide et fiable via FileReader
-          const dataUrl = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const resUrl = typeof reader.result === 'string' ? reader.result : '';
-              resolve(resUrl);
-            };
-            reader.onerror = () => resolve('');
-            reader.readAsDataURL(blob);
-          });
-
-          if (dataUrl && (dataUrl.startsWith('data:image/png') || dataUrl.startsWith('data:image/jpeg'))) {
-            cachedBgDataUrl = dataUrl;
-            return dataUrl;
-          }
-
-          // Pour tout format vectoriel SVG, conversion Canvas vers PNG pur
-          const rasterPng = await convertToPngDataUrl(blob);
-          if (rasterPng && rasterPng.startsWith('data:image/png')) {
-            cachedBgDataUrl = rasterPng;
-            return rasterPng;
-          }
-        }
-      }
-
-      // 2. Repli HTML Image si fetch a échoué
-      const imagePng = await convertToPngDataUrl(url);
-      if (imagePng && imagePng.startsWith('data:image/png')) {
-        cachedBgDataUrl = imagePng;
-        return imagePng;
-      }
-    } catch (e) {
-      console.warn(`Échec du chargement du fond candidat ${url}:`, e);
-    }
-  }
-
-  return '';
+  return '/ticket_bg_ujpas_hd.jpg';
 }
 
 /**
@@ -343,9 +222,11 @@ export function downloadPdfDoc(doc: any, filename: string): string {
 }
 
 /**
- * Génère le PDF d'impression officiel d'un carnet UJPAS (9 tickets par feuille A4 Paysage)
- * Format : 297 x 210 mm (3 colonnes x 3 lignes = 99 x 70 mm par cellule)
- * Optimisé : ticket 98 x 55.18 mm (largeur maximale, ratio 16:9 préservé, 100% rendu image)
+ * Génère le PDF d'impression officiel d'un carnet UJPAS (9 tickets par feuille A4 Paysage sans marge blanche)
+ * Format : 297 x 210 mm (3 colonnes x 3 lignes = 99 x 70 mm bord à bord)
+ * Utilise le moteur de rendu d'images raster haute définition (ticketImageRenderer)
+ * avec filigrane mosaïque diagonal à -23° et réserve QR Code exclusive en bas à droite.
+ * ⚠️ AUCUN PRIX N'EST AFFICHÉ SUR LE TICKET.
  */
 export async function generateCarnetPrintPDF(
   carnet: Carnet,
@@ -371,18 +252,23 @@ export async function generateCarnetPrintPDF(
         controlCount: 0,
         status: 'AVAILABLE' as TicketStatus,
         createdAt: carnet.createdAt || new Date().toISOString(),
-        qrPayload: tNum,
+        qrPayload: formatTicketQrForCameraScan({
+          ticketNumber: tNum,
+          carnetNumber: carnet.carnetNumber,
+          carnetCreatedAt: carnet.createdAt,
+          price: 5000,
+        }),
       };
     });
   }
 
-  // Chargement asynchrone de jsPDF et du fond officiel PNG
-  const [{ jsPDF }, bgDataUrl] = await Promise.all([
+  // Préchargement asynchrone des assets graphiques raster et de jsPDF
+  const [{ jsPDF }] = await Promise.all([
     import('jspdf'),
-    loadTicketBgImage(),
+    preloadTicketAssets(),
   ]);
 
-  // Document A4 Paysage
+  // Document A4 Paysage (297 x 210 mm) : 3 tickets par ligne, 2 lignes par page (grille 3x2 = 6 tickets par page)
   const doc = new jsPDF({
     orientation: 'landscape',
     unit: 'mm',
@@ -391,32 +277,63 @@ export async function generateCarnetPrintPDF(
   });
 
   const cols = 3;
-  const ticketsPerPage = 9;
+  const rows = 2;
+  const ticketsPerPage = 6;
   const totalTickets = effectiveTickets.length;
   const totalPages = Math.ceil(totalTickets / ticketsPerPage);
 
-  // 1. Pré-génération optimisée par lots des QR codes haute densité avec badge orange UJPAS
-  const qrCodes: string[] = new Array(totalTickets);
-  const batchSize = 18;
+  // 1. Rendu haute définition par lot via ticketImageRenderer
+  // Format officiel calibré : Largeur 93 mm (9.3 cm) x Hauteur 66 mm (6.6 cm)
+  // Grille 3 colonnes x 2 lignes = 6 tickets par feuille A4 Paysage (297 x 210 mm)
+  const renderedTickets: string[] = new Array(totalTickets);
+  // Traitement optimisé par lots de 12 tickets avec rendu ultra-rapide
+  const batchSize = 12;
 
   for (let i = 0; i < totalTickets; i += batchSize) {
     const end = Math.min(i + batchSize, totalTickets);
     const batch = effectiveTickets.slice(i, end);
 
-    const rendered = await Promise.all(
-      batch.map((t) => generateQrWithBadge(t.qrPayload || t.ticketNumber))
+    const renderedBatch = await Promise.all(
+      batch.map((ticket) =>
+        renderTicketToDataUrl(ticket, {
+          width: 1075, // 300 DPI pour 9.1 cm (longueur augmentée pour combler l'espace blanc à droite)
+          height: 945,  // 300 DPI pour 8.0 cm (hauteur officielle)
+          format: 'image/jpeg',
+          quality: 0.82, // Compression optimisée (netteté 300 DPI préservée, génération instantanée)
+          watermarkOpacity: 0.58,
+          enhanceContrast: true,
+          carnetCreatedAt: carnet.createdAt,
+          carnetNumber: carnet.carnetNumber,
+        })
+      )
     );
 
-    for (let j = 0; j < rendered.length; j++) {
-      qrCodes[i + j] = rendered[j];
+    for (let j = 0; j < renderedBatch.length; j++) {
+      renderedTickets[i + j] = renderedBatch[j];
     }
 
     if (onProgress) {
       onProgress(Math.min(end, totalTickets), totalTickets);
     }
+
+    // Céder brièvement la main à l'interface pour actualiser la jauge de progression
+    if (end < totalTickets) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
   }
 
-  // 2. Assemblage des pages A4 Paysage
+  // Dimensions physiques des 2 bandes de 3 tickets sur feuille A4 Paysage (297 x 210 mm)
+  // Marge à gauche d'agrafage (15 mm) + 3 tickets allongés de 91 mm + 2 intervalles de perforation de 2.5 mm = 293 mm
+  const ticketW = 91.0; // Longueur / largeur ticket en mm (9.1 cm - augmentée pour combler l'espace blanc à droite)
+  const ticketH = 80.0; // Hauteur ticket en mm (exactement 8.0 cm)
+  const stapleW = 15.0; // Talon / Marge d'agrafage à gauche (1.5 cm) pour relier le carnet
+  const perfGapX = 2.5; // Espace de perforation entre tickets d'une même ligne
+  const stripW = stapleW + cols * ticketW + (cols - 1) * perfGapX; // 15 + 3 * 91 + 2 * 2.5 = 293.0 mm
+  const marginLeft = (297.0 - stripW) / 2; // (297.0 - 293.0) / 2 = 2.0 mm de marge équilibrée (comble l'espace blanc à droite)
+  const stripGapY = 14.0; // Espace entre les deux bandes pour le coup de ciseaux
+  const marginTop = (210.0 - (rows * ticketH + stripGapY)) / 2; // (210 - (160 + 14)) / 2 = 18.0 mm
+
+  // 2. Assemblage des pages A4 Paysage (2 bandes de 3 tickets par page)
   for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
     if (pageIdx > 0) {
       doc.addPage('a4', 'landscape');
@@ -425,71 +342,125 @@ export async function generateCarnetPrintPDF(
     const startIndex = pageIdx * ticketsPerPage;
     const pageTickets = effectiveTickets.slice(startIndex, startIndex + ticketsPerPage);
 
-    const cellW = 99.0;
-    const cellH = 70.0;
-    const ticketW = 97.0; // Marge de coupe de 1.0 mm de chaque côté
-    const ticketH = 67.0; // Marge de coupe de 1.5 mm en haut/bas
-    const padX = (cellW - ticketW) / 2; // 1.0 mm
-    const padY = (cellH - ticketH) / 2; // 1.5 mm
+    // Dessin des 2 bandes
+    for (let r = 0; r < rows; r++) {
+      const rowY = marginTop + r * (ticketH + stripGapY);
 
-    pageTickets.forEach((ticket, idx) => {
-      const globalIdx = startIndex + idx;
-      const col = idx % cols;
-      const row = Math.floor(idx / cols);
-      const cx = col * cellW;
-      const cy = row * cellH;
-      const tx = cx + padX;
-      const ty = cy + padY;
-
-      // 1. Image officielle 100% brute (aucune altération vectorielle)
-      if (bgDataUrl) {
-        const imgFmt = bgDataUrl.includes('image/jpeg') || bgDataUrl.includes('image/jpg') ? 'JPEG' : 'PNG';
-        doc.addImage(bgDataUrl, imgFmt, tx, ty, ticketW, ticketH, 'TICKET_UJPAS', 'FAST');
-      }
-
-      // 2. Ligne de coupe en pointillés autour de la cellule 99x70 mm
-      doc.setDrawColor(203, 213, 225);
-      doc.setLineWidth(0.2);
-      doc.setLineDashPattern([2, 2], 0);
-      doc.rect(cx, cy, cellW, cellH);
+      // Bordure de coupe nette en tirets entourant la bande complète (Talon d'agrafage + 3 tickets)
+      doc.setDrawColor(31, 41, 55); // Gris foncé / noir
+      doc.setLineWidth(0.35);
+      doc.setLineDashPattern([3, 2], 0);
+      doc.rect(marginLeft, rowY, stripW, ticketH);
       doc.setLineDashPattern([], 0);
 
-      // 3. Numéro de ticket dynamique dans la boîte bleue (ratios précis de l'image de fond officielle 1000 x 563)
-      const patchX = tx + ticketW * 0.075;
-      const patchY = ty + ticketH * 0.2948;
-      const patchW = ticketW * 0.175;
-      const patchH = ticketH * 0.0639;
-      
-      // Couleur de fond et de texte harmonisées avec la charte graphique officielle UJPAS
-      doc.setFillColor(224, 242, 254);
-      doc.roundedRect(patchX, patchY, patchW, patchH, 0.6, 0.6, 'F');
-      doc.setTextColor(3, 105, 161);
+      // Texte indicateur de coupe
+      doc.setTextColor(75, 85, 99);
+      doc.setFontSize(6.5);
       doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.0);
-      
-      // Alignement centré parfait pour s'adapter dynamiquement à toutes les longueurs de préfixe
-      doc.text(`N° ${ticket.ticketNumber}`, patchX + patchW / 2, patchY + patchH * 0.68, { align: 'center' });
+      doc.text(`BANDE ${r + 1} — DÉCOUPE CISEAUX (MARGE AGRAFAGE À GAUCHE + 3 TICKETS)`, marginLeft + 3, rowY - 1.5);
 
-      // 4. QR Code dynamique scannable dans la case (ratios précis de l'image de fond officielle 1000 x 563)
-      const qrX = tx + ticketW * 0.770;
-      const qrY = ty + ticketH * 0.595;
-      const qrW = ticketW * 0.135;
-      const qrH = ticketH * 0.231;
+      // 1. Dessin du Talon / Marge d'agrafage sur le côté gauche de la bande
+      // Fond légèrement teinté du talon
+      doc.setFillColor(248, 250, 252);
+      doc.rect(marginLeft, rowY, stapleW, ticketH, 'F');
 
-      // Masquage blanc de propreté étiré pour correspondre exactement à l'espace de la case
-      doc.setFillColor(255, 255, 255);
-      doc.rect(qrX, qrY, qrW, qrH, 'F');
+      // Ligne verticale de séparation / perforation entre le talon d'agrafage et le 1er ticket
+      doc.setDrawColor(31, 41, 55);
+      doc.setLineWidth(0.30);
+      doc.setLineDashPattern([1.0, 1.2], 0);
+      doc.line(marginLeft + stapleW, rowY, marginLeft + stapleW, rowY + ticketH);
+      doc.setLineDashPattern([], 0);
 
-      const qrData = qrCodes[globalIdx];
-      if (qrData) {
-        doc.addImage(qrData, 'PNG', qrX, qrY, qrW, qrH, undefined, 'FAST');
+      // Repères visuels d'agrafes (Haut et Bas)
+      doc.setDrawColor(107, 114, 128);
+      doc.setLineWidth(0.2);
+      doc.setLineDashPattern([1, 1], 0);
+      doc.rect(marginLeft + stapleW / 2 - 2, rowY + 8, 4, 10);
+      doc.rect(marginLeft + stapleW / 2 - 2, rowY + ticketH - 18, 4, 10);
+      doc.setLineDashPattern([], 0);
+
+      doc.setTextColor(75, 85, 99);
+      doc.setFontSize(5.0);
+      doc.setFont('helvetica', 'bold');
+      doc.text('AGRAFE', marginLeft + stapleW / 2, rowY + 14.5, { align: 'center' });
+      doc.text('AGRAFE', marginLeft + stapleW / 2, rowY + ticketH - 11.5, { align: 'center' });
+
+      // Mention verticale de reliure
+      doc.setFontSize(5.5);
+      doc.setTextColor(55, 65, 81);
+      doc.text('RELIURE CARNET', marginLeft + stapleW / 2, rowY + ticketH / 2, { align: 'center', angle: 90 });
+
+      // 2. Rendu des 3 tickets de la bande (décalés après la marge d'agrafage)
+      for (let c = 0; c < cols; c++) {
+        const ticketIdx = r * cols + c;
+        if (ticketIdx >= pageTickets.length) break;
+
+        const globalIdx = startIndex + ticketIdx;
+        const tx = marginLeft + stapleW + c * (ticketW + perfGapX);
+
+        const ticketImg = renderedTickets[globalIdx];
+        if (ticketImg) {
+          doc.addImage(ticketImg, 'JPEG', tx, rowY, ticketW, ticketH, `TKT_${globalIdx}`, 'FAST');
+          renderedTickets[globalIdx] = '';
+        }
+
+        // Ligne de perforation en pointillés fins au milieu de l'espace entre tickets
+        if (c < cols - 1 && ticketIdx + 1 < pageTickets.length) {
+          const perfLineX = tx + ticketW + perfGapX / 2;
+          doc.setDrawColor(55, 65, 81);
+          doc.setLineWidth(0.25);
+          doc.setLineDashPattern([0.8, 1.2], 0);
+          doc.line(perfLineX, rowY + 1, perfLineX, rowY + ticketH - 1);
+          doc.setLineDashPattern([], 0);
+        }
       }
-    });
+    }
+
+    // Mention de guidage de coupe médiane
+    doc.setDrawColor(156, 163, 175);
+    doc.setLineWidth(0.15);
+    doc.setLineDashPattern([1.5, 2.5], 0);
+    const midCutY = marginTop + ticketH + stripGapY / 2;
+    doc.line(marginLeft, midCutY, marginLeft + stripW, midCutY);
+    doc.setLineDashPattern([], 0);
+
+    doc.setTextColor(107, 114, 128);
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'italic');
+    doc.text(
+      `✂ Ligne de découpe médiane pour séparer les 2 bandes • Carnet ${carnet.carnetNumber} — Page ${pageIdx + 1}/${totalPages} ✂`,
+      148.5,
+      midCutY - 1,
+      { align: 'center' }
+    );
   }
 
   // Nom de fichier officiel demandé :
   // PORTUS_UJPAS_CARNET_${carnet.carnetNumber}_${totalTickets}TICKETS.pdf
   return downloadPdfDoc(doc, `PORTUS_UJPAS_CARNET_${carnet.carnetNumber}_${totalTickets}TICKETS.pdf`);
+}
+
+let watermarkDataUrlCache: string = '';
+async function getWatermarkDataUrl(): Promise<string> {
+  if (watermarkDataUrlCache) return watermarkDataUrlCache;
+  if (typeof document === 'undefined') return '';
+  try {
+    const assets = await preloadTicketAssets();
+    if (assets.watermark) {
+      const c = document.createElement('canvas');
+      c.width = assets.watermark.naturalWidth || 800;
+      c.height = assets.watermark.naturalHeight || 600;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(assets.watermark, 0, 0);
+        watermarkDataUrlCache = c.toDataURL('image/jpeg', 0.85);
+        return watermarkDataUrlCache;
+      }
+    }
+  } catch {}
+  return '';
 }
 
 /**
@@ -505,6 +476,21 @@ export async function generateRemiseReceiptPDF(remise: Remise): Promise<void> {
   });
 
   const pw = 148;
+
+  // Filigrane de sécurité officiel UJPAS en fond de page
+  try {
+    const wmUrl = await getWatermarkDataUrl();
+    if (wmUrl) {
+      doc.saveGraphicsState();
+      try {
+        if ((doc as any).GState) {
+          doc.setGState(new (doc as any).GState({ opacity: 0.20 }));
+        }
+      } catch {}
+      doc.addImage(wmUrl, 'JPEG', 10, 32, pw - 20, 140, 'WM_REMISE', 'FAST');
+      doc.restoreGraphicsState();
+    }
+  } catch {}
 
   // En-tête
   doc.setFillColor(15, 23, 42);

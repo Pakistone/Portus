@@ -127,9 +127,8 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
       const url = await generateCarnetPrintPDF(c, cTickets);
       if (url) {
         setPrintModalData({ carnet: c, url, filename });
-        printPdfDocument(url);
       }
-      setActionSuccess(`Carnet ${c.carnetNumber} prêt pour impression.`);
+      setActionSuccess(`Carnet ${c.carnetNumber} généré et téléchargé avec succès.`);
       setTimeout(() => setActionSuccess(null), 4000);
     } catch (err: any) {
       console.error('Erreur téléchargement carnet:', err);
@@ -260,7 +259,7 @@ export const TicketListModal: React.FC<Props> = ({ isOpen, onClose, carnetFilter
                           <button
                             onClick={() => handlePrintCarnet(t.carnetId)}
                             className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-emerald-400"
-                            title="Imprimer le carnet PDF (9/page A4)"
+                            title="Imprimer le carnet PDF (6/page A4 Paysage • Grille 3×2)"
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>

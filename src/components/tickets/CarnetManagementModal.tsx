@@ -149,9 +149,8 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       if (url) {
         setDownloadUrl({ url, filename });
         setPrintModalData({ carnet: c, url, filename });
-        printPdfDocument(url);
       }
-      setActionSuccess(`Le PDF du carnet ${c.carnetNumber} est prêt pour impression.`);
+      setActionSuccess(`Le PDF du carnet ${c.carnetNumber} a été généré et téléchargé avec succès.`);
       setTimeout(() => setActionSuccess(null), 6000);
     } catch (err: any) {
       console.error('Erreur lors de l’impression du carnet:', err);
@@ -443,7 +442,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <div>
                   <span className="text-[11px] text-slate-500 uppercase font-bold">Volume & Série</span>
                   <p className="text-sm font-bold text-slate-200 mt-0.5">
-                    {selectedCarnet.size} tickets ({Math.ceil(selectedCarnet.size / 9)} page(s) A4)
+                    {selectedCarnet.size} tickets ({Math.ceil(selectedCarnet.size / 6)} page(s) A4)
                   </p>
                   <p className="text-[11px] text-slate-400 mt-1">
                     Numéros {selectedCarnet.seriesPrefix}-{String(selectedCarnet.startNumber).padStart(6, '0')} à{' '}
@@ -719,7 +718,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                             <td className="py-2.5 px-3 whitespace-nowrap">
                               <span className="font-bold text-slate-200">{c.size} tickets</span>
                               <span className="text-[10px] text-slate-500 ml-1">
-                                ({Math.ceil(c.size / 9)} p.)
+                                ({Math.ceil(c.size / 6)} p.)
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
@@ -769,7 +768,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                     onClick={() => handlePrintPDF(c)}
                                     disabled={actionLoading}
                                     className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
-                                    title="Imprimer le carnet en PDF (9 tickets par page A4 paysage)"
+                                    title="Imprimer le carnet en PDF (6 tickets par page A4 paysage • Grille 3×2)"
                                   >
                                     <Printer className="w-3.5 h-3.5" />
                                   </button>

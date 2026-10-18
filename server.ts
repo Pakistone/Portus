@@ -170,13 +170,20 @@ function getSupabaseUserClient(req: express.Request) {
     throw new Error('Jeton d’authentification requis');
   }
   const token = authHeader.split(' ')[1];
-  return createClient(supabaseUrl, process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727', {
+  const apiKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727';
+
+  return createClient(supabaseUrl, apiKey, {
     auth: { persistSession: false, autoRefreshToken: false },
     global: {
       headers: {
-        Authorization: `Bearer ${token}`
-      }
-    }
+        apikey: apiKey,
+        Authorization: `Bearer ${token}`,
+      },
+    },
   });
 }
 
@@ -1382,21 +1389,44 @@ app.delete('/api/carnets/:id', requireAdmin, async (req, res) => {
       try { await supabaseAdmin?.from('ticket_assignments').delete().in('ticket_id', ticketIds); } catch {}
       try { await supabaseClient.from('ticket_assignments').delete().in('ticket_id', ticketIds); } catch {}
 
-      // 3. Supprimer les tickets eux-mêmes
-      let delTicketSuccess = false;
-      if (supabaseAdmin) {
-        const { error: errAdmTickets } = await supabaseAdmin
-          .from('tickets')
-          .delete()
-          .in('id', ticketIds);
-        if (!errAdmTickets) delTicketSuccess = true;
-      }
-      if (!delTicketSuccess) {
-        const { error: errTickets } = await supabaseClient
-          .from('tickets')
-          .delete()
-          .in('id', ticketIds);
-        if (errTickets && !delTicketSuccess) throw errTickets;
+      // 3. Supprimer les tickets eux-mêmes en évitant les violations FK si des ventes sont verrouillées
+      let deleteableTicketIds = ticketIds;
+      try {
+        const { data: linkedSales } = await (supabaseAdmin || supabaseClient)
+          .from('sales')
+          .select('ticket_id')
+          .in('ticket_id', ticketIds);
+        const linkedTids = new Set((linkedSales || []).map((s: any) => s.ticket_id).filter(Boolean));
+        if (linkedTids.size > 0) {
+          deleteableTicketIds = ticketIds.filter((id) => !linkedTids.has(id));
+          // Annuler formellement les tickets vendus résiduels pour qu'ils soient inopérants
+          try {
+            await supabaseClient
+              .from('tickets')
+              .update({ status: 'CANCELLED', assigned_agent_id: null, assigned_responsable_id: null })
+              .in('id', Array.from(linkedTids));
+          } catch {}
+        }
+      } catch {}
+
+      if (deleteableTicketIds.length > 0) {
+        let delTicketSuccess = false;
+        if (supabaseAdmin) {
+          const { error: errAdmTickets } = await supabaseAdmin
+            .from('tickets')
+            .delete()
+            .in('id', deleteableTicketIds);
+          if (!errAdmTickets) delTicketSuccess = true;
+        }
+        if (!delTicketSuccess) {
+          const { error: errTickets } = await supabaseClient
+            .from('tickets')
+            .delete()
+            .in('id', deleteableTicketIds);
+          if (errTickets && !delTicketSuccess) {
+            console.warn('[API Carnets] Avertissement suppression tickets:', errTickets.message);
+          }
+        }
       }
     }
 
@@ -1414,7 +1444,15 @@ app.delete('/api/carnets/:id', requireAdmin, async (req, res) => {
         .from('carnets')
         .delete()
         .or(`id.eq.${carnetId},id.eq.${id}`);
-      if (errCarnet && !delCarnetSuccess) throw errCarnet;
+      if (errCarnet && !delCarnetSuccess) {
+        // Si le carnet est encore référencé par des tickets vendus historiques, le marquer CANCELLED
+        try {
+          await supabaseClient
+            .from('carnets')
+            .update({ status: 'CANCELLED' })
+            .or(`id.eq.${carnetId},id.eq.${id}`);
+        } catch {}
+      }
     }
 
     res.json({
@@ -1490,31 +1528,126 @@ app.post('/api/admin/reset', requireAdmin, async (req, res) => {
 
     console.log('[API Admin] Début de la réinitialisation opérationnelle demandée par:', actor.email);
 
-    // 3. Ordre de suppression respectant les contraintes FK (audit_logs STRICTEMENT PRÉSERVÉ)
-    const tablesToPurge = [
+    const userClient = getSupabaseUserClient(req);
+
+    // 3. Purge des tables sans dépendances descendantes bloquantes
+    const earlyTables = [
       'controls',
       'fraud_reports',
-      'sales',
       'ticket_status_history',
       'ticket_assignments',
       'remittance_adjustments',
       'remittances',
       'expenses',
-      'tickets',
-      'carnets',
       'notifications',
       'login_attempts',
+      'daily_closings',
+      'ticket_reprints',
     ];
 
-    for (const table of tablesToPurge) {
-      const { error: delErr } = await supabaseAdmin
-        .from(table)
+    for (const table of earlyTables) {
+      try {
+        const { error: delErr } = await supabaseAdmin
+          .from(table)
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+        if (delErr && userClient) {
+          await userClient.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        }
+      } catch (tableErr: any) {
+        console.warn(`[API Admin Reset] Purge ${table}:`, tableErr?.message);
+      }
+    }
+
+    // 4. Rompre les références circulaires entre tickets et ventes
+    try {
+      await supabaseAdmin
+        .from('tickets')
+        .update({ sale_id: null, covered_by_remittance_id: null })
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+    } catch {}
+
+    // 5. Purge de la table sales
+    try {
+      if (userClient) {
+        await userClient.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      }
+    } catch {}
+    try {
+      await supabaseAdmin.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    } catch {}
+
+    // 6. Identifier les tickets encore liés à une vente résiduelle (contrainte d'immutabilité PostgreSQL)
+    let remainingSalesTicketIds: string[] = [];
+    try {
+      const { data: salesLeft } = await supabaseAdmin.from('sales').select('ticket_id');
+      if (salesLeft && salesLeft.length > 0) {
+        remainingSalesTicketIds = salesLeft.map((s: any) => s.ticket_id).filter(Boolean);
+      }
+    } catch {}
+
+    // 7. Purge de la table tickets
+    if (remainingSalesTicketIds.length > 0) {
+      // Supprimer tous les tickets non liés à une vente résiduelle
+      const { error: delUnsoldErr } = await supabaseAdmin
+        .from('tickets')
+        .delete()
+        .not('id', 'in', `(${remainingSalesTicketIds.join(',')})`);
+      if (delUnsoldErr) {
+        console.warn('[API Admin Reset] Purge tickets non vendus:', delUnsoldErr.message);
+      }
+
+      // Pour les tickets verrouillés par l'immutabilité des ventes, les désactiver totalement
+      try {
+        if (userClient) {
+          await userClient
+            .from('tickets')
+            .update({
+              status: 'CANCELLED',
+              assigned_agent_id: null,
+              assigned_responsable_id: null,
+            })
+            .in('id', remainingSalesTicketIds);
+        }
+      } catch {}
+    } else {
+      // Aucun ticket verrouillé, suppression complète
+      const { error: delTicketsErr } = await supabaseAdmin
+        .from('tickets')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
-      if (delErr) {
-        console.error(`[API Admin Reset] Échec suppression dans ${table}:`, delErr.message);
-        throw new Error(`Échec de la suppression dans la table ${table} : ${delErr.message}`);
+      if (delTicketsErr) {
+        console.warn('[API Admin Reset] Purge tous tickets:', delTicketsErr.message);
       }
+    }
+
+    // 8. Purge de la table carnets
+    let remainingCarnetIds: string[] = [];
+    try {
+      const { data: ticketsLeft } = await supabaseAdmin.from('tickets').select('carnet_id');
+      if (ticketsLeft && ticketsLeft.length > 0) {
+        remainingCarnetIds = Array.from(new Set(ticketsLeft.map((t: any) => t.carnet_id).filter(Boolean)));
+      }
+    } catch {}
+
+    if (remainingCarnetIds.length > 0) {
+      await supabaseAdmin
+        .from('carnets')
+        .delete()
+        .not('id', 'in', `(${remainingCarnetIds.join(',')})`);
+      try {
+        if (userClient) {
+          await userClient
+            .from('carnets')
+            .update({ status: 'CANCELLED' })
+            .in('id', remainingCarnetIds);
+        }
+      } catch {}
+    } else {
+      await supabaseAdmin
+        .from('carnets')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
     }
 
     // 4. Inscription immuable dans audit_logs

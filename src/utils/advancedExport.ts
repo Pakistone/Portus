@@ -229,6 +229,7 @@ export function generateManagementReportPDF(
     orientation: 'landscape',
     unit: 'mm',
     format: 'a4',
+    compress: true,
   });
 
   const pageWidth = 297;

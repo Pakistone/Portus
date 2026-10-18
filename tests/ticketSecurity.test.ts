@@ -4,6 +4,7 @@ import {
   buildCanonicalTicketString,
   generateTicketSecurityToken,
   buildTicketQRPayload,
+  formatTicketQrForCameraScan,
   parseTicketQRPayload,
   verifyTicketSecurityToken,
   ALLOWED_TICKET_TRANSITIONS,
@@ -50,6 +51,26 @@ describe('Suite de Tests Cryptographiques et Sécurité Ticket (PORTUS UJPAS)', 
     assert.equal(parsed?.ticket_number, 'VRD-000042');
     assert.equal(parsed?.price, 5000);
     assert.equal(parsed?.signature, 'test_hmac_signature_hex');
+  });
+
+  it('doit formater et parser un payload lisible pour appareil photo avec date de carnet et numéro de ticket', () => {
+    const rawCameraQr = formatTicketQrForCameraScan({
+      ticketNumber: 'VRDCH-000123',
+      carnetNumber: 'C-2026-009',
+      carnetCreatedAt: '2026-10-18T10:30:00.000Z',
+      price: 5000,
+    });
+
+    assert.ok(rawCameraQr.includes('VRDCH-000123'), 'Doit contenir le numéro du ticket');
+    assert.ok(rawCameraQr.includes('C-2026-009'), 'Doit contenir le numéro de carnet');
+    assert.ok(rawCameraQr.includes('DATE CRÉATION CARNET'), 'Doit contenir la mention de la date de création');
+
+    const parsed = parseTicketQRPayload(rawCameraQr);
+    assert.ok(parsed, 'Le parsing du format appareil photo doit réussir');
+    assert.equal(parsed?.ticket_number, 'VRDCH-000123');
+    assert.equal(parsed?.carnet_number, 'C-2026-009');
+    assert.ok(parsed?.carnet_date, 'La date de création du carnet doit être extraite');
+    assert.equal(parsed?.price, 5000);
   });
 
   it('doit parser un format canonique direct avec signature', () => {

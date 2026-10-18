@@ -1994,16 +1994,32 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           if (supabase) {
             await supabase.from('controls').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('fraud_reports').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('ticket_status_history').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('ticket_assignments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('remittance_adjustments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('remittances').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            await supabase.from('tickets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-            await supabase.from('carnets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             await supabase.from('login_attempts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            try { await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000'); } catch {}
+
+            const { data: sLeft } = await supabase.from('sales').select('ticket_id');
+            const lockedIds = (sLeft || []).map((s: any) => s.ticket_id).filter(Boolean);
+            if (lockedIds.length > 0) {
+              await supabase.from('tickets').delete().not('id', 'in', `(${lockedIds.join(',')})`);
+              try { await supabase.from('tickets').update({ status: 'CANCELLED' }).in('id', lockedIds); } catch {}
+            } else {
+              await supabase.from('tickets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            }
+
+            const { data: tLeft } = await supabase.from('tickets').select('carnet_id');
+            const lockedCarnets = Array.from(new Set((tLeft || []).map((t: any) => t.carnet_id).filter(Boolean)));
+            if (lockedCarnets.length > 0) {
+              await supabase.from('carnets').delete().not('id', 'in', `(${lockedCarnets.join(',')})`);
+              try { await supabase.from('carnets').update({ status: 'CANCELLED' }).in('id', lockedCarnets); } catch {}
+            } else {
+              await supabase.from('carnets').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            }
             // SÉCURITÉ : La table audit_logs n'est JAMAIS purgée !
           }
         } catch (dbErr: any) {
@@ -2149,12 +2165,13 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Numéro physique clairement visible (ex: VRD-000001 ou VRD-001)
       const ticketPhysicalNumber = `${cleanPrefix}-${String(i).padStart(6, '0')}`;
 
-      // QR Code unique avec payload sécurisé (tid, cid, ref, num, token cryptographique, signature)
+      // QR Code unique avec payload sécurisé (tid, cid, ref, num, token cryptographique, date carnet)
       const qrPayload = buildTicketQRPayload({
         ticketId,
         carnetId,
         carnetNumber,
         ticketNumber: ticketPhysicalNumber,
+        carnetCreatedAt: nowIso,
       });
 
       const ticketStatus = params.assignedResponsableId ? 'ASSIGNED_TO_RESPONSIBLE' : 'GENERATED';
@@ -2212,26 +2229,25 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       );
     }
 
-    // Réplication autoritaire Supabase Cloud
-    if (SupabaseDataLayer.isAvailable()) {
-      await SupabaseDataLayer.insertCarnet(carnet, createdTickets).catch((err) => {
-        console.warn('Erreur insertion carnet Supabase:', err);
-      });
-    }
-
-    // Mise à jour immédiate des états React pour un affichage instantané sans délai
+    // Mise à jour immédiate des états React pour un affichage instantané sans aucun délai
     setCarnets((prev) => [carnet, ...prev.filter((c) => c.id !== carnet.id)]);
     const createdTicketIds = new Set(createdTickets.map((t) => t.id));
     setTickets((prev) => [...createdTickets, ...prev.filter((t) => !createdTicketIds.has(t.id))]);
 
-    // Toast de notification de succès
+    // Toast de notification de succès immédiat
     showToast(
       'success',
       'Carnet Généré',
       `Le carnet ${carnetNumber} (${params.size} tickets) a été généré avec succès.`
     );
 
-    await refreshData(false);
+    // Réplication autoritaire Supabase Cloud en arrière-plan pour ne pas ralentir l'utilisateur
+    if (SupabaseDataLayer.isAvailable()) {
+      SupabaseDataLayer.insertCarnet(carnet, createdTickets).catch((err) => {
+        console.warn('Erreur insertion carnet Supabase:', err);
+      });
+    }
+
     return { carnet, tickets: createdTickets };
   };
 
@@ -2467,10 +2483,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const salesToDelete = allSales.filter((s) => ticketIds.includes(s.ticketId));
       if (salesToDelete.length > 0) {
         const txSales = db.transaction('sales', 'readwrite');
-        for (const s of salesToDelete) {
-          await txSales.store.delete(s.id);
-        }
-        await txSales.done;
+        await Promise.all([...salesToDelete.map((s) => txSales.store.delete(s.id)), txSales.done]);
       }
 
       // 2. Purger les Contrôles locaux liés à ces tickets
@@ -2478,10 +2491,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const controlsToDelete = allControls.filter((c) => c.ticketId && ticketIds.includes(c.ticketId));
       if (controlsToDelete.length > 0) {
         const txControls = db.transaction('controls', 'readwrite');
-        for (const c of controlsToDelete) {
-          await txControls.store.delete(c.id);
-        }
-        await txControls.done;
+        await Promise.all([...controlsToDelete.map((c) => txControls.store.delete(c.id)), txControls.done]);
       }
 
       // 3. Purger les Signalements de fraude locaux liés à ces tickets
@@ -2489,10 +2499,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const fraudsToDelete = allFrauds.filter((f) => f.ticketNumber && ticketNumbers.includes(f.ticketNumber));
       if (fraudsToDelete.length > 0) {
         const txFrauds = db.transaction('fraud_reports', 'readwrite');
-        for (const f of fraudsToDelete) {
-          await txFrauds.store.delete(f.id);
-        }
-        await txFrauds.done;
+        await Promise.all([...fraudsToDelete.map((f) => txFrauds.store.delete(f.id)), txFrauds.done]);
       }
 
       // 4. Purger les Assignations de tickets locales
@@ -2500,18 +2507,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const assignmentsToDelete = allAssignments.filter((a) => a.ticketId && ticketIds.includes(a.ticketId));
       if (assignmentsToDelete.length > 0) {
         const txAssignments = db.transaction('ticket_assignments', 'readwrite');
-        for (const a of assignmentsToDelete) {
-          await txAssignments.store.delete(a.id);
-        }
-        await txAssignments.done;
+        await Promise.all([...assignmentsToDelete.map((a) => txAssignments.store.delete(a.id)), txAssignments.done]);
       }
 
       // 5. Supprimer enfin les tickets eux-mêmes
       const txTickets = db.transaction('tickets', 'readwrite');
-      for (const tId of ticketIds) {
-        await txTickets.store.delete(tId);
-      }
-      await txTickets.done;
+      await Promise.all([...ticketIds.map((tId) => txTickets.store.delete(tId)), txTickets.done]);
     }
 
     // Supprimer le carnet de la base locale

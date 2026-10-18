@@ -164,11 +164,11 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="mx-auto flex max-w-7xl items-center justify-between px-3 py-2.5 sm:px-6">
         {/* Logo & Titre */}
         <div className="flex items-center gap-3">
-          <div className="relative h-11 w-11 shrink-0 rounded-full p-0.5 bg-slate-800 border-2 border-emerald-500/40 shadow-md shadow-emerald-950/50 flex items-center justify-center">
+          <div className="relative h-12 w-12 shrink-0 rounded-full p-0.5 bg-slate-900 border-2 border-emerald-500/50 shadow-lg shadow-emerald-950/60 flex items-center justify-center transition-transform hover:scale-105">
             <img
               src={ORG_INFO.LOGO_PATH}
-              alt="Emblème UJPAS"
-              className="h-full w-full rounded-full object-contain"
+              alt="Emblème Officiel UJPAS"
+              className="h-full w-full rounded-full object-contain filter drop-shadow-md"
               referrerPolicy="no-referrer"
             />
           </div>

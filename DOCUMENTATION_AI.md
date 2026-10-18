@@ -16,7 +16,7 @@ L'application gère de bout en bout l'encaissement, l'émission, la régulation,
 - **Tarif unique réglementaire :** `5 000 FCFA` par passage/ticket.
 - **Validité temporelle d'un ticket :** `7 jours calendaires` à compter de l'horodatage original de vente.
 - **Règle anti-doublon camion :** Une immatriculation ne peut avoir qu'un seul ticket actif simultanément. Si un camion repasse dans les 7 jours, une alerte est levée et la validation d'un nouveau ticket rend caduc l'ancien (`isSuperseded = true`).
-- **Supports physiques :** Carnets imprimés au format A4 Paysage (9 tickets prédécoupés par page avec souches détachables et QR Codes 2D scannables).
+- **Supports physiques :** Carnets imprimés au format A4 Paysage (6 tickets prédécoupés par page, grille 3x2 : 3 tickets par ligne, avec souches et QR Codes 2D scannables).
 
 ---
 
@@ -293,7 +293,7 @@ Pour éliminer les risques de double-vente ou de perte de données :
 │   └── utils/
 │       ├── ticketSecurity.ts       # Génération jetons SEC, signature QR et machine à états
 │       ├── normalization.ts        # Normalisation immatriculations et devises FCFA
-│       ├── pdfGenerator.ts         # Planches PDF A4 (9 tickets/page) et récépissés financiers
+│       ├── pdfGenerator.ts         # Planches PDF A4 Paysage (6 tickets/page • Grille 3x2) et récépissés financiers
 │       ├── excelExport.ts          # Exports Excel consolidés (feuilles multiples)
 │       └── cedeao.ts               # Indicatifs téléphoniques CEDEAO & Reçus WhatsApp
 └── package.json                    # Configuration des dépendances et scripts de build

@@ -1,16 +1,55 @@
-import React, { useState } from 'react';
-import { X, Download, Printer, Shield, CheckCircle2, Ticket, Award, FileText, ExternalLink, Eye } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Download, Printer, Shield, CheckCircle2, Ticket as TicketIcon, Award, FileText, ExternalLink, Eye } from 'lucide-react';
 import { ORG_INFO } from '../../config/constants';
+import { renderTicketToDataUrl } from '../../utils/ticketImageRenderer';
+import type { Ticket } from '../../types';
 
 interface OfficialStampModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabType = 'ticket' | 'logo' | 'stamp';
+type TabType = 'ticket' | 'logo' | 'stamp' | 'watermark';
 
 export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps) {
   const [activeTab, setActiveTab] = useState<TabType>('ticket');
+  const [specimenUrl, setSpecimenUrl] = useState<string>(ORG_INFO.TICKET_SPECIMEN_PATH);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let isMounted = true;
+    const sampleTicket: Ticket = {
+      id: 'specimen-001',
+      carnetId: 'carnet-specimen-001',
+      carnetNumber: '001',
+      ticketNumber: 'VRDCH-000001',
+      plateNumber: '1234AB01',
+      physicalNumber: 1,
+      price: 5000,
+      controlCount: 0,
+      status: 'AVAILABLE',
+      createdAt: new Date().toISOString(),
+      qrPayload: 'VRDCH-000001',
+    };
+
+    renderTicketToDataUrl(sampleTicket, {
+      immatriculation: '1234AB01',
+      format: 'image/png',
+      quality: 0.98,
+      watermarkOpacity: 0.58,
+      enhanceContrast: true,
+    }).then((url) => {
+      if (isMounted && url) {
+        setSpecimenUrl(url);
+      }
+    }).catch((err) => {
+      console.warn('Erreur rendu spécimen ticket:', err);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -115,41 +154,53 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
         </div>
 
         {/* Barre d'onglets */}
-        <div className="flex border-b border-slate-800 bg-slate-950/60 px-6 shrink-0 gap-2">
+        <div className="flex border-b border-slate-800 bg-slate-950/60 px-6 shrink-0 gap-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('ticket')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer ${
+            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer whitespace-nowrap ${
               activeTab === 'ticket'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Ticket className="w-4 h-4" />
-            <span>Nouveau Modèle de Ticket UJPAS</span>
+            <TicketIcon className="w-4 h-4" />
+            <span>Fond de Ticket Officiel HD</span>
           </button>
 
           <button
             onClick={() => setActiveTab('logo')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer ${
+            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer whitespace-nowrap ${
               activeTab === 'logo'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <Award className="w-4 h-4" />
-            <span>Emblème Officiel UJPAS</span>
+            <span>Logo Officiel UJPAS</span>
           </button>
 
           <button
             onClick={() => setActiveTab('stamp')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer ${
+            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer whitespace-nowrap ${
               activeTab === 'stamp'
                 ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
             <Shield className="w-4 h-4" />
-            <span>Validation & Sécurité UJPAS</span>
+            <span>Cachet Bordeaux Officiel</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('watermark')}
+            className={`flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-bold border-b-2 transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'watermark'
+                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            <span>Filigrane Mosaïque -23°</span>
           </button>
         </div>
 
@@ -169,9 +220,9 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
                 </div>
                 <div className="w-full overflow-hidden rounded-xl border border-slate-700 bg-white/5 shadow-2xl">
                   <img
-                    src={ORG_INFO.TICKET_SPECIMEN_PATH}
+                    src={specimenUrl}
                     alt="Spécimen Officiel du Nouveau Ticket UJPAS"
-                    className="w-full h-auto max-h-[380px] object-contain mx-auto"
+                    className="w-full h-auto max-h-[380px] object-contain mx-auto bg-white rounded-lg shadow-inner"
                   />
                 </div>
               </div>
@@ -275,16 +326,50 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
                   />
                 </div>
                 <div className="mt-4 text-center space-y-1">
-                  <h4 className="text-base font-black text-white">Cachet Officiel "VALIDATION UJPAS"</h4>
-                  <p className="text-xs text-slate-400">Feston circulaire de sécurité pour validation physique des carnets et reçus</p>
+                  <h4 className="text-base font-black text-white">Cachet Officiel Bordeaux — CONTRÔLE ZONE PORTUAIRE</h4>
+                  <p className="text-xs text-rose-400 font-bold">Feston circulaire de sécurité bordeaux certifié pour validation physique des carnets</p>
                 </div>
               </div>
 
               <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-200 flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>
-                  Ce tampon certifié est automatiquement apposé sur les reçus numériques et les carnets imprimés par le système PORTUS.
+                  Ce cachet officiel bordeaux authentique est directement intégré aux coordonnées exactes de validation des tickets et carnets UJPAS.
                 </span>
+              </div>
+            </div>
+          )}
+
+          {/* ONGLET 4 : FILIGRANE MOSAÏQUE -23° */}
+          {activeTab === 'watermark' && (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950 p-6 flex flex-col items-center">
+                <div className="w-full max-w-xl h-64 sm:h-80 rounded-2xl bg-white p-4 shadow-2xl flex items-center justify-center border border-slate-700 overflow-hidden">
+                  <img
+                    src="/watermark_pattern.png"
+                    alt="Filigrane Mosaïque -23° UJPAS"
+                    className="w-full h-full object-cover rounded-lg"
+                  />
+                </div>
+                <div className="mt-4 text-center space-y-1">
+                  <h4 className="text-base font-black text-white">Filigrane Mosaïque Diagonal à -23°</h4>
+                  <p className="text-xs text-emerald-400 font-bold">Répétition continue : « UCRAO • UCRPPLAO-CI • CSCRAO • UJPAS »</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div className="rounded-xl border border-slate-800 bg-slate-800/40 p-3.5 space-y-1">
+                  <span className="font-bold text-sky-400">1. Inclinaison &amp; Mosaïque Sécurisée</span>
+                  <p className="text-slate-300">
+                    Orientation diagonale rigoureusement calée à -23° avec 4 teintes pastel anti-reproduction (Bleu, Vert, Orange, Mauve).
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-800/40 p-3.5 space-y-1">
+                  <span className="font-bold text-emerald-400">2. Réserve Exclusive QR Code</span>
+                  <p className="text-slate-300">
+                    La zone du QR Code en bas à droite est préservée en blanc pur sans filigrane pour garantir un scan instantané à 100%.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -293,9 +378,10 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
         {/* Pied d'actions contextuel */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 bg-slate-900 border-t border-slate-800 shrink-0">
           <div className="text-xs text-slate-400 hidden sm:block">
-            {activeTab === 'ticket' && 'Format A4 paysage calibré 3x3 pour impression'}
-            {activeTab === 'logo' && 'Résolution ultra-haute définition 1000×1000 px'}
-            {activeTab === 'stamp' && 'Fichier PNG transparent certifié'}
+            {activeTab === 'ticket' && 'Format A4 paysage calibré 3x2 (6 tickets par feuille A4)'}
+            {activeTab === 'logo' && 'Résolution ultra-haute définition 1000×1000 px PNG'}
+            {activeTab === 'stamp' && 'Fichier PNG transparent officiel bordeaux'}
+            {activeTab === 'watermark' && 'Trame haute densité 2400×1800 px à -23°'}
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
@@ -310,7 +396,7 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
               <>
                 <button
                   onClick={() => handlePrintImage(
-                    ORG_INFO.TICKET_SPECIMEN_PATH,
+                    specimenUrl,
                     'Spécimen Officiel de Ticket UJPAS',
                     "Union des Jeunes du Port pour l'Assistance et la Sécurité — Surveillance & Logistique"
                   )}
@@ -320,7 +406,7 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
                   <span>Imprimer Spécimen</span>
                 </button>
                 <button
-                  onClick={() => handleDownload(ORG_INFO.TICKET_SPECIMEN_PATH, 'SPECIMEN_TICKET_OFFICIEL_UJPAS.svg')}
+                  onClick={() => handleDownload(specimenUrl, 'SPECIMEN_TICKET_OFFICIEL_UJPAS.png')}
                   className="flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-lg shadow-emerald-950 transition cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
@@ -332,11 +418,11 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
             {activeTab === 'logo' && (
               <>
                 <button
-                  onClick={() => handleDownload(ORG_INFO.LOGO_PATH, 'LOGO_OFFICIEL_UJPAS.svg')}
+                  onClick={() => handleDownload(ORG_INFO.LOGO_PATH, 'LOGO_OFFICIEL_UJPAS.png')}
                   className="flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-lg shadow-emerald-950 transition cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>Télécharger SVG Logo</span>
+                  <span>Télécharger Logo (PNG)</span>
                 </button>
               </>
             )}
@@ -346,7 +432,7 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
                 <button
                   onClick={() => handlePrintImage(
                     ORG_INFO.STAMP_PATH,
-                    'Cachet Officiel VALIDATION UJPAS',
+                    'Cachet Officiel Bordeaux CONTRÔLE UJPAS',
                     'Direction Surveillance & Logistique Portuaire'
                   )}
                   className="flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-200 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition cursor-pointer"
@@ -355,13 +441,23 @@ export function OfficialStampModal({ isOpen, onClose }: OfficialStampModalProps)
                   <span>Imprimer</span>
                 </button>
                 <button
-                  onClick={() => handleDownload(ORG_INFO.STAMP_PATH, 'CACHET_OFFICIEL_VALIDATION_UJPAS.svg')}
+                  onClick={() => handleDownload(ORG_INFO.STAMP_PATH, 'CACHET_OFFICIEL_BORDEAUX_UJPAS.png')}
                   className="flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-lg shadow-emerald-950 transition cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>Télécharger SVG Cachet</span>
+                  <span>Télécharger Cachet (PNG)</span>
                 </button>
               </>
+            )}
+
+            {activeTab === 'watermark' && (
+              <button
+                onClick={() => handleDownload('/watermark_pattern.png', 'FILIGRANE_MOSAIQUE_23DEG_UJPAS.png')}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl shadow-lg shadow-emerald-950 transition cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Télécharger Filigrane (PNG)</span>
+              </button>
             )}
           </div>
         </div>

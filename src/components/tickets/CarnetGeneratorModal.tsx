@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Layers, Printer, CheckCircle, AlertTriangle, Download, ExternalLink } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { CARNET_SIZE_MULTIPLE, ORG_INFO } from '../../config/constants';
 import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerator';
+import { preloadTicketAssets } from '../../utils/ticketImageRenderer';
 import { CarnetPrintModal } from './CarnetPrintModal';
 import type { Carnet, Ticket } from '../../types';
 
@@ -13,6 +14,12 @@ interface Props {
 
 export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const { createCarnet, users, tickets } = useData();
+
+  useEffect(() => {
+    if (isOpen) {
+      preloadTicketAssets();
+    }
+  }, [isOpen]);
 
   const [seriesPrefix, setSeriesPrefix] = useState('VRDCH');
   const [size, setSize] = useState<string>('18'); // Multiple de 3 par défaut
@@ -74,7 +81,6 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
       if (url) {
         setGeneratedPdfUrl({ url, filename });
         setShowPrintModal(true);
-        printPdfDocument(url);
       }
     } catch (err: any) {
       console.error('Erreur téléchargement/impression PDF carnet:', err);
@@ -266,7 +272,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
                     }`}
                   >
-                    {s} tickets ({s / 9 >= 1 ? `${Math.ceil(s / 9)} page(s) A4` : '1 page'})
+                    {s} tickets ({s / 6 >= 1 ? `${Math.ceil(s / 6)} page(s) A4` : '1 page'})
                   </button>
                 ))}
               </div>
@@ -312,7 +318,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-[11px] text-slate-400 space-y-1">
               <p className="font-bold text-orange-400">Règles d’impression physique UJPAS 🇨🇮 :</p>
-              <p>• 9 tickets par page A4 paysage (99 × 70 mm).</p>
+              <p>• 6 tickets par page A4 paysage (grille 3×2 : 3 tickets par ligne • 93 × 66 mm).</p>
               <p>• Fond graphique officiel de haute sécurité UJPAS.</p>
               <p>• Numéro séquentiel N° VRDCH et QR Code scannable avec badge central UJPAS.</p>
               <p>• Le montant de 5 000 FCFA ne figure pas sur le ticket physique.</p>

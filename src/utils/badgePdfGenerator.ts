@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { formatDateTime } from './normalization';
+import { ORG_INFO } from '../config/constants';
 
 export interface BadgeParams {
   name: string;
@@ -64,15 +65,12 @@ export async function generateAgentBadgePDF(agent: BadgeParams): Promise<Blob> {
     orientation: 'portrait',
     unit: 'mm',
     format: 'a4',
+    compress: true,
   });
 
-  // Load Official Logo and Administrative Stamp (Support both /logo-ujpas.png and /public/logo-ujpas.png)
-  const logoDataUrl = await (convertImgToDataUrl('/logo-ujpas.png')
-    .then((res) => res || convertImgToDataUrl('/public/logo-ujpas.png'))
-    .catch(() => ''));
-  const stampDataUrl = await (convertImgToDataUrl('/cachet-ujpas.png')
-    .then((res) => res || convertImgToDataUrl('/public/cachet-ujpas.png'))
-    .catch(() => ''));
+  // Load Official Logo and Administrative Stamp via ORG_INFO
+  const logoDataUrl = await convertImgToDataUrl(ORG_INFO.LOGO_PATH).catch(() => '');
+  const stampDataUrl = await convertImgToDataUrl(ORG_INFO.STAMP_PATH).catch(() => '');
 
   // Generate QR Code for Agent Authentication
   // Format: UJPAS|AGENT|matricule|nom|role|annee

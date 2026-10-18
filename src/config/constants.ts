@@ -47,31 +47,31 @@ export const REMISE_ALERT_STEP = 5;
 
 /**
  * RÈGLES DES CARNETS ET IMPRESSION
- * La taille d'un carnet doit être un multiple de 3 (3, 6, 9, 12, ... 150, 153...)
- * L'impression physique est de 9 tickets par feuille A4 paysage (grille 3x3)
+ * La taille d'un carnet est généralement un multiple de 6 (6, 12, 18, 24, ... 150...)
+ * L'impression physique est de 6 tickets par feuille A4 paysage (grille 3 colonnes x 2 lignes)
  */
 export const CARNET_SIZE_MULTIPLE = 3;
-export const TICKETS_PER_PAGE_A4_LANDSCAPE = 9;
+export const TICKETS_PER_PAGE_A4_LANDSCAPE = 6;
 
 /**
- * GÉOMÉTRIE D'IMPRESSION A4 PAYSAGE 3x3 (OPTIMISATION MAXIMUM LARGEUR)
- * cellW = 99.0 mm, cellH = 70.0 mm
- * ticketW = 98.0 mm (marge latérale 0.5 mm)
- * ticketH = 55.18 mm (ratio 16:9 parfait)
- * padX = 0.5 mm, padY = 7.41 mm
+ * GÉOMÉTRIE D'IMPRESSION A4 PAYSAGE 3x2 (6 TICKETS PAR FEUILLE A4)
+ * Format officiel : 3 tickets par ligne (3 colonnes), 2 lignes (2 rangées) = 6 tickets par feuille A4 Paysage
+ * Dimensions de chaque ticket : 93 × 66 mm (respectant le ratio d'aspect haute fidélité 1.414 de l'arrière-plan officiel 2376 x 1680)
+ * Espaces de découpe dédiés (gouttières) entre les tickets pour massicot et ciseaux
  */
 export const TICKET_PRINT_GRID = {
   PAGE_WIDTH_MM: 297.0,
   PAGE_HEIGHT_MM: 210.0,
+  ORIENTATION: 'landscape' as const,
   COLS: 3,
-  ROWS: 3,
-  CELL_WIDTH_MM: 99.0,
-  CELL_HEIGHT_MM: 70.0,
-  TICKET_WIDTH_MM: 98.6,
-  TICKET_HEIGHT_MM: 68.0,
-  PAD_X_MM: 0.2,
-  PAD_Y_MM: 1.0,
-  LINE_DASH: [2, 2] as const,
+  ROWS: 2,
+  TICKET_WIDTH_MM: 93.0,   // Largeur 9.3 cm (93 mm)
+  TICKET_HEIGHT_MM: 66.0,  // Hauteur 6.6 cm (66 mm)
+  GAP_X_MM: 4.5,           // Espace de découpe horizontal entre les 3 colonnes (4.5 mm)
+  GAP_Y_MM: 16.0,          // Espace de découpe vertical entre les 2 rangées (16 mm)
+  MARGIN_LEFT_MM: 4.5,     // (297 - (3 * 93 + 2 * 4.5)) / 2 = 4.5 mm
+  MARGIN_TOP_MM: 31.0,     // (210 - (2 * 66 + 16)) / 2 = 31.0 mm
+  LINE_DASH: [2, 1.5] as const,
   VERIFICATION_BANNER: "POUR TOUTE VÉRIFICATION, CONTACTEZ L'UJPAS : 01 03 31 37 68 / 07 77 91 78 04 | EMAIL : CONTACT@PORTUS-UJPAS.ONLINE",
 } as const;
 

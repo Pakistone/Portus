@@ -4,11 +4,12 @@ const ASSETS_TO_CACHE = [
   '/index.html',
   '/manifest.json',
   '/favicon.ico',
-  '/logoss.jpg',
-  '/cachet-ujsrv.png',
-  '/ticket_bg_ujpas_hd.png',
+  '/cachet-ujpas.png',
+  '/logo-ujpas.png',
   '/ticket_bg_ujpas_hd.jpg',
-  '/ticket_bg_ujpas_hd.svg',
+  '/watermark_pattern.png',
+  '/icon.png',
+  '/icon-192.png',
 ];
 
 self.addEventListener('install', (event) => {
