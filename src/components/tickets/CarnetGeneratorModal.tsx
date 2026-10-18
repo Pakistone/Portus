@@ -33,6 +33,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [generatedPdfUrl, setGeneratedPdfUrl] = useState<{ url: string; filename: string } | null>(null);
   const [showPrintModal, setShowPrintModal] = useState(false);
+  const isSubmittingRef = React.useRef(false);
 
   if (!isOpen) return null;
 
@@ -43,6 +44,8 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
+
     setError(null);
 
     const numSize = Number(size || 0);
@@ -51,6 +54,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
       return;
     }
 
+    isSubmittingRef.current = true;
     setLoading(true);
     try {
       const res = await createCarnet({
@@ -65,6 +69,7 @@ export const CarnetGeneratorModal: React.FC<Props> = ({ isOpen, onClose }) => {
       setError(err?.message || 'Erreur lors de la création du carnet.');
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 

@@ -394,9 +394,9 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 space-y-5">
+    <div className="mx-auto max-w-7xl px-3 py-2.5 sm:px-6 space-y-3.5">
       {/* Navigation Onglets (Tableau de bord / Analyses / Dépenses) */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2.5">
         <button
           onClick={() => setActiveTab('dashboard')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
@@ -437,7 +437,7 @@ export const AdminDashboard: React.FC = () => {
       ) : activeTab === 'analytics' ? (
         <AdminAnalyticsView period={period} />
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-3.5">
       {/* ========================================================================= */}
       {/* EN-TÊTE DU TABLEAU DE BORD ADMIN                                          */}
       {/* ========================================================================= */}
@@ -1038,8 +1038,8 @@ export const AdminDashboard: React.FC = () => {
       {/* ========================================================================= */}
       {/* DÉCOMPOSITION FINANCIÈRE PAR AGENT AVEC ACTIONS RAPIDES                   */}
       {/* ========================================================================= */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 shadow-sm space-y-3 animate-fadeIn">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-3.5 sm:p-4 shadow-sm space-y-2.5 animate-fadeIn">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
           <div>
             <h3 className="text-sm font-bold text-white">
               Décomposition Individuelle par Agent ({processedAgents.length})

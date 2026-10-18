@@ -121,71 +121,95 @@ const AppContent: React.FC = () => {
       />
 
       {/* Contenu principal selon le rôle */}
-      <main className="flex-1 pb-12">{renderDashboard()}</main>
+      <main className="flex-1 pb-6">{renderDashboard()}</main>
 
-      {/* Modals globaux standards */}
-      <AdvancedSearchModal
-        isOpen={searchModalOpen}
-        onClose={() => setSearchModalOpen(false)}
-      />
-      <AuditTrailModal
-        isOpen={auditModalOpen}
-        onClose={() => setAuditModalOpen(false)}
-      />
-      <UserManagementModal
-        isOpen={usersModalOpen}
-        onClose={() => setUsersModalOpen(false)}
-      />
-      <SupabaseModal
-        isOpen={supabaseModalOpen}
-        onClose={() => setSupabaseModalOpen(false)}
-      />
-      <OfficialStampModal
-        isOpen={stampModalOpen}
-        onClose={() => setStampModalOpen(false)}
-      />
+      {/* Modals globaux standards - Montés uniquement à l'ouverture (Phase 5 UI Optimization) */}
+      {searchModalOpen && (
+        <AdvancedSearchModal
+          isOpen={searchModalOpen}
+          onClose={() => setSearchModalOpen(false)}
+        />
+      )}
+      {auditModalOpen && (
+        <AuditTrailModal
+          isOpen={auditModalOpen}
+          onClose={() => setAuditModalOpen(false)}
+        />
+      )}
+      {usersModalOpen && (
+        <UserManagementModal
+          isOpen={usersModalOpen}
+          onClose={() => setUsersModalOpen(false)}
+        />
+      )}
+      {supabaseModalOpen && (
+        <SupabaseModal
+          isOpen={supabaseModalOpen}
+          onClose={() => setSupabaseModalOpen(false)}
+        />
+      )}
+      {stampModalOpen && (
+        <OfficialStampModal
+          isOpen={stampModalOpen}
+          onClose={() => setStampModalOpen(false)}
+        />
+      )}
 
       {/* Nouveaux centres opérationnels intégrés */}
-      <DailyOperationsCenterModal
-        isOpen={dailyOpsModalOpen}
-        onClose={() => setDailyOpsModalOpen(false)}
-        onOpenExpenses={() => setExpensesModalOpen(true)}
-        onOpenRemises={() => setRemisesModalOpen(true)}
-      />
-      <SecurityCenterModal
-        isOpen={securityCenterModalOpen}
-        onClose={() => setSecurityCenterModalOpen(false)}
-      />
-      <TruckRegistryModal
-        isOpen={vehiclesModalOpen}
-        onClose={() => setVehiclesModalOpen(false)}
-        onSelectTicket={(ticketNumber) => {
-          setTimelineTicketNumber(ticketNumber);
-          setTimelineModalOpen(true);
-        }}
-      />
-      <TicketTimelineModal
-        isOpen={timelineModalOpen}
-        onClose={() => setTimelineModalOpen(false)}
-        ticketNumber={timelineTicketNumber}
-      />
-      <PortusAssistantModal
-        isOpen={assistantModalOpen}
-        onClose={() => setAssistantModalOpen(false)}
-      />
+      {dailyOpsModalOpen && (
+        <DailyOperationsCenterModal
+          isOpen={dailyOpsModalOpen}
+          onClose={() => setDailyOpsModalOpen(false)}
+          onOpenExpenses={() => setExpensesModalOpen(true)}
+          onOpenRemises={() => setRemisesModalOpen(true)}
+        />
+      )}
+      {securityCenterModalOpen && (
+        <SecurityCenterModal
+          isOpen={securityCenterModalOpen}
+          onClose={() => setSecurityCenterModalOpen(false)}
+        />
+      )}
+      {vehiclesModalOpen && (
+        <TruckRegistryModal
+          isOpen={vehiclesModalOpen}
+          onClose={() => setVehiclesModalOpen(false)}
+          onSelectTicket={(ticketNumber) => {
+            setTimelineTicketNumber(ticketNumber);
+            setTimelineModalOpen(true);
+          }}
+        />
+      )}
+      {timelineModalOpen && (
+        <TicketTimelineModal
+          isOpen={timelineModalOpen}
+          onClose={() => setTimelineModalOpen(false)}
+          ticketNumber={timelineTicketNumber}
+        />
+      )}
+      {assistantModalOpen && (
+        <PortusAssistantModal
+          isOpen={assistantModalOpen}
+          onClose={() => setAssistantModalOpen(false)}
+        />
+      )}
 
       {/* Modules financiers connectés */}
       {expensesModalOpen && (
         <ExpensesModule onClose={() => setExpensesModalOpen(false)} />
       )}
-      <RemisesListModal
-        isOpen={remisesModalOpen}
-        onClose={() => setRemisesModalOpen(false)}
-      />
-      <AgentBadgeModal
-        isOpen={badgeModalOpen}
-        onClose={() => setBadgeModalOpen(false)}
-      />
+      {remisesModalOpen && (
+        <RemisesListModal
+          isOpen={remisesModalOpen}
+          onClose={() => setRemisesModalOpen(false)}
+        />
+      )}
+      {badgeModalOpen && (
+        <AgentBadgeModal
+          isOpen={badgeModalOpen}
+          onClose={() => setBadgeModalOpen(false)}
+        />
+      )}
     </div>
   );
 };

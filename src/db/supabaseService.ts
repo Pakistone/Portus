@@ -60,19 +60,43 @@ function sanitizeUuid(val?: string | null, defaultUuid = DEFAULT_ADMIN_UUID): st
   return defaultUuid;
 }
 
+export const SECTOR_UUID_MAP: Record<string, string> = {
+  'sec-vridi-port': '3a87f0f7-6141-45c2-a8c8-028d3b6cd734',
+  'sec-vridi-canal': 'e5dc1193-2741-4865-8379-4e8ab031cdfe',
+  'sec-vridi-zi': '5ebd07c5-ff87-4d8c-a535-43d10580b506',
+  'sec-vridi-sir': '6c8a2f18-ff61-416f-a1cf-a05edfdc8862',
+};
+
+export const REVERSE_SECTOR_UUID_MAP: Record<string, string> = {
+  '3a87f0f7-6141-45c2-a8c8-028d3b6cd734': 'sec-vridi-port',
+  'e5dc1193-2741-4865-8379-4e8ab031cdfe': 'sec-vridi-canal',
+  '5ebd07c5-ff87-4d8c-a535-43d10580b506': 'sec-vridi-zi',
+  '6c8a2f18-ff61-416f-a1cf-a05edfdc8862': 'sec-vridi-sir',
+};
+
+export function normalizeSectorId(rawSectorId?: string | null, sectorName?: string | null): string | undefined {
+  if (!rawSectorId && !sectorName) return undefined;
+  if (rawSectorId && REVERSE_SECTOR_UUID_MAP[rawSectorId]) {
+    return REVERSE_SECTOR_UUID_MAP[rawSectorId];
+  }
+  if (rawSectorId && SECTOR_UUID_MAP[rawSectorId]) {
+    return rawSectorId;
+  }
+  if (sectorName) {
+    const sName = sectorName.toUpperCase();
+    if (sName.includes('PORT') || sName.includes('TERMINAL')) return 'sec-vridi-port';
+    if (sName.includes('CANAL') || sName.includes('PONT')) return 'sec-vridi-canal';
+    if (sName.includes('INDUSTRIELLE') || sName.includes('ZONE') || sName.includes('VZI')) return 'sec-vridi-zi';
+    if (sName.includes('RAFFINERIE') || sName.includes('SIR') || sName.includes('VSR')) return 'sec-vridi-sir';
+  }
+  return rawSectorId || undefined;
+}
+
 function sanitizeUuidOrNull(val?: string | null): string | null {
   if (!val) return null;
+  if (SECTOR_UUID_MAP[val]) return SECTOR_UUID_MAP[val];
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidRegex.test(val)) return val;
-
-  const sectorMap: Record<string, string> = {
-    'sec-vridi-port': '3a87f0f7-6141-45c2-a8c8-028d3b6cd734',
-    'sec-vridi-canal': 'e5dc1193-2741-4865-8379-4e8ab031cdfe',
-    'sec-vridi-zi': '5ebd07c5-ff87-4d8c-a535-43d10580b506',
-    'sec-vridi-sir': '6c8a2f18-ff61-416f-a1cf-a05edfdc8862',
-  };
-  if (sectorMap[val]) return sectorMap[val];
-
   return null;
 }
 
@@ -136,7 +160,7 @@ export const SupabaseDataLayer = {
           username: row.username,
           fullName: row.full_name,
           role: row.role,
-          sectorId: row.sector_id,
+          sectorId: normalizeSectorId(row.sector_id, row.sector?.name || row.sectors?.name),
           sectorName: row.sector?.name || row.sectors?.name,
           phone: row.phone,
           isActive: row.is_active,
@@ -173,7 +197,7 @@ export const SupabaseDataLayer = {
             username: myProf.username,
             fullName: myProf.full_name,
             role: myProf.role,
-            sectorId: myProf.sector_id,
+            sectorId: normalizeSectorId(myProf.sector_id, myProf.sector_name),
             sectorName: myProf.sector_name,
             phone: myProf.phone,
             isActive: myProf.is_active,
@@ -192,7 +216,7 @@ export const SupabaseDataLayer = {
       username: row.username,
       fullName: row.full_name,
       role: row.role,
-      sectorId: row.sector_id,
+      sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name,
       phone: row.phone,
       isActive: row.is_active,
@@ -556,7 +580,7 @@ export const SupabaseDataLayer = {
       createdByName: row.created_profile?.full_name || 'ADMINISTRATEUR',
       assignedToResponsableId: row.assigned_to_responsable,
       assignedToResponsableName: row.resp_profile?.full_name,
-      sectorId: row.sector_id,
+      sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name,
       createdAt: row.created_at,
       status: row.status,
@@ -778,7 +802,7 @@ export const SupabaseDataLayer = {
       assignedAgentId: row.assigned_agent_id,
       assignedAgentName: row.agent?.full_name,
       assignedAgentPhone: row.agent?.phone || undefined,
-      sectorId: row.sector_id,
+      sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name,
       saleId: row.sale_id,
       soldAt: row.sold_at,
@@ -1019,7 +1043,7 @@ export const SupabaseDataLayer = {
       ticketNumber: row.ticket_number,
       agentId: row.agent_id,
       agentName: row.agent?.full_name || 'AGENT',
-      sectorId: row.sector_id,
+      sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name,
       plateNumber: row.plate_number,
       driverPhone: row.driver_phone,
@@ -1110,7 +1134,7 @@ export const SupabaseDataLayer = {
       agentName: row.agent?.full_name || 'AGENT',
       responsableId: row.responsable_id,
       responsableName: row.resp?.full_name || 'RESPONSABLE',
-      sectorId: row.sector_id,
+      sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name || 'VRIDI',
       amount: row.amount,
       date: row.date,

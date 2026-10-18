@@ -98,6 +98,8 @@ export const SaleFormModal: React.FC<Props> = ({
   const [anprStream, setAnprStream] = useState<MediaStream | null>(null);
   const [anprSuccessMsg, setAnprSuccessMsg] = useState<string | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  // Ref de verrou synchrone anti-double clic / double soumission (défini en haut du composant - Rules of Hooks)
+  const isSubmittingRef = React.useRef(false);
 
   // States pour les paiements Mobile Money (Wave, Orange, MTN) et Bons d'abonnement
   const [paymentMethod, setPaymentMethod] = useState<'ESPECES' | 'MOBILE_MONEY' | 'BON_ABONNEMENT'>('ESPECES');
@@ -441,6 +443,7 @@ export const SaleFormModal: React.FC<Props> = ({
 
   const handlePrevalidate = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
     setError(null);
 
     const cleanPlate = normalizePlate(plateInput);
@@ -467,11 +470,14 @@ export const SaleFormModal: React.FC<Props> = ({
   };
 
   const executeSale = async (overrideOldTicketId?: string) => {
+    if (isSubmittingRef.current || loading) return;
+
     if ((paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT') && !paymentReference.trim()) {
       setError('Une référence de transaction ou numéro de bon est obligatoire pour ce mode de règlement.');
       return;
     }
 
+    isSubmittingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -510,6 +516,7 @@ export const SaleFormModal: React.FC<Props> = ({
       setError(err?.message || 'Erreur lors de l’enregistrement de la vente.');
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 

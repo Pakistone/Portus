@@ -27,6 +27,7 @@ export const RemiseFormModal: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdRemise, setCreatedRemise] = useState<Remise | null>(null);
+  const isSubmittingRef = React.useRef(false);
 
   // States pour le calculateur de billets (Billetage assisté)
   const [showCounter, setShowCounter] = useState(false);
@@ -85,6 +86,8 @@ export const RemiseFormModal: React.FC<Props> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || loading) return;
+
     setError(null);
 
     const numAmount = Number(amount || 0);
@@ -97,6 +100,7 @@ export const RemiseFormModal: React.FC<Props> = ({
       return;
     }
 
+    isSubmittingRef.current = true;
     setLoading(true);
     try {
       const remise = await recordRemise({
@@ -109,6 +113,7 @@ export const RemiseFormModal: React.FC<Props> = ({
       setError(err?.message || 'Erreur lors de l’enregistrement de la remise.');
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 

@@ -83,8 +83,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Ref de statut de session centralisée pour annulation synchrone des opérations pendant un logout
+  const sessionStatusRef = React.useRef<{ isActive: boolean }>({ isActive: true });
+
   // Déconnexion sécurisée
   const logout = async (reason?: string) => {
+    sessionStatusRef.current.isActive = false;
     const userToLog = currentUser;
     if (userToLog) {
       try {

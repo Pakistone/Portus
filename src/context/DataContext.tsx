@@ -5,6 +5,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { usePortusStore } from '../store/usePortusStore';
 import type {
   User,
   Carnet,
@@ -58,7 +59,7 @@ import { generateUUID, generateSecureToken } from '../utils/uuid';
 import { useAuth } from './AuthContext';
 import { useOnlineStatus } from '../components/pwa/usePWAInstall';
 import { getSupabase } from '../db/supabaseClient';
-import { SupabaseDataLayer, isRlsPermissionIssueDetected, getLastRlsErrorMessage } from '../db/supabaseService';
+import { SupabaseDataLayer, isRlsPermissionIssueDetected, getLastRlsErrorMessage, normalizeSectorId } from '../db/supabaseService';
 import { safeFetchJson } from '../utils/safeApi';
 import { playIncidentAlertSound } from '../utils/audioAlert';
 import { showToast } from '../components/common/ToastNotification';
@@ -344,6 +345,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isSimulatedOffline, setIsSimulatedOffline] = useState(false);
   const isOnline = isSimulatedOffline ? false : rawIsOnline;
 
+  // Verrous d'action synchrones in-memory (anti-double clic & double soumission)
+  const actionLocksRef = React.useRef<Set<string>>(new Set());
+
   const toggleSimulatedOffline = useCallback(() => {
     setIsSimulatedOffline((prev) => !prev);
   }, []);
@@ -404,30 +408,42 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     [ticketPrice]
   );
 
-  // Calcul dynamique des alertes financières (10, 15, 20... tickets sans remise)
+  // Calcul dynamique des alertes financières (10, 15, 20... tickets sans remise) optimisé O(T + R + U)
   const calculateFinancialAlerts = useCallback(
     (allUsers: User[], allTickets: Ticket[], allRemises: Remise[]) => {
       const calculatedAlerts: FinancialAlert[] = [];
       const agents = allUsers.filter((u) => u.role === 'AGENT' && u.isActive);
 
-      agents.forEach((agent) => {
-        // Tickets vendus par cet agent
-        const agentSoldTickets = allTickets.filter(
-          (t) => t.assignedAgentId === agent.id && (t.status === 'SOLD' || t.status === 'CONTROLLED')
-        );
-        const totalSoldAmount = agentSoldTickets.length * ticketPrice;
+      // Indexation O(T) des montants vendus par agent
+      const agentSoldAmountMap = new Map<string, number>();
+      for (let i = 0; i < allTickets.length; i++) {
+        const t = allTickets[i];
+        if (t.assignedAgentId && (t.status === 'SOLD' || t.status === 'CONTROLLED')) {
+          const current = agentSoldAmountMap.get(t.assignedAgentId) || 0;
+          agentSoldAmountMap.set(t.assignedAgentId, current + ticketPrice);
+        }
+      }
 
-        // Montant total remis par cet agent
-        const agentRemises = allRemises.filter((r) => r.agentId === agent.id);
-        const totalRemittedAmount = agentRemises.reduce((sum, r) => sum + r.amount, 0);
+      // Indexation O(R) des montants remis par agent
+      const agentRemittedAmountMap = new Map<string, number>();
+      for (let i = 0; i < allRemises.length; i++) {
+        const r = allRemises[i];
+        if (r.agentId) {
+          const current = agentRemittedAmountMap.get(r.agentId) || 0;
+          agentRemittedAmountMap.set(r.agentId, current + r.amount);
+        }
+      }
 
-        // Solde restant à verser
+      // Évaluation O(U) par agent
+      for (let i = 0; i < agents.length; i++) {
+        const agent = agents[i];
+        const totalSoldAmount = agentSoldAmountMap.get(agent.id) || 0;
+        const totalRemittedAmount = agentRemittedAmountMap.get(agent.id) || 0;
+
         const remainingBalance = Math.max(0, totalSoldAmount - totalRemittedAmount);
         const unremittedTicketsCount = Math.ceil(remainingBalance / ticketPrice);
 
-        // Vérifier les seuils d'alerte (10, 15, 20...)
         if (unremittedTicketsCount >= REMISE_ALERT_START_THRESHOLD) {
-          // Trouver le plus haut palier franchi
           const stepsAbove = Math.floor(
             (unremittedTicketsCount - REMISE_ALERT_START_THRESHOLD) / REMISE_ALERT_STEP
           );
@@ -446,7 +462,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             createdAt: new Date().toISOString(),
           });
         }
-      });
+      }
 
       setAlerts(calculatedAlerts);
     },
@@ -555,25 +571,59 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       }
 
-      setUsers(visibleUsers);
-      setCarnets(visibleCarnets.sort((a: Carnet, b: Carnet) => b.createdAt.localeCompare(a.createdAt)));
-      setTickets(visibleTickets.sort((a: Ticket, b: Ticket) => a.ticketNumber.localeCompare(b.ticketNumber)));
-      setSales(visibleSales.sort((a: Sale, b: Sale) => b.soldAt.localeCompare(a.soldAt)));
-      setControls(visibleControls.sort((a: Control, b: Control) => b.controlledAt.localeCompare(a.controlledAt)));
-      setFraudReports(visibleFrauds.sort((a: FraudReport, b: FraudReport) => b.reportedAt.localeCompare(a.reportedAt)));
-      setRemises(visibleRemises.sort((a: Remise, b: Remise) => b.createdAt.localeCompare(a.createdAt)));
-      setExpenses(visibleExpenses.sort((a: Expense, b: Expense) => b.createdAt.localeCompare(a.createdAt)));
-      setAuditLogs(visibleAudits.sort((a: AuditLog, b: AuditLog) => b.timestamp.localeCompare(a.timestamp)));
+      const sortedCarnets = visibleCarnets.sort((a: Carnet, b: Carnet) => b.createdAt.localeCompare(a.createdAt));
+      const sortedTickets = visibleTickets.sort((a: Ticket, b: Ticket) => a.ticketNumber.localeCompare(b.ticketNumber));
+      const sortedSales = visibleSales.sort((a: Sale, b: Sale) => b.soldAt.localeCompare(a.soldAt));
+      const sortedControls = visibleControls.sort((a: Control, b: Control) => b.controlledAt.localeCompare(a.controlledAt));
+      const sortedFrauds = visibleFrauds.sort((a: FraudReport, b: FraudReport) => b.reportedAt.localeCompare(a.reportedAt));
+      const sortedRemises = visibleRemises.sort((a: Remise, b: Remise) => b.createdAt.localeCompare(a.createdAt));
+      const sortedExpenses = visibleExpenses.sort((a: Expense, b: Expense) => b.createdAt.localeCompare(a.createdAt));
+      const sortedAudits = visibleAudits.sort((a: AuditLog, b: AuditLog) => b.timestamp.localeCompare(a.timestamp));
+      const sortedNotifs = allNotifications.sort((a: NotificationRecord, b: NotificationRecord) => b.createdAt.localeCompare(a.createdAt));
+      const sortedClosings = allClosings.sort((a: DailyClosing, b: DailyClosing) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || ''));
+      const sortedSos = allSos.sort((a: SOSAlert, b: SOSAlert) => b.alertedAt.localeCompare(a.alertedAt));
+      const sortedLitiges = allLitiges.sort((a: LitigeChauffeur, b: LitigeChauffeur) => b.createdAt.localeCompare(a.createdAt));
+      const sortedBrigades = allPlannings.sort((a: BrigadeAssignment, b: BrigadeAssignment) => b.shiftDate.localeCompare(a.shiftDate));
 
-      setNotifications(allNotifications.sort((a: NotificationRecord, b: NotificationRecord) => b.createdAt.localeCompare(a.createdAt)));
-      setDailyClosings(
-        allClosings.sort((a: DailyClosing, b: DailyClosing) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || ''))
-      );
-      setVehicles(allVehicles);
-      setTicketReprints(allReprints);
-      setSosAlerts(allSos.sort((a: SOSAlert, b: SOSAlert) => b.alertedAt.localeCompare(a.alertedAt)));
-      setLitigesChauffeurs(allLitiges.sort((a: LitigeChauffeur, b: LitigeChauffeur) => b.createdAt.localeCompare(a.createdAt)));
-      setBrigadeAssignments(allPlannings.sort((a: BrigadeAssignment, b: BrigadeAssignment) => b.shiftDate.localeCompare(a.shiftDate)));
+      // Synchroniser le store Zustand avec les données fraîchement filtrées
+      usePortusStore.getState().setAllData({
+        users: visibleUsers,
+        carnets: sortedCarnets,
+        tickets: sortedTickets,
+        sales: sortedSales,
+        controls: sortedControls,
+        fraudReports: sortedFrauds,
+        remises: sortedRemises,
+        expenses: sortedExpenses,
+        auditLogs: sortedAudits,
+        notifications: sortedNotifs,
+        dailyClosings: sortedClosings,
+        vehicles: allVehicles,
+        ticketReprints: allReprints,
+        sosAlerts: sortedSos,
+        litigesChauffeurs: sortedLitiges,
+        brigadeAssignments: sortedBrigades,
+      });
+
+      React.startTransition(() => {
+        setUsers(visibleUsers);
+        setCarnets(sortedCarnets);
+        setTickets(sortedTickets);
+        setSales(sortedSales);
+        setControls(sortedControls);
+        setFraudReports(sortedFrauds);
+        setRemises(sortedRemises);
+        setExpenses(sortedExpenses);
+        setAuditLogs(sortedAudits);
+
+        setNotifications(sortedNotifs);
+        setDailyClosings(sortedClosings);
+        setVehicles(allVehicles);
+        setTicketReprints(allReprints);
+        setSosAlerts(sortedSos);
+        setLitigesChauffeurs(sortedLitiges);
+        setBrigadeAssignments(sortedBrigades);
+      });
 
       const pendingSales = allSales.filter((s: Sale) => s.syncStatus === 'PENDING_SYNC');
       const pendingControls = allControls.filter((c: Control) => c.syncStatus === 'PENDING_SYNC');
@@ -648,11 +698,36 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const remoteClosings = closingsResult.status === 'fulfilled' ? closingsResult.value : [];
       const remoteVehicles = vehiclesResult.status === 'fulfilled' ? vehiclesResult.value : [];
 
-      // 3. Transactions groupées (bulk put) dans IndexedDB - Une seule transaction par store
+      // 3. Transactions groupées (bulk put) dans IndexedDB avec résolution de conflit LWW
       if (remoteProfiles && remoteProfiles.length > 0) {
+        const currentLocalUsers = await db.getAll('users');
+        const localUserMap = new Map<string, User>(currentLocalUsers.map((u: User) => [u.id, u]));
+
+        const mergedProfiles: User[] = [];
+        for (const rp of remoteProfiles) {
+          const lu = localUserMap.get(rp.id);
+          if (lu) {
+            const localTime = lu.updatedAt ? new Date(lu.updatedAt).getTime() : 0;
+            const remoteTime = rp.updatedAt ? new Date(rp.updatedAt).getTime() : 0;
+            if (localTime > remoteTime) {
+              mergedProfiles.push(lu);
+              SupabaseDataLayer.upsertProfile(lu).catch(() => {});
+            } else {
+              mergedProfiles.push(rp);
+            }
+          } else {
+            mergedProfiles.push(rp);
+          }
+        }
+        for (const lu of currentLocalUsers) {
+          if (!mergedProfiles.some((u) => u.id === lu.id)) {
+            mergedProfiles.push(lu);
+          }
+        }
+
         const tx = db.transaction('users', 'readwrite');
         const store = tx.objectStore('users');
-        await Promise.all([...remoteProfiles.map((p: User) => store.put(p)), tx.done]);
+        await Promise.all([...mergedProfiles.map((p: User) => store.put(p)), tx.done]);
       }
 
       if (remoteCarnets && Array.isArray(remoteCarnets)) {
@@ -709,7 +784,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           (t: Ticket) => !deletedSet.has(t.carnetId) && !(t.carnetNumber && deletedSet.has(t.carnetNumber))
         );
         const remoteTicketIds = new Set(validRemoteTickets.map((t: Ticket) => t.id));
-        const currentLocalTickets = await db.getAll('tickets');
+        const currentLocalTickets: Ticket[] = await db.getAll('tickets');
+        const localTicketMap = new Map<string, Ticket>(currentLocalTickets.map((t) => [t.id, t]));
+
         const ticketsToDelete: string[] = [];
         for (const lt of currentLocalTickets) {
           const isDeleted = deletedSet.has(lt.carnetId) || (lt.carnetNumber && deletedSet.has(lt.carnetNumber));
@@ -725,11 +802,43 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }
 
+        const mergedTickets: Ticket[] = [];
+        for (const rt of validRemoteTickets) {
+          const lt = localTicketMap.get(rt.id);
+          if (lt) {
+            const localTime = lt.updatedAt
+              ? new Date(lt.updatedAt).getTime()
+              : lt.soldAt
+              ? new Date(lt.soldAt).getTime()
+              : 0;
+            const remoteTime = rt.updatedAt
+              ? new Date(rt.updatedAt).getTime()
+              : rt.soldAt
+              ? new Date(rt.soldAt).getTime()
+              : 0;
+
+            if (localTime > remoteTime) {
+              mergedTickets.push(lt);
+              SupabaseDataLayer.updateTicketStatus({
+                ticketId: lt.id,
+                status: lt.status,
+                assignedAgentId: lt.assignedAgentId,
+                assignedResponsableId: lt.assignedResponsableId,
+                sectorId: lt.sectorId,
+              }).catch(() => {});
+            } else {
+              mergedTickets.push(rt);
+            }
+          } else {
+            mergedTickets.push(rt);
+          }
+        }
+
         const tx = db.transaction('tickets', 'readwrite');
         const store = tx.objectStore('tickets');
         await Promise.all([
           ...ticketsToDelete.map((id) => store.delete(id)),
-          ...validRemoteTickets.map((t: Ticket) => store.put(t)),
+          ...mergedTickets.map((t: Ticket) => store.put(t)),
           tx.done,
         ]);
       }
@@ -914,9 +1023,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   }, []);
 
+  const isOfflineSyncingRef = React.useRef(false);
+
   // Synchronisation idempotente de la file d'attente hors ligne lors du retour réseau
   const syncOfflineQueue = useCallback(async () => {
-    if (!isOnline || isSyncing) return;
+    if (!isOnline || isSyncing || isOfflineSyncingRef.current) return;
+    isOfflineSyncingRef.current = true;
     setIsSyncing(true);
 
     try {
@@ -931,6 +1043,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (pendingSales.length === 0 && pendingControls.length === 0 && pendingFrauds.length === 0) {
         setPendingSyncCount(0);
         setIsSyncing(false);
+        isOfflineSyncingRef.current = false;
         return;
       }
 
@@ -1062,6 +1175,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       console.error('Erreur lors de la synchronisation', err);
     } finally {
       setIsSyncing(false);
+      isOfflineSyncingRef.current = false;
     }
   }, [isOnline, isSyncing, refreshData, notifySaleSynced]);
 
@@ -1633,16 +1747,26 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       user.role = updates.role;
     }
     if (updates.sectorId !== undefined) {
-      user.sectorId = updates.sectorId;
-      const sector = DEFAULT_SECTORS.find((s) => s.id === updates.sectorId);
-      user.sectorName = sector?.name;
+      const normSector = normalizeSectorId(updates.sectorId);
+      user.sectorId = normSector;
+      const sector = DEFAULT_SECTORS.find((s) => s.id === normSector || s.id === updates.sectorId) || sectors.find((s) => s.id === normSector || s.id === updates.sectorId);
+      user.sectorName = sector?.name || user.sectorName;
     }
 
     user.updatedAt = new Date().toISOString();
     await db.put('users', user);
 
+    // MOUSE-CLICK INSTANT OPTIMISTIC UI UPDATE
+    const updatedUserObj = { ...user };
+    setUsers((prev) => prev.map((u) => (u.id === userId ? updatedUserObj : u)));
+    const currentStoreUsers = usePortusStore.getState().users;
+    usePortusStore.getState().setAllData({
+      users: currentStoreUsers.map((u) => (u.id === userId ? updatedUserObj : u)),
+    });
+
     if (SupabaseDataLayer.isAvailable()) {
       try {
+        await SupabaseDataLayer.upsertProfile(user);
         const remoteUpdated = await SupabaseDataLayer.updateAdminUser(user.id, {
           username: user.username,
           fullName: user.fullName,
@@ -1651,15 +1775,16 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           role: user.role,
         });
         if (remoteUpdated) {
-          user.role = remoteUpdated.role;
-          user.fullName = remoteUpdated.fullName;
-          user.phone = remoteUpdated.phone;
-          user.sectorId = remoteUpdated.sectorId;
-          user.sectorName = remoteUpdated.sectorName;
+          const normRemoteSec = normalizeSectorId(remoteUpdated.sectorId, remoteUpdated.sectorName) || user.sectorId;
+          user.role = remoteUpdated.role || user.role;
+          user.fullName = remoteUpdated.fullName || user.fullName;
+          user.phone = remoteUpdated.phone !== undefined ? remoteUpdated.phone : user.phone;
+          user.sectorId = normRemoteSec;
+          user.sectorName = remoteUpdated.sectorName || user.sectorName;
           await db.put('users', user);
         }
       } catch (e) {
-        console.warn('[PORTUS DataContext] Supabase updateAdminUser warning:', e);
+        console.warn('[PORTUS DataContext] Supabase updateAdminUser notice:', e);
       }
     }
 
@@ -2290,6 +2415,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     carnet.sectorId = responsable.sectorId;
     carnet.sectorName = responsable.sectorName;
     carnet.status = 'ASSIGNED_TO_RESPONSIBLE';
+    carnet.updatedAt = nowIso;
     await db.put('carnets', carnet);
 
     // Mettre à jour tous les tickets non vendus de ce carnet
@@ -2308,6 +2434,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         t.assignedResponsableName = responsable.fullName;
         t.sectorId = responsable.sectorId;
         t.sectorName = responsable.sectorName;
+        t.updatedAt = nowIso;
         modifiedTickets.push(t);
         updatedCount++;
       }
@@ -2674,37 +2801,48 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error('Le montant de la remise ne peut pas être négatif.');
     }
 
-    const db = await getDB();
-    const remise = await db.get('remises', remiseId);
-    if (!remise) throw new Error('Remise introuvable');
+    const lockKey = `correctRemiseAdmin:${remiseId}`;
+    if (actionLocksRef.current.has(lockKey)) {
+      throw new Error('Une correction est déjà en cours pour cette remise.');
+    }
+    actionLocksRef.current.add(lockKey);
 
-    const oldAmount = remise.amount;
-    const oldNote = remise.note;
-    const now = new Date();
-    const nowIso = now.toISOString();
-    const dateStr = nowIso.slice(0, 10);
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour12: false }) || now.toTimeString().slice(0, 8);
+    try {
+      const db = await getDB();
+      const remise = await db.get('remises', remiseId);
+      if (!remise) throw new Error('Remise introuvable');
 
-    remise.history.push({
-      id: `hist-${Date.now()}`,
-      modifiedAt: nowIso,
-      modifiedById: currentUser?.id || 'admin',
-      modifiedByName: currentUser?.fullName || 'ADMINISTRATEUR',
-      date: dateStr,
-      time: timeStr,
-      reason: normalizeText(reason),
-      oldAmount,
-      newAmount,
-      oldNote,
-      newNote: normalizeText(newNote),
-    });
+      const oldAmount = remise.amount;
+      const oldNote = remise.note;
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const dateStr = nowIso.slice(0, 10);
+      const timeStr = now.toLocaleTimeString('fr-FR', { hour12: false }) || now.toTimeString().slice(0, 8);
 
-    remise.amount = newAmount;
-    remise.note = normalizeText(newNote);
-    remise.ticketsCount = Math.floor(newAmount / ticketPrice);
-    remise.isCorrected = true;
+      const newHistoryEntry = {
+        id: `hist-${Date.now()}`,
+        modifiedAt: nowIso,
+        modifiedById: currentUser?.id || 'admin',
+        modifiedByName: currentUser?.fullName || 'ADMINISTRATEUR',
+        date: dateStr,
+        time: timeStr,
+        reason: normalizeText(reason),
+        oldAmount,
+        newAmount,
+        oldNote,
+        newNote: normalizeText(newNote),
+      };
 
-    await db.put('remises', remise);
+      const updatedRemise: Remise = {
+        ...remise,
+        amount: newAmount,
+        note: normalizeText(newNote),
+        ticketsCount: Math.floor(newAmount / ticketPrice),
+        isCorrected: true,
+        history: [...(remise.history || []), newHistoryEntry],
+      };
+
+      await db.put('remises', updatedRemise);
 
     await recordAudit(
       'REMISE_EXCEPTIONAL_CORRECTION',
@@ -2743,6 +2881,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     await refreshData();
+    } finally {
+      actionLocksRef.current.delete(lockKey);
+    }
   };
 
   // ----------------------------------------------------
@@ -2830,6 +2971,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ticket.sectorId = agent.sectorId || ticket.sectorId;
       ticket.sectorName = agent.sectorName || ticket.sectorName;
       ticket.status = 'ASSIGNED_TO_AGENT';
+      ticket.updatedAt = nowIso;
 
       updatedTickets.push(ticket);
 
@@ -2853,6 +2995,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ...assignmentRecords.map((a) => tx.objectStore('ticket_assignments').put(a)),
       tx.done,
     ]);
+
+    // MOUSE-CLICK INSTANT OPTIMISTIC UI UPDATE
+    const updatedTicketsMap = new Map(updatedTickets.map((t) => [t.id, { ...t }]));
+    setTickets((prev) => prev.map((t) => updatedTicketsMap.get(t.id) || t));
+    const currentStoreTickets = usePortusStore.getState().tickets;
+    usePortusStore.getState().setAllData({
+      tickets: currentStoreTickets.map((t) => updatedTicketsMap.get(t.id) || t),
+    });
 
     const count = updatedTickets.length;
     const isReassignment = previousAgentsSet.size > 0;
@@ -2911,6 +3061,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (SupabaseDataLayer.isAvailable()) {
       SupabaseDataLayer.insertNotification(notif).catch(() => {});
+      for (const t of updatedTickets) {
+        SupabaseDataLayer.updateTicketStatus({
+          ticketId: t.id,
+          status: 'ASSIGNED_TO_AGENT',
+          assignedAgentId: agent.id,
+          assignedResponsableId: t.assignedResponsableId,
+          sectorId: t.sectorId,
+        }).catch(() => {});
+      }
       try {
         const supabase = (await import('../db/supabaseClient')).getSupabase();
         const session = (await supabase?.auth.getSession())?.data.session;
@@ -3027,122 +3186,127 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       throw new Error("Violation de privilège : Seul un responsable de secteur ou l'administrateur peut enregistrer une remise.");
     }
 
-    const db = await getDB();
-    const agent = await db.get('users', params.agentId);
-    if (!agent) throw new Error('Utilisateur (Agent ou Responsable) introuvable');
-
-    if (currentUser && currentUser.role === 'RESPONSABLE') {
-      if (currentUser.sectorId && agent.sectorId && agent.sectorId !== currentUser.sectorId) {
-        throw new Error("Accès refusé : Vous ne pouvez pas enregistrer une remise pour un agent d'un autre secteur.");
-      }
+    const lockKey = `recordRemise:${params.agentId}`;
+    if (actionLocksRef.current.has(lockKey)) {
+      throw new Error('Une enregistrement de remise est déjà en cours pour cet agent.');
     }
+    actionLocksRef.current.add(lockKey);
 
-    const allRemises = await db.getAll('remises');
-    const ref = `REM-2026-${String(allRemises.length + 1).padStart(4, '0')}`;
-    const remiseId = `rem-${Date.now()}`;
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10);
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour12: false }) || now.toTimeString().slice(0, 8);
+    try {
+      const db = await getDB();
+      const agent = await db.get('users', params.agentId);
+      if (!agent) throw new Error('Utilisateur (Agent ou Responsable) introuvable');
 
-    const ticketsCount = Math.floor(params.amount / ticketPrice);
-
-    // Récupérer les tickets vendus par cet agent ou ce responsable non encore couverts par une remise
-    const allTickets = await db.getAll('tickets');
-    const uncoveredSoldTickets = allTickets
-      .filter((t) => {
-        const matchesPayer =
-          t.assignedAgentId === params.agentId ||
-          (agent.role === 'RESPONSABLE' && (t.assignedResponsableId === params.agentId || (agent.sectorId && t.sectorId === agent.sectorId)));
-        return matchesPayer && (t.status === 'SOLD' || t.status === 'CONTROLLED') && !t.coveredByRemiseId;
-      })
-      .sort((a, b) => (a.soldAt || '').localeCompare(b.soldAt || ''));
-
-    // Couvrir les N plus anciens tickets correspondants au montant
-    const ticketsToCover = uncoveredSoldTickets.slice(0, ticketsCount);
-    const ticketIdsCovered = ticketsToCover.map((t) => t.id);
-
-    const responsableName = currentUser?.fullName || (currentUser?.role === 'ADMINISTRATEUR' ? 'ADMINISTRATEUR GÉNÉRAL' : 'RESPONSABLE');
-    const remise: Remise = {
-      id: remiseId,
-      reference: ref,
-      agentId: agent.id,
-      agentName: agent.fullName,
-      responsableId: currentUser?.id || 'admin',
-      responsableName,
-      sectorId: agent.sectorId || currentUser?.sectorId || 'sec-vridi-port',
-      sectorName: agent.sectorName || currentUser?.sectorName || 'VRIDI PORT',
-      amount: params.amount,
-      date: dateStr,
-      time: timeStr,
-      createdAt: now.toISOString(),
-      note: params.note ? normalizeText(params.note) : undefined,
-      ticketIdsCovered,
-      ticketsCount,
-      history: [],
-    };
-
-    await db.put('remises', remise);
-
-    // Marquer les tickets comme couverts en transaction groupée
-    if (ticketsToCover.length > 0) {
-      const tx = db.transaction('tickets', 'readwrite');
-      const store = tx.objectStore('tickets');
-      for (const t of ticketsToCover) {
-        t.coveredByRemiseId = remiseId;
+      if (currentUser && currentUser.role === 'RESPONSABLE') {
+        if (currentUser.sectorId && agent.sectorId && agent.sectorId !== currentUser.sectorId) {
+          throw new Error("Accès refusé : Vous ne pouvez pas enregistrer une remise pour un agent d'un autre secteur.");
+        }
       }
-      await Promise.all([...ticketsToCover.map((t) => store.put(t)), tx.done]);
-    }
 
-    // Marquer les ventes correspondantes comme couvertes en transaction groupée
-    const allSales = await db.getAll('sales');
-    const coveredSales = allSales.filter((s) => ticketIdsCovered.includes(s.ticketId));
-    if (coveredSales.length > 0) {
-      const salesTx = db.transaction('sales', 'readwrite');
-      const salesStore = salesTx.objectStore('sales');
-      for (const s of coveredSales) {
-        s.coveredByRemiseId = remiseId;
-      }
-      await Promise.all([...coveredSales.map((s) => salesStore.put(s)), salesTx.done]);
-    }
+      const allRemises = await db.getAll('remises');
+      const ref = `REM-2026-${String(allRemises.length + 1).padStart(4, '0')}`;
+      const remiseId = `rem-${Date.now()}`;
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const timeStr = now.toLocaleTimeString('fr-FR', { hour12: false }) || now.toTimeString().slice(0, 8);
 
-    // NOTIFICATION AGENT :
-    // notifier l'agent avec : montant, date, heure, responsable, référence
-    const notifAgent: NotificationRecord = {
-      id: `notif-remise-${remiseId}-${Date.now()}`,
-      recipientId: agent.id,
-      senderId: currentUser?.id || 'resp',
-      title: `REMISE ENREGISTRÉE : ${ref}`,
-      message: `Versement de ${formatFCFA(params.amount)} reçu par ${responsableName} le ${formatDate(dateStr)} à ${timeStr}. Référence : ${ref}.`,
-      level: 'INFO',
-      type: 'REMITTANCE',
-      metadata: {
-        remiseId,
+      const ticketsCount = Math.floor(params.amount / ticketPrice);
+
+      // Récupérer les tickets vendus par cet agent ou ce responsable non encore couverts par une remise
+      const allTickets = await db.getAll('tickets');
+      const uncoveredSoldTickets = allTickets
+        .filter((t) => {
+          const matchesPayer =
+            t.assignedAgentId === params.agentId ||
+            (agent.role === 'RESPONSABLE' && (t.assignedResponsableId === params.agentId || (agent.sectorId && t.sectorId === agent.sectorId)));
+          return matchesPayer && (t.status === 'SOLD' || t.status === 'CONTROLLED') && !t.coveredByRemiseId;
+        })
+        .sort((a, b) => (a.soldAt || '').localeCompare(b.soldAt || ''));
+
+      // Couvrir les N plus anciens tickets correspondants au montant
+      const ticketsToCover = uncoveredSoldTickets.slice(0, ticketsCount);
+      const ticketIdsCovered = ticketsToCover.map((t) => t.id);
+
+      const responsableName = currentUser?.fullName || (currentUser?.role === 'ADMINISTRATEUR' ? 'ADMINISTRATEUR GÉNÉRAL' : 'RESPONSABLE');
+      const remise: Remise = {
+        id: remiseId,
         reference: ref,
+        agentId: agent.id,
+        agentName: agent.fullName,
+        responsableId: currentUser?.id || 'admin',
+        responsableName,
+        sectorId: agent.sectorId || currentUser?.sectorId || 'sec-vridi-port',
+        sectorName: agent.sectorName || currentUser?.sectorName || 'VRIDI PORT',
         amount: params.amount,
         date: dateStr,
         time: timeStr,
-        responsableId: currentUser?.id,
-        responsableName,
-      },
-      isRead: false,
-      createdAt: now.toISOString(),
-    };
-    if (db.objectStoreNames.contains('notifications')) {
-      await db.put('notifications', notifAgent);
-    }
-    if (isOnline && SupabaseDataLayer.isAvailable()) {
-      SupabaseDataLayer.insertNotification(notifAgent).catch(() => {});
-    }
+        createdAt: now.toISOString(),
+        note: params.note ? normalizeText(params.note) : undefined,
+        ticketIdsCovered,
+        ticketsCount,
+        history: [],
+      };
 
-    await recordAudit(
-      'REMISE_RECORDED',
-      'Remise',
-      remiseId,
-      `Enregistrement de la remise ${ref} de ${formatFCFA(params.amount)} pour l'agent ${agent.fullName} (${ticketsCount} tickets couverts)`
-    );
+      await db.put('remises', remise);
 
-    await refreshData();
-    return remise;
+      // Marquer les tickets comme couverts de façon immuable
+      if (ticketsToCover.length > 0) {
+        const tx = db.transaction('tickets', 'readwrite');
+        const store = tx.objectStore('tickets');
+        const updatedCoveredTickets = ticketsToCover.map((t) => ({ ...t, coveredByRemiseId: remiseId }));
+        await Promise.all([...updatedCoveredTickets.map((t) => store.put(t)), tx.done]);
+      }
+
+      // Marquer les ventes correspondantes comme couvertes de façon immuable
+      const allSales = await db.getAll('sales');
+      const coveredSales = allSales.filter((s) => ticketIdsCovered.includes(s.ticketId));
+      if (coveredSales.length > 0) {
+        const salesTx = db.transaction('sales', 'readwrite');
+        const salesStore = salesTx.objectStore('sales');
+        const updatedCoveredSales = coveredSales.map((s) => ({ ...s, coveredByRemiseId: remiseId }));
+        await Promise.all([...updatedCoveredSales.map((s) => salesStore.put(s)), salesTx.done]);
+      }
+
+      // NOTIFICATION AGENT
+      const notifAgent: NotificationRecord = {
+        id: `notif-remise-${remiseId}-${Date.now()}`,
+        recipientId: agent.id,
+        senderId: currentUser?.id || 'resp',
+        title: `REMISE ENREGISTRÉE : ${ref}`,
+        message: `Versement de ${formatFCFA(params.amount)} reçu par ${responsableName} le ${formatDate(dateStr)} à ${timeStr}. Référence : ${ref}.`,
+        level: 'INFO',
+        type: 'REMITTANCE',
+        metadata: {
+          remiseId,
+          reference: ref,
+          amount: params.amount,
+          date: dateStr,
+          time: timeStr,
+          responsableId: currentUser?.id,
+          responsableName,
+        },
+        isRead: false,
+        createdAt: now.toISOString(),
+      };
+      if (db.objectStoreNames.contains('notifications')) {
+        await db.put('notifications', notifAgent);
+      }
+      if (isOnline && SupabaseDataLayer.isAvailable()) {
+        SupabaseDataLayer.insertNotification(notifAgent).catch(() => {});
+      }
+
+      await recordAudit(
+        'REMISE_RECORDED',
+        'Remise',
+        remiseId,
+        `Enregistrement de la remise ${ref} de ${formatFCFA(params.amount)} pour l'agent ${agent.fullName} (${ticketsCount} tickets couverts)`
+      );
+
+      await refreshData();
+      return remise;
+    } finally {
+      actionLocksRef.current.delete(lockKey);
+    }
   };
 
   // ----------------------------------------------------
@@ -3628,76 +3792,89 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     paymentMethod?: PortusPaymentMethod;
     paymentReference?: string;
   }): Promise<Sale> => {
-    const db = await getDB();
-    const ticket = await db.get('tickets', params.ticketId);
-    if (!ticket) throw new Error('Ticket introuvable');
+    const lockKey = `sellTicket:${params.ticketId}`;
+    if (actionLocksRef.current.has(lockKey)) {
+      throw new Error('Une transaction de vente est déjà en cours pour ce ticket.');
+    }
+    actionLocksRef.current.add(lockKey);
 
-    const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
-    if (!isAdmin && ticket.status !== 'ASSIGNED_TO_AGENT') {
-      throw new Error(`Ce ticket n'est pas disponible pour la vente (Statut: ${ticket.status})`);
-    }
-    if (ticket.status === 'SOLD') {
-      throw new Error('Ce ticket a déjà été vendu.');
-    }
-    if (ticket.status === 'CANCELLED') {
-      throw new Error('Ce ticket a été annulé par l’administration.');
-    }
+    try {
+      const db = await getDB();
+      const ticket = await db.get('tickets', params.ticketId);
+      if (!ticket) throw new Error('Ticket introuvable');
 
-    if (currentUser && currentUser.role === 'AGENT') {
-      if (ticket.assignedAgentId && ticket.assignedAgentId !== currentUser.id) {
-        throw new Error("Violation de sécurité : Ce ticket ne vous est pas attribué.");
+      const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+      if (!isAdmin && ticket.status !== 'ASSIGNED_TO_AGENT') {
+        throw new Error(`Ce ticket n'est pas disponible pour la vente (Statut: ${ticket.status})`);
       }
-    }
-    if (currentUser && currentUser.role === 'CONTROLEUR') {
-      throw new Error("Violation d'accès : Un contrôleur ne peut pas enregistrer de ventes.");
-    }
+      if (ticket.status === 'SOLD') {
+        throw new Error('Ce ticket a déjà été vendu.');
+      }
+      if (ticket.status === 'CANCELLED') {
+        throw new Error('Ce ticket a été annulé par l’administration.');
+      }
 
-    const cleanPlate = normalizePlate(params.plateNumber);
-    if (!cleanPlate) throw new Error('L’immatriculation est obligatoire.');
-
-    const cleanPhone = params.driverPhone ? normalizePhone(params.driverPhone) : undefined;
-
-    // Récupérer le GPS terrain (ne jamais bloquer si indisponible)
-    const gps = await getCurrentCoordinates();
-    const resolvedGpsStatus = gps.status === 'AVAILABLE' ? 'AVAILABLE' : 'GPS_UNAVAILABLE';
-
-    // RÈGLE MÉTIER OBLIGATOIRE : sale_id UUID immédiat pour l'idempotence
-    const saleId = generateUUID();
-    const originalSoldAt = new Date().toISOString(); // DATE ORIGINALE (NE JAMAIS ÉCRASER)
-
-    // RÈGLE MÉTIER CRITIQUE :
-    // L'ancien ticket actif de la même immatriculation devient inactif lorsqu'une nouvelle vente est confirmée.
-    const allExistingTickets = await db.getAll('tickets');
-    for (const oldTkt of allExistingTickets) {
-      if (
-        oldTkt.id !== ticket.id &&
-        oldTkt.status === 'SOLD' &&
-        !oldTkt.isSuperseded &&
-        normalizePlate(oldTkt.plateNumber || '') === cleanPlate
-      ) {
-        oldTkt.isSuperseded = true;
-        oldTkt.supersededByTicketNumber = ticket.ticketNumber;
-        await db.put('tickets', oldTkt);
-
-        if (SupabaseDataLayer.isAvailable()) {
-          SupabaseDataLayer.updateTicketStatus({
-            ticketId: oldTkt.id,
-            isSuperseded: true,
-            supersededByTicketNumber: ticket.ticketNumber,
-          }).catch(() => {});
+      if (currentUser && currentUser.role === 'AGENT') {
+        if (ticket.assignedAgentId && ticket.assignedAgentId !== currentUser.id) {
+          throw new Error("Violation de sécurité : Ce ticket ne vous est pas attribué.");
         }
       }
-    }
+      if (currentUser && currentUser.role === 'CONTROLEUR') {
+        throw new Error("Violation d'accès : Un contrôleur ne peut pas enregistrer de ventes.");
+      }
 
-    // Mettre à jour le ticket
-    ticket.status = 'SOLD';
-    ticket.saleId = saleId;
-    ticket.soldAt = originalSoldAt;
-    ticket.plateNumber = cleanPlate;
-    ticket.driverPhone = cleanPhone;
-    ticket.driverName = params.driverName;
-    ticket.isSuperseded = false;
-    await db.put('tickets', ticket);
+      const cleanPlate = normalizePlate(params.plateNumber);
+      if (!cleanPlate) throw new Error('L’immatriculation est obligatoire.');
+
+      const cleanPhone = params.driverPhone ? normalizePhone(params.driverPhone) : undefined;
+
+      // Récupérer le GPS terrain (ne jamais bloquer si indisponible)
+      const gps = await getCurrentCoordinates();
+      const resolvedGpsStatus = gps.status === 'AVAILABLE' ? 'AVAILABLE' : 'GPS_UNAVAILABLE';
+
+      // RÈGLE MÉTIER OBLIGATOIRE : sale_id UUID immédiat pour l'idempotence
+      const saleId = generateUUID();
+      const originalSoldAt = new Date().toISOString(); // DATE ORIGINALE (NE JAMAIS ÉCRASER)
+
+      // RÈGLE MÉTIER CRITIQUE :
+      // L'ancien ticket actif de la même immatriculation devient inactif lorsqu'une nouvelle vente est confirmée.
+      const allExistingTickets = await db.getAll('tickets');
+      for (const oldTkt of allExistingTickets) {
+        if (
+          oldTkt.id !== ticket.id &&
+          oldTkt.status === 'SOLD' &&
+          !oldTkt.isSuperseded &&
+          normalizePlate(oldTkt.plateNumber || '') === cleanPlate
+        ) {
+          const updatedOldTkt: Ticket = {
+            ...oldTkt,
+            isSuperseded: true,
+            supersededByTicketNumber: ticket.ticketNumber,
+          };
+          await db.put('tickets', updatedOldTkt);
+
+          if (SupabaseDataLayer.isAvailable()) {
+            SupabaseDataLayer.updateTicketStatus({
+              ticketId: oldTkt.id,
+              isSuperseded: true,
+              supersededByTicketNumber: ticket.ticketNumber,
+            }).catch(() => {});
+          }
+        }
+      }
+
+    // Mettre à jour le ticket de façon immuable
+    const updatedTicket: Ticket = {
+      ...ticket,
+      status: 'SOLD',
+      saleId,
+      soldAt: originalSoldAt,
+      plateNumber: cleanPlate,
+      driverPhone: cleanPhone,
+      driverName: params.driverName,
+      isSuperseded: false,
+    };
+    await db.put('tickets', updatedTicket);
 
     // Créer la vente
     const sale: Sale = {
@@ -3783,6 +3960,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     await refreshData();
     return sale;
+    } finally {
+      actionLocksRef.current.delete(lockKey);
+    }
   };
 
   const getAgentStats = (agentId: string) => {
