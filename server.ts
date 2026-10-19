@@ -153,6 +153,7 @@ export interface AuthenticatedUser {
   fullName: string;
   role: 'ADMINISTRATEUR' | 'RESPONSABLE' | 'AGENT' | 'CONTROLEUR' | 'CAISSIER' | 'FINANCE' | 'AUDITEUR';
   sectorId?: string | null;
+  sectorName?: string | null;
   isActive: boolean;
 }
 
@@ -310,6 +311,7 @@ async function authenticateSession(req: express.Request): Promise<AuthenticatedU
       fullName: profile.full_name,
       role: profile.role,
       sectorId: profile.sector_id,
+      sectorName: profile.sector?.name || profile.sectors?.name || null,
       isActive: profile.is_active,
     };
 
@@ -685,6 +687,7 @@ app.post('/api/auth/login', async (req, res) => {
       fullName: profile.full_name || targetEmail,
       role: profile.role || ((cleanInput.toLowerCase() === 'ypaki090' || cleanInput.toLowerCase() === 'admin' || targetEmail === 'ypaki090@gmail.com') ? 'ADMINISTRATEUR' : 'AGENT'),
       sectorId: profile.sector_id || null,
+      sectorName: profile.sector?.name || profile.sectors?.name || null,
       isActive: true,
     };
 

@@ -19,10 +19,27 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [resetConfirmationText, setResetConfirmationText] = useState('');
+
+  // Restauration non bloquante avec confirmation UI intégrée
+  const [stagedBackupData, setStagedBackupData] = useState<Record<string, any> | null>(null);
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Synchronisation du prix à l'ouverture de la modale
+  useEffect(() => {
+    if (isOpen) {
+      setPriceInput(String(ticketPrice));
+      setError(null);
+      setSuccess(null);
+      setShowConfirmReset(false);
+      setResetConfirmationText('');
+      setStagedBackupData(null);
+      setShowRestoreConfirm(false);
+    }
+  }, [isOpen, ticketPrice]);
 
   const handlePriceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,8 +65,8 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
-    if (!newAdminPassword || newAdminPassword.length < 4) {
-      setError('Le mot de passe doit contenir au moins 4 caractères.');
+    if (!newAdminPassword || newAdminPassword.length < 6) {
+      setError('Le mot de passe administrateur doit comporter au moins 6 caractères.');
       return;
     }
     if (newAdminPassword !== confirmAdminPassword) {
@@ -72,12 +89,23 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
   };
 
   useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (showRestoreConfirm) {
+          setShowRestoreConfirm(false);
+          setStagedBackupData(null);
+        } else if (showConfirmReset) {
+          setShowConfirmReset(false);
+          setResetConfirmationText('');
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [isOpen, showRestoreConfirm, showConfirmReset, onClose]);
 
   if (!isOpen) return null;
 
@@ -88,7 +116,7 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl text-slate-100 max-h-[92vh] overflow-y-auto">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl text-slate-100 max-h-[92vh] overflow-y-auto relative">
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400">
@@ -164,7 +192,7 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </h4>
             </div>
             <p className="text-[11px] text-slate-400">
-              Définissez un nouveau mot de passe sécurisé pour votre compte administrateur ({currentUser?.username}).
+              Définissez un nouveau mot de passe sécurisé (min. 6 caractères) pour votre compte administrateur ({currentUser?.username}).
             </p>
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
@@ -175,7 +203,7 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 required
                 value={newAdminPassword}
                 onChange={(e) => setNewAdminPassword(e.target.value)}
-                placeholder="Nouveau mot de passe"
+                placeholder="Min. 6 caractères"
                 className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs text-white focus:border-blue-500 focus:outline-hidden"
               />
             </div>
@@ -280,25 +308,23 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    
-                    if (!window.confirm('Êtes-vous sûr de vouloir restaurer cette sauvegarde ? Vos données locales actuelles seront remplacées.')) {
-                      e.target.value = '';
-                      return;
-                    }
-                    
+
                     setLoading(true);
                     setError(null);
                     setSuccess(null);
-                    
+
                     const reader = new FileReader();
                     reader.onload = async (event) => {
                       try {
                         const text = event.target?.result as string;
-                        const backupData = JSON.parse(text);
-                        
-                        const { getDB } = await import('../../db/indexedDb');
-                        const db = await getDB();
-                        
+                        const parsed = JSON.parse(text);
+
+                        // Vérification rigoureuse du format JSON (objet non nul, non tableau)
+                        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+                          throw new Error('Format de fichier de sauvegarde invalide (objet JSON attendu).');
+                        }
+
+                        // Vérification de chaque store
                         const stores = [
                           'users',
                           'carnets',
@@ -312,25 +338,24 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
                           'ticket_assignments',
                           'notifications'
                         ];
-                        
-                        const tx = db.transaction(stores as any, 'readwrite');
+
                         for (const store of stores) {
-                          if (db.objectStoreNames.contains(store as any) && backupData[store]) {
-                            const os = tx.objectStore(store as any);
-                            await os.clear();
-                            for (const item of backupData[store]) {
-                              await os.put(item);
+                          if (parsed[store] !== undefined) {
+                            if (!Array.isArray(parsed[store])) {
+                              throw new Error(`Le store "${store}" doit être un tableau valide.`);
+                            }
+                            for (const item of parsed[store]) {
+                              if (!item || typeof item !== 'object' || !item.id || typeof item.id !== 'string' || item.id.trim() === '') {
+                                throw new Error(`Élément invalide détecté dans le store "${store}" (propriété id manquante ou vide).`);
+                              }
                             }
                           }
                         }
-                        await tx.done;
-                        
-                        setSuccess('Base de données restaurée avec succès ! Redémarrage...');
-                        setTimeout(() => {
-                          window.location.reload();
-                        }, 1500);
+
+                        setStagedBackupData(parsed);
+                        setShowRestoreConfirm(true);
                       } catch (err: any) {
-                        setError('Fichier invalide ou erreur de restauration : ' + (err?.message || err));
+                        setError('Fichier malformé ou invalide : ' + (err?.message || err));
                       } finally {
                         setLoading(false);
                         e.target.value = '';
@@ -348,6 +373,84 @@ export const AdminSettingsModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </label>
             </div>
           </div>
+
+          {/* Modal de confirmation intégrée pour la Restauration */}
+          {showRestoreConfirm && stagedBackupData && (
+            <div className="absolute inset-0 z-50 bg-slate-900/95 p-5 flex flex-col justify-center rounded-2xl border border-amber-500/50 backdrop-blur-md">
+              <div className="flex items-center gap-2 text-amber-400 mb-3">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <h4 className="text-sm font-bold text-white">Confirmer la Restauration</h4>
+              </div>
+              <p className="text-xs text-slate-300 mb-4 leading-relaxed">
+                Le fichier de sauvegarde a été validé avec succès. Voulez-vous procéder à la restauration ? Vos données locales actuelles seront remplacées par le contenu de la sauvegarde.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRestoreConfirm(false);
+                    setStagedBackupData(null);
+                  }}
+                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={async () => {
+                    if (!stagedBackupData) return;
+                    setLoading(true);
+                    setError(null);
+                    try {
+                      const { getDB } = await import('../../db/indexedDb');
+                      const db = await getDB();
+                      
+                      const stores = [
+                        'users',
+                        'carnets',
+                        'tickets',
+                        'sales',
+                        'controls',
+                        'fraud_reports',
+                        'remises',
+                        'expenses',
+                        'audit_logs',
+                        'ticket_assignments',
+                        'notifications'
+                      ];
+
+                      const tx = db.transaction(stores as any, 'readwrite');
+                      for (const store of stores) {
+                        if (db.objectStoreNames.contains(store as any) && stagedBackupData[store]) {
+                          const os = tx.objectStore(store as any);
+                          await os.clear();
+                          for (const item of stagedBackupData[store]) {
+                            await os.put(item);
+                          }
+                        }
+                      }
+                      await tx.done;
+
+                      setSuccess('Base de données restaurée avec succès ! Redémarrage...');
+                      setShowRestoreConfirm(false);
+                      setStagedBackupData(null);
+                      setTimeout(() => {
+                        window.location.reload();
+                      }, 1500);
+                    } catch (err: any) {
+                      setError('Erreur lors de l’écriture en base : ' + (err?.message || err));
+                    } finally {
+                      setLoading(false);
+                    }
+                  }}
+                  className="flex-1 rounded-xl bg-amber-600 hover:bg-amber-500 text-white py-2.5 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                >
+                  {loading ? 'Restauration...' : 'Confirmer la Restauration'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Section 3 : Réinitialisation Complète de l'App */}
           <div className="space-y-3 rounded-xl border border-rose-950 bg-rose-950/20 p-4">

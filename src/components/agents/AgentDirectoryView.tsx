@@ -5,6 +5,8 @@ import { Users, Phone, MapPin, Clock, Shield, AlertCircle, Printer } from 'lucid
 import { formatFCFA, formatDateTime } from '../../utils/normalization';
 import { AgentBadgeModal } from './AgentBadgeModal';
 
+import { normalizeSectorId } from '../../db/supabaseService';
+
 interface AgentDirectoryViewProps {
   viewMode?: 'CONTROLEUR' | 'RESPONSABLE' | 'ADMIN';
 }
@@ -16,10 +18,35 @@ export const AgentDirectoryView: React.FC<AgentDirectoryViewProps> = ({ viewMode
   const [badgeModalOpen, setBadgeModalOpen] = useState(false);
   const [selectedAgentForBadge, setSelectedAgentForBadge] = useState<any>(null);
 
-  // Liste de tous les agents (rôle AGENT)
+  // Liste des agents (rôle AGENT)
   const agents = useMemo(() => {
-    return users.filter((u) => u.role === 'AGENT');
-  }, [users]);
+    const activeAgents = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
+    if (viewMode === 'RESPONSABLE' && currentUser?.role === 'RESPONSABLE') {
+      const respSector = normalizeSectorId(currentUser.sectorId, currentUser.sectorName);
+      if (respSector) {
+        const sectorMatched = activeAgents.filter((u) => {
+          const agentSector = normalizeSectorId(u.sectorId, u.sectorName);
+          if (agentSector && agentSector === respSector) return true;
+          if (u.sectorId && (u.sectorId === currentUser.sectorId || u.sectorId === respSector)) return true;
+
+          const hasTicketsWithResp = tickets.some(
+            (t) =>
+              t.assignedAgentId === u.id &&
+              (t.assignedResponsableId === currentUser.id ||
+                normalizeSectorId(t.sectorId) === respSector)
+          );
+          if (hasTicketsWithResp) return true;
+
+          if (!agentSector && !u.sectorId) return true;
+
+          return false;
+        });
+
+        return sectorMatched.length > 0 ? sectorMatched : activeAgents;
+      }
+    }
+    return activeAgents;
+  }, [users, viewMode, currentUser, tickets]);
 
   // Calculs pour la vue Responsable (étanchéité financière)
   const responsableStats = useMemo(() => {

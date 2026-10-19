@@ -104,6 +104,7 @@ export interface Carnet {
   sectorId?: string;
   sectorName?: string;
   createdAt: string; // Date et heure de génération
+  updatedAt?: string;
   status: CarnetStatus;
 }
 

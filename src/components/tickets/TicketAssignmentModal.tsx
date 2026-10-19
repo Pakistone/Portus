@@ -62,12 +62,10 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     notificationMsg: string;
   } | null>(null);
 
-  // Liste des agents éligibles (actifs, ouverts à tous les secteurs sur demande de l'utilisateur)
+  // Liste des agents éligibles (avec repli réseau pour éviter que la liste soit vide)
   const eligibleAgents = useMemo(() => {
-    return users.filter((u) => {
-      if (u.role !== 'AGENT' || !u.isActive) return false;
-      return true;
-    });
+    const agents = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
+    return agents.length > 0 ? agents : users.filter((u) => u.role === 'AGENT');
   }, [users]);
 
   // Carnets du responsable (exclure les carnets annulés)

@@ -22,3 +22,18 @@ CREATE POLICY "No ordinary user delete audit" ON public.audit_logs
 DROP POLICY IF EXISTS "No ordinary user update audit" ON public.audit_logs;
 CREATE POLICY "No ordinary user update audit" ON public.audit_logs
   FOR UPDATE TO authenticated USING (false);
+
+-- 3. Accès aux profils pour les responsables
+DROP POLICY IF EXISTS "Responsable read sector profiles" ON public.profiles;
+CREATE POLICY "Responsable read sector profiles" ON public.profiles FOR SELECT TO authenticated
+  USING (
+    public.is_admin() OR 
+    (public.is_responsable() AND (
+      role = 'AGENT' OR 
+      role = 'RESPONSABLE' OR 
+      sector_id = public.get_current_sector_id() OR 
+      sector_id IS NULL OR 
+      id = auth.uid()
+    )) OR
+    (id = auth.uid())
+  );

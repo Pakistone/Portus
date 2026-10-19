@@ -7,6 +7,8 @@ import { formatFCFA } from '../../utils/normalization';
 import { generateRemiseReceiptPDF } from '../../utils/pdfGenerator';
 import type { Remise } from '../../types';
 
+import { normalizeSectorId } from '../../db/supabaseService';
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -62,9 +64,14 @@ export const RemiseFormModal: React.FC<Props> = ({
   const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
 
   const eligibleAgents = users.filter((u) => {
-    if (!u.isActive) return false;
+    if (u.isActive === false) return false;
     if (currentUser?.role === 'RESPONSABLE') {
-      return u.role === 'AGENT' && u.sectorId === currentUser.sectorId;
+      if (u.role !== 'AGENT') return false;
+      const respSector = normalizeSectorId(currentUser.sectorId, currentUser.sectorName);
+      if (!respSector) return true;
+      const agentSector = normalizeSectorId(u.sectorId, u.sectorName);
+      if (!agentSector || agentSector === respSector || u.sectorId === currentUser.sectorId) return true;
+      return false;
     }
     if (isAdmin) {
       return u.role === 'AGENT' || u.role === 'RESPONSABLE';

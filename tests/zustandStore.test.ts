@@ -12,6 +12,7 @@ describe('Phase 4A - Store Zustand & Indexation Précalculée (Sélecteurs & Per
         ticketNumber: 'VRD-000001',
         carnetId: 'carnet-1',
         carnetNumber: 'C-2026-001',
+        qrPayload: 'test-qr-1',
         status: 'SOLD',
         price: 5000,
         assignedAgentId: 'agent-1',
@@ -23,6 +24,7 @@ describe('Phase 4A - Store Zustand & Indexation Précalculée (Sélecteurs & Per
         ticketNumber: 'VRD-000002',
         carnetId: 'carnet-1',
         carnetNumber: 'C-2026-001',
+        qrPayload: 'test-qr-2',
         status: 'ASSIGNED_TO_AGENT',
         price: 5000,
         assignedAgentId: 'agent-1',
@@ -42,6 +44,10 @@ describe('Phase 4A - Store Zustand & Indexation Précalculée (Sélecteurs & Per
         soldAt: '2026-10-18T10:15:00Z',
         syncStatus: 'SYNCED',
         price: 5000,
+        gpsLatitude: null,
+        gpsLongitude: null,
+        gpsAccuracy: null,
+        gpsStatus: 'AVAILABLE',
       },
     ];
 

@@ -30,6 +30,7 @@ describe('Phase 4B - Actions Store Zustand & Intégrité (Décision n°1)', () =
           ticketNumber: 'VRD-000001',
           carnetId: 'c-1',
           carnetNumber: 'C-2026-001',
+          qrPayload: 'test-qr',
           status: 'AVAILABLE',
           price: 5000,
           controlCount: 0,

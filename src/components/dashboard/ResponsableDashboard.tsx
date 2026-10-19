@@ -22,6 +22,7 @@ import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatPlateDisplay } from '../../utils/normalization';
 import { EntityRankingChart, EntityRankItem } from './DashboardCharts';
+import { normalizeSectorId } from '../../db/supabaseService';
 
 // Modals
 import { TicketAssignmentModal } from '../tickets/TicketAssignmentModal';
@@ -70,28 +71,50 @@ export const ResponsableDashboard: React.FC = () => {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // DONNÉES STRICTEMENT LIMITÉES AU SECTEUR DU RESPONSABLE
+  // DONNÉES DU SECTEUR ET DES AGENTS DU RESPONSABLE
   // ---------------------------------------------------------------------------
-  const sectorId = currentUser?.sectorId;
+  const respSector = useMemo(() => {
+    return normalizeSectorId(currentUser?.sectorId, currentUser?.sectorName);
+  }, [currentUser?.sectorId, currentUser?.sectorName]);
 
-  // Agents du secteur
+  // Agents du secteur (avec repli réseau pour garantir la gestion des agents par tout responsable)
   const sectorAgents = useMemo(() => {
-    return users.filter(
-      (u) =>
-        u.role === 'AGENT' &&
-        u.isActive &&
-        (!sectorId || u.sectorId === sectorId)
-    );
-  }, [users, sectorId]);
+    const allActive = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
+    if (!respSector) return allActive;
+
+    const matched = allActive.filter((u) => {
+      const agentSector = normalizeSectorId(u.sectorId, u.sectorName);
+      if (agentSector && agentSector === respSector) return true;
+      if (u.sectorId && (u.sectorId === currentUser?.sectorId || u.sectorId === respSector)) return true;
+
+      // Inclure également tout agent à qui ce responsable a attribué des tickets
+      const hasTicketsWithResp = tickets.some(
+        (t) =>
+          t.assignedAgentId === u.id &&
+          (t.assignedResponsableId === currentUser?.id ||
+            normalizeSectorId(t.sectorId) === respSector)
+      );
+      if (hasTicketsWithResp) return true;
+
+      // Si l'agent n'a pas de secteur défini, l'inclure par défaut
+      if (!agentSector && !u.sectorId) return true;
+
+      return false;
+    });
+
+    // Si aucun agent n'est rattaché spécifiquement au secteur, afficher tous les agents actifs du réseau
+    return matched.length > 0 ? matched : allActive;
+  }, [users, respSector, currentUser, tickets]);
 
   // Tickets du secteur
   const sectorTickets = useMemo(() => {
     return tickets.filter((t) => {
       if (t.assignedResponsableId === currentUser?.id) return true;
-      if (sectorId && t.sectorId === sectorId) return true;
-      return false;
+      if (!respSector) return true;
+      const tSector = normalizeSectorId(t.sectorId);
+      return tSector === respSector || t.sectorId === currentUser?.sectorId;
     });
-  }, [tickets, currentUser, sectorId]);
+  }, [tickets, currentUser, respSector]);
 
   // 1. Tickets disponibles (prêts à attribuer ou en main des agents)
   const availableInSector = useMemo(() => {
@@ -128,12 +151,13 @@ export const ResponsableDashboard: React.FC = () => {
 
   // 4. Remises du secteur
   const sectorRemises = useMemo(() => {
-    return remises.filter(
-      (r) =>
-        r.responsableId === currentUser?.id ||
-        (sectorId && r.sectorId === sectorId)
-    );
-  }, [remises, currentUser, sectorId]);
+    return remises.filter((r) => {
+      if (r.responsableId === currentUser?.id) return true;
+      if (!respSector) return true;
+      const rSector = normalizeSectorId(r.sectorId);
+      return rSector === respSector || r.sectorId === currentUser?.sectorId;
+    });
+  }, [remises, currentUser, respSector]);
   const totalRemittedAmount = sectorRemises.reduce((sum, r) => sum + r.amount, 0);
 
   // 5. Solde du secteur (recettes restant à récupérer)
@@ -142,8 +166,12 @@ export const ResponsableDashboard: React.FC = () => {
 
   // 6. Alertes financières sur les agents du secteur
   const sectorAlerts = useMemo(() => {
-    return alerts.filter((a) => !sectorId || a.sectorId === sectorId);
-  }, [alerts, sectorId]);
+    return alerts.filter((a) => {
+      if (!respSector) return true;
+      const aSector = normalizeSectorId(a.sectorId);
+      return aSector === respSector || a.sectorId === currentUser?.sectorId;
+    });
+  }, [alerts, respSector, currentUser]);
 
   // 7. Ventes non couvertes (tickets vendus sans remise associée)
   const unremittedTickets = useMemo(() => {

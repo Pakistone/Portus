@@ -21,6 +21,17 @@ export function getStoredAuthToken(): string | null {
     if (typeof sessionStorage !== 'undefined') {
       const s = sessionStorage.getItem('portus_access_token');
       if (s && s.trim()) return s.trim();
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('auth-token'))) {
+          try {
+            const parsed = JSON.parse(sessionStorage.getItem(key) || '{}');
+            if (parsed.access_token) return parsed.access_token;
+            if (parsed.currentSession?.access_token) return parsed.currentSession.access_token;
+            if (parsed.session?.access_token) return parsed.session.access_token;
+          } catch {}
+        }
+      }
     }
     if (typeof localStorage !== 'undefined') {
       const l = localStorage.getItem('portus_access_token');
@@ -32,6 +43,8 @@ export function getStoredAuthToken(): string | null {
           try {
             const parsed = JSON.parse(localStorage.getItem(key) || '{}');
             if (parsed.access_token) return parsed.access_token;
+            if (parsed.currentSession?.access_token) return parsed.currentSession.access_token;
+            if (parsed.session?.access_token) return parsed.session.access_token;
           } catch {}
         }
       }

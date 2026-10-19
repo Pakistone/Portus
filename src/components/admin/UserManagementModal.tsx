@@ -77,6 +77,11 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       return;
     }
 
+    if (passwordRaw.length < 6) {
+      setError('Le mot de passe doit comporter au moins 6 caractères.');
+      return;
+    }
+
     setLoading(true);
     try {
       // RÈGLE MÉTIER CRITIQUE : Le mot de passe est transmis BRUT sans aucune normalisation
@@ -141,6 +146,11 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const handleResetPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetTargetUser || !newPasswordRaw) return;
+
+    if (newPasswordRaw.length < 6) {
+      setError('Le mot de passe doit comporter au moins 6 caractères.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -227,31 +237,45 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     }
   };
 
-  // Calcul du nombre de tickets concernés lors de la désactivation
+  // Calcul du nombre de tickets concernés lors de la désactivation (supportant les deux conventions)
   const getDeactivationDetails = (u: User) => {
     if (u.role === 'AGENT') {
       const unsold = tickets.filter(
-        (t) => t.assignedAgentId === u.id && t.status !== 'SOLD' && t.status !== 'CANCELLED'
+        (t) => (t.assignedAgentId === u.id || (t as any).assignedAgent === u.id) && t.status !== 'SOLD' && t.status !== 'CANCELLED'
       ).length;
       return { unsoldTickets: unsold, carnets: 0 };
     }
     if (u.role === 'RESPONSABLE') {
       const unsold = tickets.filter(
-        (t) => t.assignedResponsableId === u.id && t.status !== 'SOLD' && t.status !== 'CANCELLED'
+        (t) => (t.assignedResponsableId === u.id || (t as any).assignedResponsable === u.id) && t.status !== 'SOLD' && t.status !== 'CANCELLED'
       ).length;
-      const respCarnets = carnets.filter((c) => c.assignedToResponsableId === u.id).length;
+      const respCarnets = carnets.filter(
+        (c) => c.assignedToResponsableId === u.id
+      ).length;
       return { unsoldTickets: unsold, carnets: respCarnets };
     }
     return { unsoldTickets: 0, carnets: 0 };
   };
 
+  // Gestion Escape pour fermer uniquement la sous-modale active ou la modale principale
   useEffect(() => {
+    if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (deactivateTargetUser) {
+          setDeactivateTargetUser(null);
+        } else if (resetTargetUser) {
+          setResetTargetUser(null);
+        } else if (editTargetUser) {
+          setEditTargetUser(null);
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [isOpen, deactivateTargetUser, resetTargetUser, editTargetUser, onClose]);
 
   if (!isOpen) return null;
 
@@ -513,7 +537,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     required
                     value={passwordRaw}
                     onChange={(e) => setPasswordRaw(e.target.value)}
-                    placeholder="Mot de passe brut"
+                    placeholder="Min. 6 caractères"
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs text-white focus:border-emerald-500 focus:outline-hidden"
                   />
                 </div>
@@ -522,7 +546,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-[11px] text-slate-400 space-y-1">
                 <p className="font-semibold text-slate-300">Règles de sécurité des comptes :</p>
                 <p>• Aucun code PIN ni 2FA. Connexion directe par nom d’utilisateur et mot de passe.</p>
-                <p>• Le mot de passe n'est soumis à aucune normalisation (respect exact des accents et caractères).</p>
+                <p>• Le mot de passe requiert au moins 6 caractères et est stocké sans altération.</p>
                 <p>• 5 échecs de connexion consécutifs entraînent un blocage automatique pendant 15 minutes.</p>
               </div>
 
@@ -643,7 +667,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 Utilisateur : <span className="text-white font-bold">{resetTargetUser.fullName}</span> ({resetTargetUser.username})
               </p>
               <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-200">
-                Le mot de passe brut est stocké sans altération. La réinitialisation débloque automatiquement le compte s’il était temporairement verrouillé.
+                Le mot de passe brut (min. 6 caractères) est stocké sans altération. La réinitialisation débloque automatiquement le compte.
               </div>
               <form onSubmit={handleResetPasswordSubmit} className="space-y-4">
                 <div>
@@ -656,7 +680,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     autoFocus
                     value={newPasswordRaw}
                     onChange={(e) => setNewPasswordRaw(e.target.value)}
-                    placeholder="Saisir le nouveau mot de passe"
+                    placeholder="Min. 6 caractères"
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 p-2.5 text-xs text-white focus:border-amber-500 focus:outline-hidden"
                   />
                 </div>

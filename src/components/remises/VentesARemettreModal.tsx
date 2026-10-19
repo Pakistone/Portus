@@ -16,6 +16,7 @@ import { formatFCFA, formatDateTime } from '../../utils/normalization';
 import { exportVentesARemettreToExcel } from '../../utils/excelExport';
 import { RemiseFormModal } from './RemiseFormModal';
 import type { Sale } from '../../types';
+import { normalizeSectorId } from '../../db/supabaseService';
 
 interface Props {
   isOpen: boolean;
@@ -63,7 +64,9 @@ export const VentesARemettreModal: React.FC<Props> = ({
         if (currentUser?.role === 'AGENT') {
           if (item.agentId !== currentUser.id) return false;
         } else if (currentUser?.role === 'RESPONSABLE') {
-          if (currentUser.sectorId && item.sectorId && item.sectorId !== currentUser.sectorId) {
+          const respSector = normalizeSectorId(currentUser.sectorId, currentUser.sectorName);
+          const itemSector = normalizeSectorId(item.sectorId, item.sectorName);
+          if (respSector && itemSector && itemSector !== respSector) {
             return false;
           }
         }
