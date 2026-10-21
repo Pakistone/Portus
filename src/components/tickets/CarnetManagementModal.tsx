@@ -85,11 +85,16 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     filename: string;
   } | null>(null);
 
+  const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+  const isResponsable = currentUser?.role === 'RESPONSABLE';
   const responsables = users.filter((u) => u.role === 'RESPONSABLE' && u.isActive);
 
   // Filtrage des carnets
   const filteredCarnets = useMemo(() => {
     return carnets.filter((c) => {
+      if (isResponsable && c.assignedToResponsableId !== currentUser?.id) {
+        return false;
+      }
       if (statusFilter !== 'ALL') {
         if (c.status !== statusFilter) return false;
       } else {
@@ -106,7 +111,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       }
       return true;
     });
-  }, [carnets, statusFilter, searchTerm]);
+  }, [carnets, statusFilter, searchTerm, isResponsable, currentUser?.id]);
 
   // Tickets du carnet sélectionné
   const carnetTickets = useMemo(() => {
@@ -435,13 +440,15 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     />
                     <span>{syncingCloud ? 'Synchro en cours...' : 'Synchroniser Cloud'}</span>
                   </button>
-                  <button
-                    onClick={() => setGeneratorModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Générer Carnet</span>
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => setGeneratorModalOpen(true)}
+                      className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Générer Carnet</span>
+                    </button>
+                  )}
                 </>
               )}
               <button
@@ -529,46 +536,38 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     <p className="text-[11px] text-slate-400">par {selectedCarnet.createdByName}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap justify-end">
-                    {currentUser?.role === 'ADMINISTRATEUR' ? (
-                      <button
-                        onClick={() => handlePrintPDF(selectedCarnet)}
-                        disabled={actionLoading}
-                        className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
-                      >
-                        <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                        <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (6/page)'}</span>
-                      </button>
-                    ) : (
-                      <span
-                        className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-500 cursor-not-allowed select-none"
-                        title="Seul l’administrateur est autorisé à imprimer"
-                      >
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Impression verrouillée</span>
-                      </span>
-                    )}
-                    {selectedCarnet.status !== 'CANCELLED' && (
-                      <button
-                        onClick={() => setCancelModalCarnet(selectedCarnet)}
-                        className="flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/30 transition cursor-pointer"
-                      >
-                        <Ban className="w-3.5 h-3.5" />
-                        <span>Annuler Carnet</span>
-                      </button>
-                    )}
-                    {currentUser?.role === 'ADMINISTRATEUR' && (
-                      <button
-                        disabled={actionLoading}
-                        onClick={() => setDeleteConfirmCarnet(selectedCarnet)}
-                        className={`flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-md transition cursor-pointer ${
-                          actionLoading
-                            ? 'bg-red-800 cursor-not-allowed opacity-70'
-                            : 'bg-red-600 hover:bg-red-500'
-                        }`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Supprimer Définitivement</span>
-                      </button>
+                    {isAdmin && (
+                      <>
+                        <button
+                          onClick={() => handlePrintPDF(selectedCarnet)}
+                          disabled={actionLoading}
+                          className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
+                        >
+                          <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
+                          <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (6/page)'}</span>
+                        </button>
+                        {selectedCarnet.status !== 'CANCELLED' && (
+                          <button
+                            onClick={() => setCancelModalCarnet(selectedCarnet)}
+                            className="flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/30 transition cursor-pointer"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Annuler Carnet</span>
+                          </button>
+                        )}
+                        <button
+                          disabled={actionLoading}
+                          onClick={() => setDeleteConfirmCarnet(selectedCarnet)}
+                          className={`flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-md transition cursor-pointer ${
+                            actionLoading
+                              ? 'bg-red-800 cursor-not-allowed opacity-70'
+                              : 'bg-red-600 hover:bg-red-500'
+                          }`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Supprimer Définitivement</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -627,7 +626,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                             </button>
                           </td>
                           <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                            {t.status !== 'CANCELLED' && t.status !== 'SOLD' && (
+                            {isAdmin && t.status !== 'CANCELLED' && t.status !== 'SOLD' && (
                               <button
                                 onClick={() => setCancelModalTicket(t)}
                                 className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-[11px] font-sans font-semibold border border-rose-500/20 transition cursor-pointer"
@@ -811,57 +810,50 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                   <Eye className="w-3.5 h-3.5" />
                                 </button>
 
-                                {currentUser?.role === 'ADMINISTRATEUR' ? (
-                                  <button
-                                    onClick={() => handlePrintPDF(c)}
-                                    disabled={actionLoading}
-                                    className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
-                                    title="Imprimer le carnet en PDF (6 tickets par page A4 paysage • Grille 3×2)"
-                                  >
-                                    <Printer className="w-3.5 h-3.5" />
-                                  </button>
-                                ) : (
-                                  <span
-                                    className="p-1.5 rounded-lg bg-slate-800/40 border border-slate-800 text-slate-600 cursor-not-allowed select-none"
-                                    title="Impression réservée à l'administrateur général"
-                                  >
-                                    <Lock className="w-3.5 h-3.5" />
-                                  </span>
-                                )}
+                                {isAdmin && (
+                                  <>
+                                    <button
+                                      onClick={() => handlePrintPDF(c)}
+                                      disabled={actionLoading}
+                                      className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
+                                      title="Imprimer le carnet en PDF (6 tickets par page A4 paysage • Grille 3×2)"
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                    </button>
 
-                                {!c.assignedToResponsableId && c.status !== 'CANCELLED' && (
-                                  <button
-                                    onClick={() => setAssignModalCarnet(c)}
-                                    className="p-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition cursor-pointer"
-                                    title="Attribuer à un superviseur"
-                                  >
-                                    <UserCheck className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
+                                    {!c.assignedToResponsableId && c.status !== 'CANCELLED' && (
+                                      <button
+                                        onClick={() => setAssignModalCarnet(c)}
+                                        className="p-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition cursor-pointer"
+                                        title="Attribuer à un superviseur"
+                                      >
+                                        <UserCheck className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
 
-                                {c.status !== 'CANCELLED' && (
-                                  <button
-                                    onClick={() => setCancelModalCarnet(c)}
-                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition cursor-pointer"
-                                    title="Annuler le carnet"
-                                  >
-                                    <Ban className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
+                                    {c.status !== 'CANCELLED' && (
+                                      <button
+                                        onClick={() => setCancelModalCarnet(c)}
+                                        className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition cursor-pointer"
+                                        title="Annuler le carnet"
+                                      >
+                                        <Ban className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
 
-                                {currentUser?.role === 'ADMINISTRATEUR' && (
-                                  <button
-                                    disabled={actionLoading}
-                                    onClick={() => setDeleteConfirmCarnet(c)}
-                                    className={`p-1.5 rounded-lg border transition cursor-pointer ${
-                                      actionLoading
-                                        ? 'bg-red-950 text-red-700 border-red-900 cursor-not-allowed opacity-50'
-                                        : 'bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-500/20'
-                                    }`}
-                                    title="Supprimer définitivement le carnet"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                    <button
+                                      disabled={actionLoading}
+                                      onClick={() => setDeleteConfirmCarnet(c)}
+                                      className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                        actionLoading
+                                          ? 'bg-red-950 text-red-700 border-red-900 cursor-not-allowed opacity-50'
+                                          : 'bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-500/20'
+                                      }`}
+                                      title="Supprimer définitivement le carnet"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
                                 )}
                               </div>
                             </td>

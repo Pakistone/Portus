@@ -158,10 +158,28 @@ CREATE TRIGGER before_insert_sale_expiration_14d
   FOR EACH ROW
   EXECUTE FUNCTION public.trg_set_sale_expiration_14d();
 
--- Ajout également sur public.tickets pour lecture directe lors du scan
+-- Ajout également sur public.tickets et public.carnets pour compatibilité complète des colonnes et lecture directe lors du scan
+ALTER TABLE public.carnets
+  ADD COLUMN IF NOT EXISTS size INT DEFAULT 50,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+
 ALTER TABLE public.tickets
+  ADD COLUMN IF NOT EXISTS assigned_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS qr_payload TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID,
+  ADD COLUMN IF NOT EXISTS plate_number TEXT,
+  ADD COLUMN IF NOT EXISTS driver_phone TEXT,
+  ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'ESPECES';
+
+UPDATE public.tickets SET assigned_responsable_id = assigned_to_responsable_id WHERE assigned_responsable_id IS NULL AND assigned_to_responsable_id IS NOT NULL;
+UPDATE public.tickets SET assigned_agent_id = assigned_to_agent_id WHERE assigned_agent_id IS NULL AND assigned_to_agent_id IS NOT NULL;
+UPDATE public.carnets SET assigned_to_responsable = assigned_to_responsable_id WHERE assigned_to_responsable IS NULL AND assigned_to_responsable_id IS NOT NULL;
 
 UPDATE public.tickets
 SET expires_at = sold_at + INTERVAL '14 days'

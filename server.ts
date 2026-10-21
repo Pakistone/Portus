@@ -425,8 +425,8 @@ function signCanonicalPayload(canonical: string): string {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    system: 'PORTUS — U.J.S.R.V.',
-    organization: 'Union des Jeunes de la Sécurité Routière de Vridi',
+    system: 'PORTUS — U.J.P.A.S.',
+    organization: 'Union des Jeunes du Port pour l’Assistance et la Sécurité (U.J.P.A.S.)',
     environment: process.env.NODE_ENV || 'development',
     serverTime: new Date().toISOString(),
     isDatabaseConfigured: Boolean(supabaseAdmin),
@@ -774,8 +774,8 @@ app.get('/api/pricing', async (req, res) => {
     res.json({
       price,
       currency: 'FCFA',
-      validityDays: 7,
-      organization: 'Union des Jeunes de la Sécurité Routière de Vridi',
+      validityDays: 14,
+      organization: 'Union des Jeunes du Port pour l’Assistance et la Sécurité (U.J.P.A.S.)',
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -898,20 +898,11 @@ app.put('/api/pricing', requireAdmin, async (req, res) => {
 app.get('/api/users', requireAuth, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé côté serveur');
-    const actor = req.authenticatedUser!;
 
-    // Si AGENT ou CONTROLEUR, limiter la visibilité pour respecter le principe de moindre privilège
-    let query = supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from('profiles')
-      .select('*, sector:sectors(name)');
-
-    if (actor.role === 'AGENT' || actor.role === 'CONTROLEUR') {
-      if (actor.sectorId) {
-        query = query.eq('sector_id', actor.sectorId);
-      }
-    }
-
-    const { data, error } = await query.order('full_name', { ascending: true });
+      .select('*, sector:sectors(name)')
+      .order('full_name', { ascending: true });
 
     if (error) throw error;
     res.json({ users: data || [] });
@@ -1204,15 +1195,10 @@ app.get('/api/carnets', requireAuth, async (req, res) => {
     const dbClient = getDatabaseClient(req);
     const actor = req.authenticatedUser!;
 
-    let carnetQuery = dbClient
+    const carnetQuery = dbClient
       .from('carnets')
       .select('*, created_profile:profiles!created_by(full_name), resp_profile:profiles!assigned_to_responsable(full_name), sectors(name)')
       .order('created_at', { ascending: false });
-
-    // Isolation sectorielle uniquement pour responsable connecté
-    if (actor && actor.role === 'RESPONSABLE') {
-      carnetQuery = carnetQuery.or(`assigned_to_responsable.eq.${actor.id},sector_id.eq.${actor.sectorId || '00000000-0000-0000-0000-000000000000'}`);
-    }
 
     const { data: carnetsData, error: carnetErr } = await carnetQuery;
     if (carnetErr) throw carnetErr;
@@ -1225,8 +1211,6 @@ app.get('/api/carnets', requireAuth, async (req, res) => {
 
     if (actor && actor.role === 'AGENT') {
       ticketQuery = ticketQuery.eq('assigned_agent_id', actor.id);
-    } else if (actor && actor.role === 'RESPONSABLE') {
-      ticketQuery = ticketQuery.or(`assigned_responsable_id.eq.${actor.id},sector_id.eq.${actor.sectorId || '00000000-0000-0000-0000-000000000000'}`);
     }
 
     const { data: ticketsData, error: ticketErr } = await ticketQuery;
@@ -1261,12 +1245,19 @@ app.get('/api/carnets', requireAuth, async (req, res) => {
       assignedResponsableName: row.resp?.full_name,
       assignedAgentId: row.assigned_agent_id,
       assignedAgentName: row.agent?.full_name,
+      assignedAgentPhone: row.agent?.phone || undefined,
       sectorId: row.sector_id,
       sectorName: row.sectors?.name,
+      saleId: row.sale_id,
       soldAt: row.sold_at,
       plateNumber: row.plate_number,
       driverPhone: row.driver_phone,
+      isSuperseded: row.is_superseded,
+      coveredByRemiseId: row.covered_by_remittance_id,
       controlCount: row.control_count || 0,
+      lastControlledAt: row.last_controlled_at,
+      cancelledAt: row.cancelled_at,
+      cancellationReason: row.cancellation_reason,
       createdAt: row.created_at,
     }));
 
@@ -1939,8 +1930,8 @@ app.post('/api/carnets/sync', requireAuth, async (req, res) => {
   }
 });
 
-// Attribution de carnet (Superviseur ou Admin)
-app.patch('/api/carnets/:id/assign', requireSupervisorOrAdmin, async (req, res) => {
+// Attribution de carnet (ADMINISTRATEUR STRICTEMENT)
+app.patch('/api/carnets/:id/assign', requireAdmin, async (req, res) => {
   try {
     if (!supabaseAdmin) throw new Error('Supabase non initialisé');
     const { id } = req.params;

@@ -1,22 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import {
   X,
+  AlertTriangle,
   Search,
-  FileSpreadsheet,
-  HandCoins,
+  User as UserIcon,
   Receipt,
-  User,
-  MapPin,
+  CheckCircle2,
   Calendar,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
-import { formatFCFA, formatDateTime } from '../../utils/normalization';
-import { exportVentesARemettreToExcel } from '../../utils/excelExport';
-import { RemiseFormModal } from './RemiseFormModal';
-import type { Sale } from '../../types';
-import { normalizeSectorId } from '../../db/supabaseService';
+import {
+  formatFCFA,
+  formatDateTime,
+  formatPlateDisplay,
+} from '../../utils/normalization';
+import { prioritizeUncoveredTicketsForActor } from '../../context/data/hooks/useRemittances';
 
 interface Props {
   isOpen: boolean;
@@ -30,330 +30,199 @@ export const VentesARemettreModal: React.FC<Props> = ({
   preselectedAgentId,
 }) => {
   const { currentUser } = useAuth();
-  const { tickets, sales, users } = useData();
+  const { tickets, carnets, users } = useData();
 
-  const [selectedAgentFilter, setSelectedAgentFilter] = useState<string>(preselectedAgentId || '');
-  const [selectedSectorFilter, setSelectedSectorFilter] = useState<string>('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [remiseModalAgentId, setRemiseModalAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState(preselectedAgentId || 'ALL');
+  const [search, setSearch] = useState('');
 
-  // Ventes / tickets vendus non encore couverts par une remise
-  const unremittedSales = useMemo(() => {
-    // Retrouver tous les tickets vendus sans remise associée
-    return tickets
-      .filter((t) => (t.status === 'SOLD' || t.status === 'CONTROLLED') && !t.coveredByRemiseId)
-      .map((t) => {
-        const sale = sales.find((s) => s.ticketId === t.id || s.ticketNumber === t.ticketNumber);
-        return {
-          ticketId: t.id,
-          ticketNumber: t.ticketNumber,
-          carnetNumber: t.carnetNumber,
-          plateNumber: t.plateNumber || sale?.plateNumber || '—',
-          soldAt: t.soldAt || sale?.soldAt || t.createdAt,
-          price: sale?.price || TICKET_PRICE_FCFA,
-          agentId: t.assignedAgentId || sale?.agentId || '',
-          agentName: t.assignedAgentName || sale?.agentName || 'Agent Inconnu',
-          sectorId: t.sectorId || sale?.sectorId,
-          sectorName: t.sectorName || sale?.sectorName || 'Secteur Non Défini',
-          driverPhone: t.driverPhone || sale?.driverPhone,
-          saleObj: sale,
-        };
-      })
-      .filter((item) => {
-        // Filtrage par rôle de l'utilisateur connecté
-        if (currentUser?.role === 'AGENT') {
-          if (item.agentId !== currentUser.id) return false;
-        } else if (currentUser?.role === 'RESPONSABLE') {
-          const respSector = normalizeSectorId(currentUser.sectorId, currentUser.sectorName);
-          const itemSector = normalizeSectorId(item.sectorId, item.sectorName);
-          if (respSector && itemSector && itemSector !== respSector) {
-            return false;
-          }
-        }
-
-        // Filtre Agent
-        if (selectedAgentFilter && item.agentId !== selectedAgentFilter) {
-          return false;
-        }
-
-        // Filtre Secteur
-        if (selectedSectorFilter && item.sectorId !== selectedSectorFilter) {
-          return false;
-        }
-
-        // Recherche par mot clé
-        if (searchTerm) {
-          const term = searchTerm.toLowerCase();
-          const matchTicket = item.ticketNumber.toLowerCase().includes(term);
-          const matchPlate = item.plateNumber.toLowerCase().includes(term);
-          const matchAgent = item.agentName.toLowerCase().includes(term);
-          return matchTicket || matchPlate || matchAgent;
-        }
-
-        return true;
-      })
-      .sort((a, b) => b.soldAt.localeCompare(a.soldAt));
-  }, [tickets, sales, currentUser, selectedAgentFilter, selectedSectorFilter, searchTerm]);
-
-  if (!isOpen) return null;
-
-  // Liste des agents éligibles selon le rôle de l'utilisateur
-  const eligibleAgents = users.filter((u) => {
-    if (u.role !== 'AGENT') return false;
-    if (currentUser?.role === 'RESPONSABLE') {
-      return !currentUser.sectorId || u.sectorId === currentUser.sectorId;
+  React.useEffect(() => {
+    if (isOpen) {
+      setSelectedAgentId(preselectedAgentId || 'ALL');
     }
-    return true;
-  });
+  }, [isOpen, preselectedAgentId]);
 
-  const totalTickets = unremittedSales.length;
-  const totalExpectedAmount = totalTickets * TICKET_PRICE_FCFA;
+  const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+  const isResponsable = currentUser?.role === 'RESPONSABLE';
+  const isAgent = currentUser?.role === 'AGENT';
 
-  const handleExportExcel = () => {
-    // Créer des objets format Sale pour l'exportateur
-    const salesForExport: Sale[] = unremittedSales.map((item) => ({
-      id: item.ticketId,
-      ticketId: item.ticketId,
-      ticketNumber: item.ticketNumber,
-      agentId: item.agentId,
-      agentName: item.agentName,
-      sectorId: item.sectorId || '',
-      sectorName: item.sectorName,
-      plateNumber: item.plateNumber,
-      driverPhone: item.driverPhone,
-      soldAt: item.soldAt,
-      price: item.price,
-      gpsLatitude: null,
-      gpsLongitude: null,
-      gpsAccuracy: null,
-      gpsStatus: 'UNAVAILABLE',
-      syncStatus: 'SYNCED',
-    }));
-    exportVentesARemettreToExcel(salesForExport);
-  };
+  const agents = useMemo(() => {
+    return users.filter((u) => u.role === 'AGENT' && u.isActive);
+  }, [users]);
+
+  const uncoveredTickets = useMemo(() => {
+    if (!currentUser || (!isAdmin && !isResponsable && !isAgent)) return [];
+    const allUncovered = tickets.filter((t) => {
+      const isSold = t.status === 'SOLD' || t.status === 'CONTROLLED';
+      if (!isSold || t.coveredByRemiseId) return false;
+      if (isAgent && t.assignedAgentId !== currentUser.id) return false;
+      if (!isAgent && selectedAgentId !== 'ALL' && t.assignedAgentId !== selectedAgentId)
+        return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const matchNum = t.ticketNumber.toLowerCase().includes(q);
+        const matchPlate = (t.plateNumber || '').toLowerCase().includes(q);
+        const matchAgent = (t.assignedAgentName || '').toLowerCase().includes(q);
+        return matchNum || matchPlate || matchAgent;
+      }
+      return true;
+    });
+
+    if (isAgent) {
+      return allUncovered;
+    }
+
+    return prioritizeUncoveredTicketsForActor(allUncovered, carnets, currentUser);
+  }, [tickets, carnets, currentUser, isAdmin, isResponsable, isAgent, selectedAgentId, search]);
+
+  if (!isOpen || !currentUser || (!isAdmin && !isResponsable && !isAgent)) return null;
+
+  const totalPendingAmount = uncoveredTickets.length * TICKET_PRICE_FCFA;
 
   return (
-    <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-xs">
-        <div className="w-full max-w-6xl rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6 shadow-2xl text-slate-100 max-h-[94vh] flex flex-col">
-          {/* En-tête */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 overflow-y-auto backdrop-blur-xs">
+      <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900 p-4 sm:p-6 shadow-2xl text-slate-100 max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
             <div>
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
-                  <Receipt className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base sm:text-lg font-bold text-white">
-                    Ventes à Remettre (Recettes Non Couvertes)
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Registre des tickets vendus sur le terrain en attente de versement financier
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 self-end sm:self-center">
-              <button
-                onClick={handleExportExcel}
-                disabled={totalTickets === 0}
-                className="flex items-center gap-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/30 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-600/30 transition disabled:opacity-40 cursor-pointer"
-                title="Exporter la liste vers Excel"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Export Excel</span>
-              </button>
-
-              {(currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'ADMINISTRATEUR') && (
-                <button
-                  onClick={() => setRemiseModalAgentId(selectedAgentFilter || eligibleAgents[0]?.id || '')}
-                  className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-md cursor-pointer"
-                >
-                  <HandCoins className="w-4 h-4" />
-                  <span>Encaisser Remise</span>
-                </button>
-              )}
-
-              <button
-                onClick={onClose}
-                className="rounded-xl p-2 text-slate-400 hover:text-white hover:bg-slate-800 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Bandeau de synthèse globale */}
-          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5">
-              <span className="text-[10px] uppercase font-bold text-slate-500">Tickets Non Couverts</span>
-              <p className="text-xl sm:text-2xl font-black text-amber-400 font-mono mt-0.5">
-                {totalTickets}
-              </p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Tickets vendus à recouvrer</p>
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3.5">
-              <span className="text-[10px] uppercase font-bold text-slate-500">Montant Total Attendu</span>
-              <p className="text-xl sm:text-2xl font-black text-white font-mono mt-0.5">
-                {formatFCFA(totalExpectedAmount)}
-              </p>
-              <p className="text-[11px] text-emerald-400 font-medium mt-0.5">
-                Tarif fixe : 5 000 FCFA / unité
-              </p>
-            </div>
-
-            <div className="col-span-2 sm:col-span-1 rounded-xl border border-slate-800 bg-slate-950 p-3.5 flex flex-col justify-center">
-              <span className="text-[10px] uppercase font-bold text-slate-500">Statut de Recouvrement</span>
-              <p className="text-sm font-bold text-slate-200 mt-1 flex items-center gap-1.5">
-                <span className={`h-2.5 w-2.5 rounded-full ${totalTickets > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
-                {totalTickets > 0 ? `${totalTickets} ticket(s) en attente de remise` : 'Aucun versement en attente'}
+              <h3 className="text-base font-bold text-white">
+                Détail des Ventes Non Couvertes par une Remise ({uncoveredTickets.length})
+              </h3>
+              <p className="text-xs text-slate-400">
+                Tickets vendus sur le terrain dont les fonds (5 000 FCFA/ticket) sont en attente de versement
               </p>
             </div>
           </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-          {/* Barre de filtres et recherche */}
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Rechercher par ticket, plaque ou agent..."
-                className="w-full rounded-xl border border-slate-700 bg-slate-800/90 py-2.5 pl-9 pr-3 text-xs text-white focus:outline-hidden focus:border-blue-500"
-              />
-            </div>
-
-            {currentUser?.role !== 'AGENT' && (
-              <div>
-                <select
-                  value={selectedAgentFilter}
-                  onChange={(e) => setSelectedAgentFilter(e.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800/90 py-2.5 px-3 text-xs text-white focus:outline-hidden focus:border-blue-500"
-                >
-                  <option value="">Tous les agents ({eligibleAgents.length})</option>
-                  {eligibleAgents.map((ag) => (
-                    <option key={ag.id} value={ag.id}>
-                      {ag.fullName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {currentUser?.role === 'ADMINISTRATEUR' && (
-              <div>
-                <select
-                  value={selectedSectorFilter}
-                  onChange={(e) => setSelectedSectorFilter(e.target.value)}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800/90 py-2.5 px-3 text-xs text-white focus:outline-hidden focus:border-blue-500"
-                >
-                  <option value="">Tous les secteurs</option>
-                  <option value="sec-vridi-port">VRIDI PORT</option>
-                  <option value="sec-zone-indus">ZONE INDUSTRIELLE</option>
-                  <option value="sec-autoroute-nord">AUTOROUTE DU NORD</option>
-                  <option value="sec-gesco">GESCO</option>
-                </select>
-              </div>
-            )}
+        {/* Résumé financier */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 flex items-center justify-between">
+            <span className="text-xs text-slate-400 font-semibold">
+              Tickets Vendus Non Versés :
+            </span>
+            <span className="text-base font-black text-amber-400 font-mono">
+              {uncoveredTickets.length} ticket(s)
+            </span>
           </div>
-
-          {/* Tableau des Ventes à Remettre */}
-          <div className="mt-4 flex-1 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400">
-                <tr>
-                  <th className="py-3 px-3">N° Ticket</th>
-                  <th className="py-3 px-3">Immatriculation</th>
-                  <th className="py-3 px-3">Date & Heure Vente</th>
-                  <th className="py-3 px-3">Agent Vendeur</th>
-                  <th className="py-3 px-3">Secteur</th>
-                  <th className="py-3 px-3 text-right">Montant</th>
-                  <th className="py-3 px-3 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
-                {unremittedSales.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-500 font-sans">
-                      <Receipt className="w-8 h-8 mx-auto mb-2 text-slate-600" />
-                      Aucune vente à remettre pour les critères sélectionnés.
-                    </td>
-                  </tr>
-                ) : (
-                  unremittedSales.map((item) => (
-                    <tr key={item.ticketId} className="hover:bg-slate-900/60 transition">
-                      <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
-                        <span className="rounded bg-slate-800 border border-slate-700 px-2 py-0.5 text-xs text-emerald-400">
-                          {item.ticketNumber}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 whitespace-nowrap">
-                        <span className="rounded bg-slate-900 border border-slate-700 px-2 py-0.5 text-xs font-bold text-white">
-                          {item.plateNumber}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap font-sans text-[11px]">
-                        {formatDateTime(item.soldAt)}
-                      </td>
-                      <td className="py-2.5 px-3 font-sans text-slate-200 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>{item.agentName}</span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 font-sans text-slate-400 whitespace-nowrap text-[11px]">
-                        <div className="flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-                          <span>{item.sectorName}</span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-bold text-white whitespace-nowrap">
-                        {formatFCFA(item.price)}
-                      </td>
-                      <td className="py-2.5 px-3 text-center whitespace-nowrap font-sans">
-                        {(currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'ADMINISTRATEUR') && (
-                          <button
-                            onClick={() => setRemiseModalAgentId(item.agentId)}
-                            className="rounded-lg bg-emerald-600/20 border border-emerald-500/30 px-2.5 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/30 transition cursor-pointer"
-                          >
-                            Encaisser
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Pied de page du modal */}
-          <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <div>
-              Total : <strong className="text-white font-mono">{totalTickets}</strong> ticket(s) • Total dû :{' '}
-              <strong className="text-emerald-400 font-mono">{formatFCFA(totalExpectedAmount)}</strong>
-            </div>
-            <button
-              onClick={onClose}
-              className="rounded-xl bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
-            >
-              Fermer
-            </button>
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between">
+            <span className="text-xs text-amber-300 font-semibold">
+              Montant Total Attendu en Caisse :
+            </span>
+            <span className="text-base font-black text-amber-300 font-mono">
+              {formatFCFA(totalPendingAmount)}
+            </span>
           </div>
         </div>
-      </div>
 
-      {/* Modal d'encaissement direct d'une remise */}
-      {remiseModalAgentId && (
-        <RemiseFormModal
-          isOpen={true}
-          onClose={() => setRemiseModalAgentId(null)}
-          preselectedAgentId={remiseModalAgentId}
-        />
-      )}
-    </>
+        {/* Filtres */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher par numéro de ticket, plaque ou agent..."
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-500 focus:outline-hidden"
+            />
+          </div>
+
+          {!isAgent && (
+            <select
+              value={selectedAgentId}
+              onChange={(e) => setSelectedAgentId(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-hidden"
+            >
+              <option value="ALL">Tous les agents ({agents.length})</option>
+              {agents.map((ag) => (
+                <option key={ag.id} value={ag.id}>
+                  {ag.fullName}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Liste des tickets */}
+        <div className="mt-3 flex-1 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/60">
+          <table className="w-full text-left text-xs text-slate-300">
+            <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400">
+              <tr>
+                <th className="py-2.5 px-3">N° Ticket</th>
+                <th className="py-2.5 px-3">Carnet</th>
+                <th className="py-2.5 px-3">Immatriculation</th>
+                <th className="py-2.5 px-3">Agent Percepteur</th>
+                <th className="py-2.5 px-3">Date &amp; Heure Vente</th>
+                <th className="py-2.5 px-3 text-right">Montant Dû</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60 font-mono">
+              {uncoveredTickets.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center text-slate-500 font-sans">
+                    <div className="flex flex-col items-center gap-1.5">
+                      <CheckCircle2 className="w-7 h-7 text-emerald-500/60" />
+                      <span>Aucun ticket vendu en attente de remise pour cette sélection.</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                uncoveredTickets.map((t) => (
+                  <tr key={t.id} className="hover:bg-slate-900/60 transition">
+                    <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <Receipt className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{t.ticketNumber}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
+                      {t.carnetNumber}
+                    </td>
+                    <td className="py-2.5 px-3 font-bold text-emerald-400 whitespace-nowrap">
+                      {t.plateNumber ? formatPlateDisplay(t.plateNumber) : '—'}
+                    </td>
+                    <td className="py-2.5 px-3 font-sans text-slate-200 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <UserIcon className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{t.assignedAgentName || 'Agent'}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-slate-500" />
+                        <span>{formatDateTime(t.soldAt)}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-bold text-amber-400 whitespace-nowrap">
+                      {formatFCFA(t.price || TICKET_PRICE_FCFA)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-4 flex justify-end border-t border-slate-800 pt-3">
+          <button
+            onClick={onClose}
+            className="rounded-xl bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
+          >
+            Fermer
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };

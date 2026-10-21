@@ -11,25 +11,25 @@ import {
   Search,
   Check,
   Receipt,
-  History,
   Printer,
+  AlertOctagon,
+  MessageCircle,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { StatCard } from './StatCard';
-import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
-import { getTicketValidityStatus } from '../../utils/expiration';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
+import { generateWhatsAppReceiptUrl } from '../../utils/cedeao';
+import { showToast } from '../common/ToastNotification';
 import type { Sale } from '../../types';
 
-// Modales
+// Modales strictement autorisées pour l'Agent
 import { SaleFormModal } from '../sales/SaleFormModal';
 import { SalesListModal } from '../sales/SalesListModal';
-import { TicketListModal } from '../tickets/TicketListModal';
 import { VentesARemettreModal } from '../remises/VentesARemettreModal';
-import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
+import { FraudReportModal } from '../controls/FraudReportModal';
 
 export const AgentDashboard: React.FC = () => {
   const { currentUser } = useAuth();
@@ -45,15 +45,36 @@ export const AgentDashboard: React.FC = () => {
     syncOfflineQueue,
     isOnline,
     isSyncing,
+    triggerSOSAlert,
   } = useData();
 
   const [saleModalOpen, setSaleModalOpen] = useState(false);
   const [salesListOpen, setSalesListOpen] = useState(false);
-  const [ticketsListOpen, setTicketsListOpen] = useState(false);
   const [ventesModalOpen, setVentesModalOpen] = useState(false);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [incidentModalOpen, setIncidentModalOpen] = useState(false);
   const [selectedTicketForSale, setSelectedTicketForSale] = useState<string | undefined>(undefined);
   const [printingTicketId, setPrintingTicketId] = useState<string | null>(null);
+
+  const handleTriggerSOS = async () => {
+    if (!currentUser) return;
+    try {
+      await triggerSOSAlert(
+        `Alerte SOS Urgence Terrain déclenchée par l'agent ${currentUser.fullName} — Zone Portuaire Abidjan.`
+      );
+      showToast(
+        'error',
+        '🚨 ALERTE SOS TRANSMISE',
+        'Votre position GPS et votre alerte ont été transmises au centre de supervision U.J.P.A.S.'
+      );
+    } catch {
+      showToast(
+        'warning',
+        'Alerte SOS locale enregistrée',
+        'Signalement enregistré localement et mis en file de synchronisation prioritaire.'
+      );
+    }
+    setIncidentModalOpen(true);
+  };
 
   const handlePrintReceipt = async (sale: Sale) => {
     setPrintingTicketId(sale.id);
@@ -158,7 +179,6 @@ export const AgentDashboard: React.FC = () => {
       window.removeEventListener('portus-notification-clicked', handleNotificationClicked);
   }, []);
 
-  // Filtrage des tickets personnels de l'agent
   const [ticketFilterTab, setTicketFilterTab] = useState<'ALL' | 'AVAILABLE' | 'SOLD'>('ALL');
   const [ticketSearch, setTicketSearch] = useState('');
 
@@ -186,27 +206,16 @@ export const AgentDashboard: React.FC = () => {
         unremittedTicketsCount: 0,
       };
 
-  const hasThresholdAlert = stats.unremittedTicketsCount >= 10;
-
-  // Ventes personnelles de l'agent
-  const agentSales = useMemo(() => {
-    return sales.filter((s) => s.agentId === currentUser?.id);
-  }, [sales, currentUser]);
-
   // Notifications personnelles de l'agent
-  const agentNotifications = useMemo(() => {
+  const unreadNotifications = useMemo(() => {
     if (!currentUser) return [];
-    return notifications.filter((n) => n.recipientId === currentUser.id);
+    return notifications.filter((n) => n.recipientId === currentUser.id && !n.isRead);
   }, [notifications, currentUser]);
 
-  const unreadNotifications = useMemo(() => {
-    return agentNotifications.filter((n) => !n.isRead);
-  }, [agentNotifications]);
-
-  // RÈGLE MÉTIER : L'agent ne voit STRICTEMENT que ses propres tickets
+  // L'agent ne voit strictement que ses propres tickets
   const myTickets = useMemo(() => {
     if (!currentUser) return [];
-    return tickets.filter((t) => t.assignedAgentId === currentUser.id);
+    return tickets.filter((t) => t.assignedAgentId === currentUser.id && t.status !== 'CANCELLED');
   }, [tickets, currentUser]);
 
   const availableTickets = useMemo(() => {
@@ -216,6 +225,12 @@ export const AgentDashboard: React.FC = () => {
   const soldTickets = useMemo(() => {
     return myTickets.filter((t) => t.status === 'SOLD' || t.status === 'CONTROLLED');
   }, [myTickets]);
+
+  // Ventes personnelles du jour et globales de l'agent uniquement
+  const mySales = useMemo(() => {
+    if (!currentUser) return [];
+    return sales.filter((s) => s.agentId === currentUser.id);
+  }, [sales, currentUser]);
 
   const displayedTickets = useMemo(() => {
     return myTickets.filter((t) => {
@@ -244,9 +259,7 @@ export const AgentDashboard: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-4xl px-3 py-4 sm:px-6 space-y-5">
-      {/* ========================================================================= */}
-      {/* NOTIFICATIONS PERSISTANTES DE L'AGENT                                     */}
-      {/* ========================================================================= */}
+      {/* Notifications Persistantes de l'Agent */}
       {unreadNotifications.length > 0 && (
         <div className="rounded-2xl border border-blue-500/40 bg-linear-to-r from-blue-950/90 via-slate-900 to-slate-900 p-4 shadow-xl text-blue-100 space-y-3">
           <div className="flex items-center justify-between">
@@ -303,11 +316,9 @@ export const AgentDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* BANNIÈRE DE STATUT DE SYNCHRONISATION HORS LIGNE / EN LIGNE               */}
-      {/* ========================================================================= */}
+      {/* Bannière de statut de synchronisation hors-ligne */}
       {lastSyncedSaleNumber && (
-        <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 p-3.5 flex items-center justify-between animate-fadeIn text-emerald-300">
+        <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 p-3.5 flex items-center justify-between text-emerald-300">
           <div className="flex items-center gap-2 font-bold text-xs">
             <CheckCircle2 className="w-5 h-5 text-emerald-400" />
             <span>🟢 VENTE SYNCHRONISÉE AVEC SUCCÈS ({lastSyncedSaleNumber})</span>
@@ -321,11 +332,10 @@ export const AgentDashboard: React.FC = () => {
             <Clock className="w-5 h-5 text-amber-400 shrink-0 animate-pulse" />
             <div>
               <p className="text-xs font-bold">
-                🟠 {pendingSyncCount} VENTE(S) HORS LIGNE ENREGISTRÉE(S) — SYNCHRONISATION EN
-                ATTENTE
+                🟠 {pendingSyncCount} VENTE(S) HORS LIGNE EN ATTENTE DE SYNCHRONISATION
               </p>
               <p className="text-[11px] text-amber-300/80">
-                Vos ventes sont sécurisées localement. La date originale de vente sera préservée.
+                Vos ventes sont sécurisées localement dans IndexedDB.
               </p>
             </div>
           </div>
@@ -343,47 +353,41 @@ export const AgentDashboard: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* BLOC 1 : INDICATEURS CLÉS DE PERFORMANCE (KPIs AGENT)                     */}
+      {/* 1. COMPTEURS PERSONNELS DE L'AGENT                                        */}
       {/* ========================================================================= */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
             <TicketIcon className="w-4 h-4 text-orange-400" />
-            <span>Bloc 1 — Vos Indicateurs Terrain</span>
+            <span>Mes Compteurs Personnels ({currentUser?.fullName})</span>
           </h3>
-          <span className="text-[11px] text-slate-500 font-mono">Agent Connecté</span>
+          <span className="text-[11px] text-slate-400 font-mono">
+            Tarif Unique : {formatFCFA(TICKET_PRICE_FCFA)}
+          </span>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <StatCard
-            title="Stock en Main"
+            title="Tickets en Main"
             value={stats.availableCount}
-            subtitle="Tickets prêts à être vendus"
+            subtitle="Prêts à être vendus"
             icon={<TicketIcon className="w-4 h-4" />}
             variant="blue"
-            onClick={() => setTicketsListOpen(true)}
+            onClick={() => handleSetFilterTab('AVAILABLE')}
           />
           <StatCard
-            title="Ventes Effectuées"
+            title="Tickets Vendus"
             value={stats.ticketsSold}
-            subtitle={`Valeur: ${formatFCFA(stats.totalSalesAmount)}`}
+            subtitle={`Total : ${formatFCFA(stats.totalSalesAmount)}`}
             icon={<Receipt className="w-4 h-4" />}
             variant="emerald"
             onClick={() => setSalesListOpen(true)}
           />
           <StatCard
-            title="Remises Versées"
-            value={formatFCFA(stats.remittedAmount)}
-            subtitle="Encaissement validé"
-            icon={<Banknote className="w-4 h-4" />}
-            variant="blue"
-            onClick={() => setVentesModalOpen(true)}
-          />
-          <StatCard
-            title="Solde à Remettre"
+            title="Montant à Remettre"
             value={formatFCFA(stats.remainingBalance)}
             subtitle={`${stats.unremittedTicketsCount} ticket(s) non versé(s)`}
-            icon={<AlertTriangle className="w-4 h-4" />}
+            icon={<Banknote className="w-4 h-4" />}
             variant={stats.unremittedTicketsCount >= 10 ? 'amber' : 'slate'}
             onClick={() => setVentesModalOpen(true)}
           />
@@ -391,184 +395,64 @@ export const AgentDashboard: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* BLOC 2 : ACTIONS TERRAIN IMMÉDIATES (2 Grands Boutons Distincts)          */}
+      {/* 2. ACTIONS TERRAIN DE L'AGENT : VENDRE UN TICKET & SOS / INCIDENT         */}
       {/* ========================================================================= */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-            <ShoppingCart className="w-4 h-4 text-orange-400" />
-            <span>Bloc 2 — Actions Terrain Immédiates</span>
-          </h3>
-          <span className="text-[11px] text-slate-500">Guichet Mobile U.J.P.A.S.</span>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+        {/* BOUTON PRINCIPAL 1 : VENDRE UN TICKET */}
+        <button
+          id="btn-agent-new-sale"
+          onClick={() => handleStartSale()}
+          disabled={stats.availableCount === 0}
+          className="relative overflow-hidden rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-amber-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-orange-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-orange-400/40 group disabled:opacity-50"
+        >
+          <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
+            <ShoppingCart className="w-16 h-16 text-white" />
+          </div>
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+              <ShoppingCart className="w-6 h-6" />
+            </div>
+            <div>
+              <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                Guichet Terrain {formatFCFA(TICKET_PRICE_FCFA)}
+              </span>
+              <h4 className="text-lg sm:text-xl font-black text-white">Vendre un Ticket</h4>
+              <p className="text-xs text-orange-100/90 mt-0.5">
+                Auto-complétion plaque, reçu QR Code &amp; envoi WhatsApp
+              </p>
+            </div>
+          </div>
+        </button>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-          {/* BOUTON LARGE 1 : NOUVELLE VENTE TICKET */}
-          <button
-            id="btn-agent-new-sale"
-            onClick={() => handleStartSale()}
-            disabled={stats.availableCount === 0}
-            className="relative overflow-hidden rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-amber-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-orange-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-orange-400/40 group disabled:opacity-50"
-          >
-            <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
-              <ShoppingCart className="w-16 h-16 text-white" />
+        {/* BOUTON PRINCIPAL 2 : SIGNALER UN INCIDENT / SOS */}
+        <button
+          id="btn-agent-sos"
+          onClick={handleTriggerSOS}
+          className="relative overflow-hidden rounded-2xl bg-linear-to-r from-rose-700 via-rose-600 to-red-600 p-4 sm:p-5 text-left text-white shadow-xl shadow-rose-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-rose-400/40 group"
+        >
+          <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
+            <AlertOctagon className="w-16 h-16 text-white" />
+          </div>
+          <div className="relative z-10 flex items-center gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+              <AlertOctagon className="w-6 h-6 animate-pulse" />
             </div>
-            <div className="relative z-10 flex items-center gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
-                <ShoppingCart className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
-                  Guichet 2 500 FCFA
-                </span>
-                <h4 className="text-lg sm:text-xl font-black text-white">Nouvelle Vente Ticket</h4>
-                <p className="text-xs text-orange-100/90 mt-0.5">
-                  Émettre un ticket poids lourd &amp; imprimer le reçu QR Code
-                </p>
-              </div>
+            <div>
+              <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                Assistance &amp; Sécurité U.J.P.A.S.
+              </span>
+              <h4 className="text-lg sm:text-xl font-black text-white">
+                🚨 Signaler un Incident / SOS
+              </h4>
+              <p className="text-xs text-rose-100/90 mt-0.5">
+                Alerter immédiatement la supervision ou déclarer un incident terrain
+              </p>
             </div>
-          </button>
-
-          {/* BOUTON LARGE 2 : VERSER MES REMISES */}
-          <button
-            onClick={() => setVentesModalOpen(true)}
-            className="relative overflow-hidden rounded-2xl bg-linear-to-r from-emerald-600 via-emerald-500 to-teal-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-emerald-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-emerald-400/40 group"
-          >
-            <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
-              <Banknote className="w-16 h-16 text-white" />
-            </div>
-            <div className="relative z-10 flex items-center gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
-                <Banknote className="w-6 h-6" />
-              </div>
-              <div>
-                <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
-                  Versement Recettes
-                </span>
-                <h4 className="text-lg sm:text-xl font-black text-white">Verser mes Remises</h4>
-                <p className="text-xs text-emerald-100/90 mt-0.5">
-                  Déclarer les encaissements à verser au responsable ou administrateur
-                </p>
-              </div>
-            </div>
-          </button>
-        </div>
+          </div>
+        </button>
       </div>
 
-      {/* ========================================================================= */}
-      {/* BLOC 3 : GRILLE DE GESTION SECONDAIRE (Grid 2 ou 4 Colonnes Propre)        */}
-      {/* ========================================================================= */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-            <TicketIcon className="w-4 h-4 text-purple-400" />
-            <span>Bloc 3 — Consultation &amp; Historique</span>
-          </h3>
-          <span className="text-[11px] text-slate-500">Outils Agent</span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          {/* 1. Mon Stock de Tickets */}
-          <div
-            onClick={() => setTicketsListOpen(true)}
-            className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-blue-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 group-hover:scale-110 transition">
-                <TicketIcon className="w-5 h-5" />
-              </div>
-              <span className="text-[10px] font-bold rounded-full bg-blue-500/20 text-blue-300 px-2 py-0.5 border border-blue-500/30">
-                {stats.availableCount} ticket(s)
-              </span>
-            </div>
-            <div className="mt-3">
-              <h4 className="text-xs font-black text-white group-hover:text-blue-400 transition">
-                Stock de Tickets
-              </h4>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                Liste des numéros attribués
-              </p>
-            </div>
-          </div>
-
-          {/* 2. Historique des Ventes */}
-          <div
-            onClick={() => setSalesListOpen(true)}
-            className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-emerald-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 group-hover:scale-110 transition">
-                <Receipt className="w-5 h-5" />
-              </div>
-              <span className="text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 border border-emerald-500/30">
-                {stats.ticketsSold} vente(s)
-              </span>
-            </div>
-            <div className="mt-3">
-              <h4 className="text-xs font-black text-white group-hover:text-emerald-400 transition">
-                Mes Ventes
-              </h4>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                Reçus &amp; réimpressions
-              </p>
-            </div>
-          </div>
-
-          {/* 3. Synchroniser Hors-Ligne */}
-          <div
-            onClick={() => {
-              if (pendingSyncCount > 0 && isOnline) {
-                syncOfflineQueue();
-              }
-            }}
-            className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-amber-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 group-hover:scale-110 transition">
-                <RefreshCw className={`w-5 h-5 ${isSyncing ? 'animate-spin' : ''}`} />
-              </div>
-              <span className="text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 border border-amber-500/30">
-                {pendingSyncCount} en attente
-              </span>
-            </div>
-            <div className="mt-3">
-              <h4 className="text-xs font-black text-white group-hover:text-amber-400 transition">
-                Synchro Hors-Ligne
-              </h4>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                {pendingSyncCount > 0 ? 'Envois en attente' : 'Réseau à jour'}
-              </p>
-            </div>
-          </div>
-
-          {/* 4. Recherche & Contrôle */}
-          <div
-            onClick={() => setSearchModalOpen(true)}
-            className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-purple-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 group-hover:scale-110 transition">
-                <Search className="w-5 h-5" />
-              </div>
-              <span className="text-[10px] font-bold rounded-full bg-purple-500/20 text-purple-300 px-2 py-0.5 border border-purple-500/30">
-                Plaque / Ticket
-              </span>
-            </div>
-            <div className="mt-3">
-              <h4 className="text-xs font-black text-white group-hover:text-purple-400 transition">
-                Rechercher Vente
-              </h4>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                Vérifier une plaque ou un reçu
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* AVERTISSEMENT REMISE FINANCIÈRE (NON BLOQUANT POUR LA VENTE)              */}
-      {/* ========================================================================= */}
+      {/* Avertissement Remise Financière (Non bloquant pour la vente) */}
       {stats.unremittedTicketsCount >= 10 && (
         <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 space-y-1 text-xs text-amber-200">
           <div className="flex items-center gap-2 font-bold text-amber-300">
@@ -578,190 +462,31 @@ export const AgentDashboard: React.FC = () => {
           <p className="text-[11px] text-amber-200/90 leading-relaxed">
             Vous avez atteint{' '}
             <strong>{stats.unremittedTicketsCount} tickets vendus non encore régularisés</strong>{' '}
-            (Solde dû : <strong>{formatFCFA(stats.remainingBalance)}</strong>). Veuillez effectuer
-            votre versement dès que possible.
-          </p>
-          <p className="text-[10px] text-emerald-400 font-semibold pt-1">
-            ✓ Vous pouvez continuer vos ventes normalement sur le terrain.
+            (Solde dû : <strong>{formatFCFA(stats.remainingBalance)}</strong>). Veuillez remettre
+            vos recettes à votre Responsable ou à l'Administrateur.
           </p>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 8 KPIS PERSONNELS AGENT                                                   */}
-      {/* ========================================================================= */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
-        <StatCard
-          title="Tickets Disponibles"
-          value={availableTickets.length}
-          subtitle="Prêts à être vendus"
-          icon={<TicketIcon className="w-4 h-4" />}
-          variant="emerald"
-          onClick={() => handleSetFilterTab('AVAILABLE')}
-        />
-
-        <StatCard
-          title="Tickets Vendus"
-          value={soldTickets.length}
-          subtitle="Ventes enregistrées"
-          icon={<CheckCircle2 className="w-4 h-4" />}
-          variant="blue"
-          onClick={() => handleSetFilterTab('SOLD')}
-        />
-
-        <StatCard
-          title="Valeur des Ventes"
-          value={formatFCFA(stats.expectedAmount)}
-          subtitle={`${soldTickets.length} × 5 000 FCFA`}
-          icon={<Receipt className="w-4 h-4" />}
-          variant="emerald"
-          onClick={() => handleSetFilterTab('SOLD')}
-        />
-
-        <StatCard
-          title="Montant Remis"
-          value={formatFCFA(stats.remittedAmount)}
-          subtitle="Versé au superviseur"
-          icon={<Banknote className="w-4 h-4" />}
-          variant="blue"
-        />
-
-        <StatCard
-          title="Solde Restant"
-          value={formatFCFA(stats.remainingBalance)}
-          subtitle={stats.ecart > 0 ? `Écart : +${formatFCFA(stats.ecart)}` : 'À régulariser'}
-          icon={<AlertTriangle className="w-4 h-4" />}
-          variant={stats.remainingBalance > 0 ? 'amber' : 'slate'}
-          onClick={() => setVentesModalOpen(true)}
-        />
-
-        <StatCard
-          title="Ventes à Remettre"
-          value={stats.unremittedTicketsCount}
-          subtitle={`Valeur : ${formatFCFA(stats.unremittedTicketsCount * TICKET_PRICE_FCFA)}`}
-          icon={<Receipt className="w-4 h-4" />}
-          variant={stats.unremittedTicketsCount > 0 ? 'amber' : 'slate'}
-          onClick={() => setVentesModalOpen(true)}
-        />
-
-        <StatCard
-          title="Alertes Financières"
-          value={hasThresholdAlert ? 1 : 0}
-          subtitle={hasThresholdAlert ? 'Seuil 10+ dépassé' : 'Situation normale'}
-          icon={<AlertTriangle className="w-4 h-4" />}
-          variant={hasThresholdAlert ? 'amber' : 'slate'}
-          onClick={() => setVentesModalOpen(true)}
-        />
-
-        <StatCard
-          title="Historique Ventes"
-          value={agentSales.length}
-          subtitle="Consulter les reçus"
-          icon={<History className="w-4 h-4" />}
-          variant="slate"
-          onClick={() => setSalesListOpen(true)}
-        />
-      </div>
-
-      {/* ========================================================================= */}
-      {/* BILAN FINANCIER PERSONNEL DE L'AGENT                                      */}
-      {/* ========================================================================= */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 shadow-sm space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-          <div className="flex items-center gap-2">
-            <Banknote className="w-5 h-5 text-emerald-400" />
-            <div>
-              <h3 className="text-sm font-bold text-white">Mon Bilan Financier Personnel</h3>
-              <p className="text-[11px] text-slate-400">
-                Tarif fixe : {formatFCFA(TICKET_PRICE_FCFA)} • Calcul automatique strict
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => setVentesModalOpen(true)}
-            className="flex items-center justify-center gap-1.5 rounded-xl bg-amber-500/20 border border-amber-500/30 px-3.5 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-500/30 transition cursor-pointer"
-          >
-            <Receipt className="w-4 h-4" />
-            <span>Ventes à Remettre ({stats.unremittedTicketsCount})</span>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Tickets Vendus</span>
-            <p className="text-base sm:text-lg font-black text-white font-mono mt-0.5">
-              {stats.soldCount}
-            </p>
-            <p className="text-[10px] text-slate-400">Ventes enregistrées</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Montant Attendu</span>
-            <p className="text-base sm:text-lg font-black text-white font-mono mt-0.5">
-              {formatFCFA(stats.expectedAmount)}
-            </p>
-            <p className="text-[10px] text-slate-400">{stats.soldCount} × 5 000 FCFA</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Montant Remis</span>
-            <p className="text-base sm:text-lg font-black text-emerald-400 font-mono mt-0.5">
-              {formatFCFA(stats.remittedAmount)}
-            </p>
-            <p className="text-[10px] text-slate-400">Versé au superviseur</p>
-          </div>
-
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Solde Restant</span>
-            <p
-              className={`text-base sm:text-lg font-black font-mono mt-0.5 ${
-                stats.remainingBalance > 0 ? 'text-amber-400' : 'text-slate-400'
-              }`}
-            >
-              {formatFCFA(stats.remainingBalance)}
-            </p>
-            <p className="text-[10px] text-slate-400">
-              {stats.remainingBalance > 0
-                ? `${stats.unremittedTicketsCount} ticket(s) dû(s)`
-                : 'Régularisé'}
-            </p>
-          </div>
-
-          <div className="col-span-2 sm:col-span-1 rounded-xl border border-slate-800 bg-slate-950 p-2.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">Écart</span>
-            <p
-              className={`text-base sm:text-lg font-black font-mono mt-0.5 ${
-                stats.ecart > 0 ? 'text-emerald-400' : 'text-slate-500'
-              }`}
-            >
-              {stats.ecart > 0 ? `+${formatFCFA(stats.ecart)}` : '—'}
-            </p>
-            <p className="text-[10px] text-slate-400">
-              {stats.ecart > 0 ? 'Excédent versé' : 'Aucun écart'}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* SECTION DÉDIÉE : MES TICKETS CONFIÉS                                      */}
+      {/* 3. MES TICKETS & MES VENTES DU JOUR                                       */}
       {/* ========================================================================= */}
       <div
         id="ticket-section"
-        className="rounded-2xl border border-slate-800 bg-slate-900/95 p-5 shadow-sm space-y-4"
+        className="rounded-2xl border border-slate-800 bg-slate-900/95 p-4 sm:p-5 shadow-sm space-y-4"
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <TicketIcon className="w-4 h-4 text-emerald-400" />
-              <span>Mes Tickets Confiés ({myTickets.length})</span>
+              <span>Mes Tickets &amp; Mes Ventes ({myTickets.length})</span>
             </h3>
             <p className="text-[11px] text-slate-400">
-              Visualisation exclusive de votre stock personnel de tickets
+              Liste de vos propres tickets restants et vendus • Reçus WhatsApp &amp; Impression
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setTicketFilterTab('ALL')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
@@ -780,7 +505,7 @@ export const AgentDashboard: React.FC = () => {
                   : 'bg-slate-800 text-slate-400 hover:text-white'
               }`}
             >
-              Disponibles ({availableTickets.length})
+              Restants ({availableTickets.length})
             </button>
             <button
               onClick={() => setTicketFilterTab('SOLD')}
@@ -792,67 +517,99 @@ export const AgentDashboard: React.FC = () => {
             >
               Vendus ({soldTickets.length})
             </button>
+            <button
+              onClick={() => setSalesListOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 transition cursor-pointer"
+            >
+              Historique Reçus ({mySales.length})
+            </button>
           </div>
         </div>
 
-        {/* Barre de recherche ticket */}
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Rechercher par numéro de ticket, carnet..."
+            placeholder="Filtrer mes tickets par numéro ou plaque d'immatriculation..."
             value={ticketSearch}
             onChange={(e) => setTicketSearch(e.target.value)}
             className="w-full rounded-xl border border-slate-800 bg-slate-950 py-2 pl-9 pr-3 text-xs text-white focus:border-emerald-500 focus:outline-hidden"
           />
         </div>
 
-        {/* Liste des tickets */}
         {displayedTickets.length === 0 ? (
           <div className="py-8 text-center text-slate-500 text-xs">
             Aucun ticket ne correspond au filtre sélectionné.
           </div>
         ) : (
-          <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+          <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
             {displayedTickets.map((t) => {
               const isAvailable = t.status === 'ASSIGNED_TO_AGENT';
+              const linkedSale = mySales.find(
+                (s) => s.ticketId === t.id || s.ticketNumber === t.ticketNumber
+              );
+              const whatsappUrl =
+                linkedSale && linkedSale.driverPhone
+                  ? generateWhatsAppReceiptUrl({
+                      dialCode: '+225',
+                      phoneNumber: linkedSale.driverPhone,
+                      ticketNumber: linkedSale.ticketNumber,
+                      plateNumber: linkedSale.plateNumber,
+                      amount: linkedSale.price,
+                      agentName: linkedSale.agentName,
+                      dateStr: formatDateTime(linkedSale.soldAt),
+                      soldAtIso: linkedSale.soldAt,
+                      paymentMethod: linkedSale.paymentMethod,
+                    })
+                  : null;
 
               return (
                 <div
                   key={t.id}
                   className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-950 text-xs hover:border-slate-700 transition gap-3"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="space-y-0.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-black text-sm text-white">
-                          {t.ticketNumber}
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-black text-sm text-white">
+                        {t.ticketNumber}
+                      </span>
+                      {isAvailable && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
+                          DISPONIBLE
                         </span>
-                        {isAvailable && (
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
-                            DISPONIBLE
+                      )}
+                      {t.status === 'SOLD' && (
+                        <span className="px-2 py-0.5 rounded-md bg-blue-500/15 border border-blue-500/30 text-[10px] font-bold text-blue-400">
+                          VENDU
+                        </span>
+                      )}
+                      {t.status === 'CONTROLLED' && (
+                        <span className="px-2 py-0.5 rounded-md bg-teal-500/15 border border-teal-500/30 text-[10px] font-bold text-teal-400">
+                          CONTRÔLÉ
+                        </span>
+                      )}
+                      {t.coveredByRemiseId ? (
+                        <span className="px-2 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-[10px] font-bold text-purple-300">
+                          REMIS EN CAISSE
+                        </span>
+                      ) : (
+                        !isAvailable && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-[10px] font-bold text-amber-300">
+                            À REMETTRE
                           </span>
-                        )}
-                        {t.status === 'SOLD' && (
-                          <span className="px-2 py-0.5 rounded-md bg-blue-500/15 border border-blue-500/30 text-[10px] font-bold text-blue-400">
-                            VENDU
-                          </span>
-                        )}
-                        {t.status === 'CONTROLLED' && (
-                          <span className="px-2 py-0.5 rounded-md bg-teal-500/15 border border-teal-500/30 text-[10px] font-bold text-teal-400">
-                            CONTRÔLÉ
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                        <span>Carnet : {t.carnetNumber}</span>
-                        {t.physicalNumber && <span>• #{t.physicalNumber}</span>}
-                        {t.plateNumber && (
-                          <span className="font-mono text-emerald-300">
-                            • Immat : {formatPlateDisplay(t.plateNumber)}
-                          </span>
-                        )}
-                      </div>
+                        )
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap">
+                      <span>Carnet : {t.carnetNumber}</span>
+                      {t.plateNumber && (
+                        <span className="font-mono text-emerald-300">
+                          • Plaque : {formatPlateDisplay(t.plateNumber)}
+                        </span>
+                      )}
+                      {t.driverPhone && (
+                        <span className="font-mono text-slate-400">• Tél : {t.driverPhone}</span>
+                      )}
                     </div>
                   </div>
 
@@ -863,11 +620,11 @@ export const AgentDashboard: React.FC = () => {
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition shadow-sm cursor-pointer"
                       >
                         <ShoppingCart className="w-3.5 h-3.5" />
-                        <span>Vendre ce ticket</span>
+                        <span>Vendre</span>
                       </button>
                     ) : (
-                      <div className="flex items-center gap-2 text-right">
-                        <div>
+                      <div className="flex items-center gap-1.5 text-right">
+                        <div className="mr-1">
                           <span className="font-mono font-bold text-white text-xs">
                             {formatFCFA(t.price)}
                           </span>
@@ -877,21 +634,27 @@ export const AgentDashboard: React.FC = () => {
                             </p>
                           )}
                         </div>
-                        <button
-                          onClick={() => {
-                            const linkedSale = sales.find(
-                              (s) => s.ticketId === t.id || s.ticketNumber === t.ticketNumber
-                            );
-                            if (linkedSale) {
-                              handlePrintReceipt(linkedSale);
-                            }
-                          }}
-                          disabled={!!printingTicketId}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
-                          title="Imprimer ce ticket"
-                        >
-                          <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                        </button>
+                        {whatsappUrl && (
+                          <a
+                            href={whatsappUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 transition cursor-pointer"
+                            title="Envoyer le reçu par WhatsApp"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                        {linkedSale && (
+                          <button
+                            onClick={() => handlePrintReceipt(linkedSale)}
+                            disabled={!!printingTicketId}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
+                            title="Imprimer ce reçu"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -902,83 +665,7 @@ export const AgentDashboard: React.FC = () => {
         )}
       </div>
 
-      {/* ========================================================================= */}
-      {/* MES DERNIÈRES VENTES                                                      */}
-      {/* ========================================================================= */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-5 shadow-sm space-y-3">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-          <h3 className="text-sm font-bold text-white">
-            Mes Ventes Récentes ({agentSales.length})
-          </h3>
-          <button
-            onClick={() => setSalesListOpen(true)}
-            className="text-xs text-emerald-400 hover:underline font-semibold cursor-pointer"
-          >
-            Historique complet
-          </button>
-        </div>
-
-        {agentSales.length === 0 ? (
-          <div className="py-8 text-center text-slate-500 text-xs">
-            Aucune vente enregistrée pour le moment.
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {agentSales.slice(0, 5).map((s) => {
-              const validity = getTicketValidityStatus(s.soldAt, s.expiresAt);
-              return (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-950 text-xs"
-                >
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-white">{s.ticketNumber}</span>
-                      <span className="font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                        {formatPlateDisplay(s.plateNumber)}
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                          validity.isExpired
-                            ? 'bg-rose-500/15 text-rose-400'
-                            : 'bg-emerald-500/10 text-emerald-300'
-                        }`}
-                      >
-                        {validity.isExpired
-                          ? 'Expiré (> 14j)'
-                          : `Valide (${validity.daysRemaining}j)`}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 mt-1">{formatDateTime(s.soldAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="text-right">
-                      <span className="font-mono font-bold text-white">{formatFCFA(s.price)}</span>
-                      <div className="text-[10px] mt-0.5">
-                        {s.syncStatus === 'SYNCED' ? (
-                          <span className="text-emerald-400">Synchronisé</span>
-                        ) : (
-                          <span className="text-amber-400">En attente</span>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handlePrintReceipt(s)}
-                      disabled={!!printingTicketId}
-                      className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
-                      title="Imprimer ce ticket"
-                    >
-                      <Printer className="w-4 h-4 text-emerald-400" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Modales */}
+      {/* Modales Personnelles Agent (Strictement limitées à la vente, ses ventes et SOS/Incident) */}
       <SaleFormModal
         isOpen={saleModalOpen}
         onClose={() => {
@@ -987,14 +674,23 @@ export const AgentDashboard: React.FC = () => {
         }}
         defaultTicketId={selectedTicketForSale}
       />
-      <SalesListModal isOpen={salesListOpen} onClose={() => setSalesListOpen(false)} />
-      <TicketListModal isOpen={ticketsListOpen} onClose={() => setTicketsListOpen(false)} />
+      <SalesListModal
+        isOpen={salesListOpen}
+        onClose={() => setSalesListOpen(false)}
+        onOpenNewSale={() => {
+          setSalesListOpen(false);
+          setSaleModalOpen(true);
+        }}
+      />
       <VentesARemettreModal
         isOpen={ventesModalOpen}
         onClose={() => setVentesModalOpen(false)}
         preselectedAgentId={currentUser?.id}
       />
-      <AdvancedSearchModal isOpen={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
+      <FraudReportModal
+        isOpen={incidentModalOpen}
+        onClose={() => setIncidentModalOpen(false)}
+      />
     </div>
   );
 };

@@ -1,10 +1,20 @@
-import React, { useState } from 'react';
-import { X, HandCoins, AlertCircle, CheckCircle2, Printer, Calculator, RefreshCw, User as UserIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  X,
+  HandCoins,
+  AlertCircle,
+  CheckCircle2,
+  Printer,
+  Calculator,
+  RefreshCw,
+  User as UserIcon,
+} from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA } from '../../utils/normalization';
 import { generateRemiseReceiptPDF } from '../../utils/pdfGenerator';
+import { prioritizeUncoveredTicketsForActor } from '../../context/data/hooks/useRemittances';
 import type { Remise } from '../../types';
 
 interface Props {
@@ -19,7 +29,7 @@ export const RemiseFormModal: React.FC<Props> = ({
   preselectedAgentId,
 }) => {
   const { currentUser } = useAuth();
-  const { users, recordRemise, getAgentStats } = useData();
+  const { users, carnets, tickets, remises, recordRemise, getAgentStats } = useData();
 
   const [selectedAgentId, setSelectedAgentId] = useState(preselectedAgentId || '');
   const [amount, setAmount] = useState<string>('');
@@ -57,29 +67,107 @@ export const RemiseFormModal: React.FC<Props> = ({
     setB500('');
   };
 
-  if (!isOpen) return null;
-
   const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
+  const isResponsable = currentUser?.role === 'RESPONSABLE';
 
-  // Gouvernance U.J.P.A.S. : Pool global d'agents mobiles
-  // Tout Responsable peut encaisser les remises de n'importe quel Agent actif.
-  // L'Administrateur est maître de tout et peut encaisser d'un Agent ou d'un Responsable.
-  const eligibleAgents = users.filter((u) => {
-    if (u.isActive === false) return false;
+  // Liste des agents éligibles selon le rôle :
+  // - ADMINISTRATEUR : tous les agents actifs
+  // - RESPONSABLE : tous les agents actifs (priorité à ceux ayant des tickets/carnets gérés par ce responsable ou des ventes non couvertes)
+  const eligibleAgents = useMemo(() => {
+    if (!currentUser) return [];
+    const activeAgents = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
     if (isAdmin) {
-      return u.role === 'AGENT' || u.role === 'RESPONSABLE';
+      return activeAgents;
     }
-    return u.role === 'AGENT';
-  });
+    if (isResponsable) {
+      const respCarnetIds = new Set(
+        carnets
+          .filter(
+            (c) =>
+              c.assignedToResponsableId === currentUser.id ||
+              (c as unknown as { assignedResponsableId?: string })?.assignedResponsableId ===
+                currentUser.id
+          )
+          .map((c) => c.id)
+      );
+
+      // Si des agents ont des tickets liés aux carnets du responsable ou sans responsable renseigné, tous les agents actifs restent sélectionnables sans blocage de secteur
+      return [...activeAgents].sort((a, b) => {
+        const aHasManagedTickets = tickets.some(
+          (t) =>
+            t.assignedAgentId === a.id &&
+            (t.assignedResponsableId === currentUser.id ||
+              respCarnetIds.has(t.carnetId) ||
+              !t.assignedResponsableId)
+        );
+        const bHasManagedTickets = tickets.some(
+          (t) =>
+            t.assignedAgentId === b.id &&
+            (t.assignedResponsableId === currentUser.id ||
+              respCarnetIds.has(t.carnetId) ||
+              !t.assignedResponsableId)
+        );
+        if (aHasManagedTickets && !bHasManagedTickets) return -1;
+        if (!aHasManagedTickets && bHasManagedTickets) return 1;
+        return a.fullName.localeCompare(b.fullName);
+      });
+    }
+    return [];
+  }, [currentUser, users, carnets, tickets, isAdmin, isResponsable]);
+
+  const computeAgentRemiseSummary = (agId: string) => {
+    if (!agId || !currentUser) return null;
+    const baseStats = getAgentStats(agId);
+
+    const allUncovered = tickets.filter(
+      (t) =>
+        t.assignedAgentId === agId &&
+        (t.status === 'SOLD' || t.status === 'CONTROLLED') &&
+        !t.coveredByRemiseId
+    );
+
+    const eligibleUncovered = prioritizeUncoveredTicketsForActor(
+      allUncovered,
+      carnets,
+      currentUser
+    );
+
+    const uncoveredAmount = eligibleUncovered.length * TICKET_PRICE_FCFA;
+    const effectiveRemaining = Math.max(baseStats.remainingBalance, uncoveredAmount);
+
+    return {
+      ...baseStats,
+      remainingBalance: effectiveRemaining,
+      uncoveredTickets: eligibleUncovered,
+      unremittedTicketsCount: Math.max(baseStats.unremittedTicketsCount, eligibleUncovered.length),
+    };
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      setError(null);
+      setCreatedRemise(null);
+      if (preselectedAgentId) {
+        setSelectedAgentId(preselectedAgentId);
+        const summary = computeAgentRemiseSummary(preselectedAgentId);
+        setAmount(
+          summary && summary.remainingBalance > 0 ? String(summary.remainingBalance) : ''
+        );
+      }
+    }
+  }, [isOpen, preselectedAgentId]);
+
+  if (!isOpen || !currentUser || (!isAdmin && !isResponsable)) return null;
 
   const selectedAgentUser = users.find((u) => u.id === selectedAgentId) || null;
-  const agentStats = selectedAgentId ? getAgentStats(selectedAgentId) : null;
+  const agentStats = selectedAgentId ? computeAgentRemiseSummary(selectedAgentId) : null;
 
   const handleAgentChange = (agId: string) => {
     setSelectedAgentId(agId);
+    setError(null);
     if (agId) {
-      const stats = getAgentStats(agId);
-      setAmount(stats.remainingBalance > 0 ? String(stats.remainingBalance) : '');
+      const summary = computeAgentRemiseSummary(agId);
+      setAmount(summary && summary.remainingBalance > 0 ? String(summary.remainingBalance) : '');
     } else {
       setAmount('');
     }
@@ -93,7 +181,7 @@ export const RemiseFormModal: React.FC<Props> = ({
 
     const numAmount = Number(amount || 0);
     if (!selectedAgentId) {
-      setError('Veuillez sélectionner un agent ou un responsable.');
+      setError('Veuillez sélectionner un agent.');
       return;
     }
     if (numAmount <= 0) {
@@ -127,6 +215,7 @@ export const RemiseFormModal: React.FC<Props> = ({
     setCreatedRemise(null);
     setAmount('');
     setNote('');
+    setError(null);
     onClose();
   };
 
@@ -139,13 +228,16 @@ export const RemiseFormModal: React.FC<Props> = ({
               <HandCoins className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Enregistrer une Remise Financière</h3>
+              <h3 className="text-base font-bold text-white">Encaisser une Remise Financière</h3>
               <p className="text-[11px] text-slate-400">
-                Flux direct U.J.P.A.S. : Agent → Superviseur → Administrateur Général
+                Flux direct U.J.P.A.S. : Agent → Superviseur / Administrateur
               </p>
             </div>
           </div>
-          <button onClick={handleClose} className="rounded-lg p-1 text-slate-400 hover:text-white cursor-pointer">
+          <button
+            onClick={handleClose}
+            className="rounded-lg p-1 text-slate-400 hover:text-white cursor-pointer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -168,10 +260,11 @@ export const RemiseFormModal: React.FC<Props> = ({
               </span>
               <h4 className="text-xl font-black text-white mt-0.5">{createdRemise.reference}</h4>
               <p className="text-sm font-semibold text-slate-300 mt-1">
-                Montant : <strong className="text-emerald-400">{formatFCFA(createdRemise.amount)}</strong>
+                Montant :{' '}
+                <strong className="text-emerald-400">{formatFCFA(createdRemise.amount)}</strong>
               </p>
               <p className="text-xs text-slate-400 mt-0.5">
-                Agent : {createdRemise.agentName} • {createdRemise.ticketsCount} tickets couverts
+                Agent : {createdRemise.agentName} • {createdRemise.ticketsCount} ticket(s) couvert(s)
               </p>
             </div>
 
@@ -195,12 +288,10 @@ export const RemiseFormModal: React.FC<Props> = ({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-            {/* Choix de l'Agent ou Responsable */}
+            {/* Choix de l'Agent */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                {isAdmin
-                  ? 'Sélectionner l’Agent ou le Responsable (Versant les fonds)'
-                  : 'Sélectionner l’Agent (Pool Mobile Global)'}
+                Sélectionner l’Agent (Pool Mobile Global U.J.P.A.S.)
               </label>
               <select
                 required
@@ -208,14 +299,16 @@ export const RemiseFormModal: React.FC<Props> = ({
                 onChange={(e) => handleAgentChange(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-sm text-white focus:border-blue-500 focus:outline-hidden"
               >
-                <option value="">
-                  {isAdmin ? '-- Choisir un agent ou un responsable --' : '-- Choisir un agent --'}
-                </option>
-                {eligibleAgents.map((ag) => (
-                  <option key={ag.id} value={ag.id}>
-                    {ag.fullName} • [{ag.role}] {ag.phone ? `(${ag.phone})` : ''}
-                  </option>
-                ))}
+                <option value="">-- Choisir un agent --</option>
+                {eligibleAgents.map((ag) => {
+                  const agSummary = computeAgentRemiseSummary(ag.id);
+                  const due = agSummary?.remainingBalance || 0;
+                  return (
+                    <option key={ag.id} value={ag.id}>
+                      {ag.fullName} {due > 0 ? `• À remettre : ${formatFCFA(due)}` : '• À jour (0 FCFA)'}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -236,51 +329,75 @@ export const RemiseFormModal: React.FC<Props> = ({
                       </div>
                     )}
                     <div>
-                      <span className="font-bold text-white block">{selectedAgentUser.fullName}</span>
+                      <span className="font-bold text-white block">
+                        {selectedAgentUser.fullName}
+                      </span>
                       <span className="text-[10px] text-slate-400">
                         {selectedAgentUser.phone || 'Téléphone non renseigné'}
                       </span>
                     </div>
                   </div>
-                  <span className="text-[11px] text-slate-400 font-mono">5 000 FCFA / ticket</span>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    {formatFCFA(TICKET_PRICE_FCFA)} / ticket
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-slate-400">
                   <div>
-                    <p className="text-[10px] uppercase font-bold text-slate-500">Tickets Vendus</p>
-                    <p className="text-sm font-bold text-white font-mono">{agentStats.soldCount}</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-500">
+                      Tickets Vendus
+                    </p>
+                    <p className="text-sm font-bold text-white font-mono">
+                      {agentStats.soldCount}
+                    </p>
                   </div>
                   <div>
-                    <p className="text-[10px] uppercase font-bold text-slate-500">Montant Attendu</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-500">
+                      Montant Attendu
+                    </p>
                     <p className="text-sm font-bold text-white font-mono">
                       {formatFCFA(agentStats.expectedAmount)}
                     </p>
                   </div>
                   <div>
-                    <p className="text-[10px] uppercase font-bold text-slate-500">Montant Déjà Remis</p>
+                    <p className="text-[10px] uppercase font-bold text-slate-500">
+                      Montant Déjà Remis
+                    </p>
                     <p className="text-sm font-bold text-emerald-400 font-mono">
                       {formatFCFA(agentStats.remittedAmount)}
                     </p>
                   </div>
                   <div>
                     <p className="text-[10px] uppercase font-bold text-slate-500">
-                      {agentStats.ecart > 0 ? 'Écart Positif' : 'Solde Restant Dû'}
+                      Solde Restant à Remettre
                     </p>
                     <p
                       className={`text-sm font-bold font-mono ${
-                        agentStats.ecart > 0
-                          ? 'text-emerald-400'
-                          : agentStats.remainingBalance > 0
-                          ? 'text-amber-400'
-                          : 'text-slate-400'
+                        agentStats.remainingBalance > 0 ? 'text-amber-400' : 'text-emerald-400'
                       }`}
                     >
-                      {agentStats.ecart > 0
-                        ? `+${formatFCFA(agentStats.ecart)}`
-                        : formatFCFA(agentStats.remainingBalance)}
+                      {formatFCFA(agentStats.remainingBalance)}
                     </p>
                   </div>
                 </div>
+
+                {agentStats.uncoveredTickets.length > 0 && (
+                  <div className="rounded-lg bg-slate-900/90 border border-slate-800 p-2">
+                    <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">
+                      Tickets vendus non couverts ({agentStats.uncoveredTickets.length}) :
+                    </p>
+                    <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                      {agentStats.uncoveredTickets.map((t) => (
+                        <span
+                          key={t.id}
+                          className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-mono font-bold text-amber-300"
+                        >
+                          {t.ticketNumber}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {Number(amount || 0) > 0 && (
                   <div className="mt-2 rounded-lg bg-slate-900 border border-slate-800 p-2.5 space-y-1">
@@ -289,26 +406,18 @@ export const RemiseFormModal: React.FC<Props> = ({
                     </p>
                     {(() => {
                       const numAmt = Number(amount || 0);
-                      const newTotalRemitted = agentStats.remittedAmount + numAmt;
-                      const newBalance = Math.max(0, agentStats.expectedAmount - newTotalRemitted);
-                      const newEcart = Math.max(0, newTotalRemitted - agentStats.expectedAmount);
+                      const newBalance = Math.max(0, agentStats.remainingBalance - numAmt);
                       return (
                         <div className="flex items-center justify-between text-xs pt-0.5">
                           <span className="text-slate-300 font-medium">
-                            {newEcart > 0 ? 'Nouvel Écart Positif :' : 'Nouveau Solde Restant :'}
+                            Nouveau Solde Restant :
                           </span>
                           <span
                             className={`font-mono font-bold ${
-                              newEcart > 0
-                                ? 'text-emerald-400'
-                                : newBalance > 0
-                                ? 'text-amber-400'
-                                : 'text-emerald-400'
+                              newBalance > 0 ? 'text-amber-400' : 'text-emerald-400'
                             }`}
                           >
-                            {newEcart > 0
-                              ? `+${formatFCFA(newEcart)} (Excédent)`
-                              : newBalance === 0
+                            {newBalance === 0
                               ? '0 FCFA (Entièrement régularisé)'
                               : formatFCFA(newBalance)}
                           </span>
@@ -316,13 +425,6 @@ export const RemiseFormModal: React.FC<Props> = ({
                       );
                     })()}
                   </div>
-                )}
-
-                {agentStats.unremittedTicketsCount >= 10 && (
-                  <p className="text-[11px] text-amber-300 font-semibold bg-amber-500/10 border border-amber-500/20 rounded-lg p-2">
-                    ⚠️ Alerte de dépassement : {agentStats.unremittedTicketsCount} tickets non versés (
-                    {formatFCFA(agentStats.remainingBalance)}).
-                  </p>
                 )}
               </div>
             )}
@@ -481,7 +583,9 @@ export const RemiseFormModal: React.FC<Props> = ({
 
                   <div className="flex items-center justify-between border-t border-slate-800 pt-3">
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-black">Somme calculée</p>
+                      <p className="text-[10px] text-slate-500 uppercase font-black">
+                        Somme calculée
+                      </p>
                       <p className="text-sm font-black text-emerald-400 font-mono">
                         {formatFCFA(counterTotal)}
                       </p>
@@ -516,7 +620,7 @@ export const RemiseFormModal: React.FC<Props> = ({
             <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-2.5 text-[11px] text-slate-400 flex items-start gap-2">
               <span className="text-blue-400 font-bold shrink-0">🔒 Immutabilité :</span>
               <span>
-                Le responsable ne peut ni modifier ni supprimer une remise enregistrée. Seul l'administrateur peut procéder à une correction exceptionnelle motivée.
+                Une fois validée, la remise met immédiatement à jour les tickets vendus couverts. Seul l'administrateur peut procéder à une correction exceptionnelle motivée.
               </span>
             </div>
 
@@ -533,7 +637,7 @@ export const RemiseFormModal: React.FC<Props> = ({
                 disabled={loading || !selectedAgentId || Number(amount || 0) <= 0}
                 className="flex-1 rounded-xl bg-blue-600 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition shadow-md disabled:opacity-50 cursor-pointer"
               >
-                {loading ? 'Enregistrement...' : 'Enregistrer la Remise'}
+                {loading ? 'Enregistrement...' : 'Encaisser la Remise'}
               </button>
             </div>
           </form>

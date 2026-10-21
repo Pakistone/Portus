@@ -1352,16 +1352,19 @@ export const SupabaseDataLayer = {
     const supabase = getSupabase();
     if (!supabase) return false;
 
+    const cleanRemiseId = sanitizeUuid(remise.id);
+    const cleanTicketIds = (remise.ticketIdsCovered || []).map((id) => sanitizeUuid(id));
+
     const { error } = await supabase.from('remittances').upsert(
       {
-        id: remise.id,
+        id: cleanRemiseId,
         reference: remise.reference,
-        agent_id: remise.agentId,
-        responsable_id: remise.responsableId,
-        sector_id: remise.sectorId,
+        agent_id: sanitizeUuid(remise.agentId),
+        responsable_id: sanitizeUuidOrNull(remise.responsableId),
+        sector_id: sanitizeUuidOrNull(remise.sectorId),
         amount: remise.amount,
         tickets_count: remise.ticketsCount,
-        ticket_ids_covered: remise.ticketIdsCovered,
+        ticket_ids_covered: cleanTicketIds,
         date: remise.date,
         time: remise.time,
         note: remise.note || null,
@@ -1375,6 +1378,32 @@ export const SupabaseDataLayer = {
       console.warn('Supabase insertRemittance error:', error.message);
       return false;
     }
+
+    if (cleanTicketIds.length > 0) {
+      try {
+        await supabase
+          .from('tickets')
+          .update({
+            covered_by_remittance_id: cleanRemiseId,
+            updated_at: new Date().toISOString(),
+          })
+          .in('id', cleanTicketIds);
+      } catch (tktErr) {
+        console.warn('Supabase update tickets covered_by_remittance_id warning:', tktErr);
+      }
+
+      try {
+        await supabase
+          .from('sales')
+          .update({
+            covered_by_remittance_id: cleanRemiseId,
+          })
+          .in('ticket_id', cleanTicketIds);
+      } catch (saleErr) {
+        console.warn('Supabase update sales covered_by_remittance_id warning:', saleErr);
+      }
+    }
+
     return true;
   },
 

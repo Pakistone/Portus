@@ -46,41 +46,114 @@ CREATE INDEX IF NOT EXISTS idx_profiles_is_active ON public.profiles(is_active);
 CREATE TABLE IF NOT EXISTS public.carnets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     carnet_number TEXT UNIQUE NOT NULL,
-    series_prefix TEXT,
+    series_prefix TEXT DEFAULT 'VRD',
+    generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
+    size INT NOT NULL DEFAULT 50,
     start_number INT NOT NULL,
     end_number INT NOT NULL,
-    total_tickets INT NOT NULL,
+    total_tickets INT,
     unit_price NUMERIC NOT NULL DEFAULT 1000,
-    total_value NUMERIC NOT NULL,
+    total_value NUMERIC,
+    assigned_to_responsable UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     assigned_to_responsable_name TEXT,
-    status TEXT NOT NULL DEFAULT 'EN_STOCK_ADMIN' CHECK (status IN ('EN_STOCK_ADMIN', 'ASSIGNE_RESPONSABLE', 'EN_COURS_VENTE', 'EPUISE', 'ANNULE')),
+    sector_id UUID,
+    status TEXT NOT NULL DEFAULT 'CREATED',
     created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.carnets
+    ADD COLUMN IF NOT EXISTS series_prefix TEXT DEFAULT 'VRD',
+    ADD COLUMN IF NOT EXISTS generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
+    ADD COLUMN IF NOT EXISTS size INT NOT NULL DEFAULT 50,
+    ADD COLUMN IF NOT EXISTS total_tickets INT,
+    ADD COLUMN IF NOT EXISTS unit_price NUMERIC NOT NULL DEFAULT 1000,
+    ADD COLUMN IF NOT EXISTS total_value NUMERIC,
+    ADD COLUMN IF NOT EXISTS assigned_to_responsable UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+    ADD COLUMN IF NOT EXISTS sector_id UUID,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_carnets_status ON public.carnets(status);
-CREATE INDEX IF NOT EXISTS idx_carnets_responsable ON public.carnets(assigned_to_responsable_id);
+CREATE INDEX IF NOT EXISTS idx_carnets_responsable ON public.carnets(assigned_to_responsable);
+CREATE INDEX IF NOT EXISTS idx_carnets_responsable_id ON public.carnets(assigned_to_responsable_id);
 
 CREATE TABLE IF NOT EXISTS public.tickets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ticket_number TEXT UNIQUE NOT NULL,
+    ticket_number TEXT NOT NULL,
     carnet_id UUID NOT NULL REFERENCES public.carnets(id) ON DELETE CASCADE, -- Suppression définitive autorisée
+    generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
     series_prefix TEXT,
+    qr_payload TEXT,
     price NUMERIC NOT NULL DEFAULT 1000,
-    status TEXT NOT NULL DEFAULT 'EN_STOCK' CHECK (status IN ('EN_STOCK', 'ASSIGNE_AGENT', 'VENDU', 'UTILISE', 'ANNULE', 'VALIDE', 'EXPIRE')),
+    status TEXT NOT NULL DEFAULT 'GENERATED',
+    assigned_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    assigned_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     assigned_to_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     assigned_to_agent_name TEXT,
     assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     assigned_to_responsable_name TEXT,
+    sector_id UUID,
+    sale_id UUID,
+    plate_number TEXT,
+    driver_phone TEXT,
+    payment_method TEXT DEFAULT 'ESPECES',
+    is_superseded BOOLEAN NOT NULL DEFAULT FALSE,
+    superseded_by_ticket_id UUID REFERENCES public.tickets(id) ON DELETE SET NULL,
+    covered_by_remittance_id UUID,
+    control_count INT NOT NULL DEFAULT 0,
+    last_controlled_at TIMESTAMPTZ,
+    last_controlled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    cancelled_at TIMESTAMPTZ,
+    cancelled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    cancellation_reason TEXT,
     security_hmac TEXT,
     sold_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.tickets
+    ADD COLUMN IF NOT EXISTS generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
+    ADD COLUMN IF NOT EXISTS series_prefix TEXT,
+    ADD COLUMN IF NOT EXISTS qr_payload TEXT,
+    ADD COLUMN IF NOT EXISTS assigned_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_to_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_to_agent_name TEXT,
+    ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+    ADD COLUMN IF NOT EXISTS sector_id UUID,
+    ADD COLUMN IF NOT EXISTS sale_id UUID,
+    ADD COLUMN IF NOT EXISTS plate_number TEXT,
+    ADD COLUMN IF NOT EXISTS driver_phone TEXT,
+    ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'ESPECES',
+    ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS superseded_by_ticket_id UUID REFERENCES public.tickets(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS covered_by_remittance_id UUID,
+    ADD COLUMN IF NOT EXISTS control_count INT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_controlled_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_controlled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS cancelled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+    ADD COLUMN IF NOT EXISTS security_hmac TEXT,
+    ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+UPDATE public.tickets SET assigned_responsable_id = assigned_to_responsable_id WHERE assigned_responsable_id IS NULL AND assigned_to_responsable_id IS NOT NULL;
+UPDATE public.tickets SET assigned_agent_id = assigned_to_agent_id WHERE assigned_agent_id IS NULL AND assigned_to_agent_id IS NOT NULL;
+UPDATE public.carnets SET assigned_to_responsable = assigned_to_responsable_id WHERE assigned_to_responsable IS NULL AND assigned_to_responsable_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_tickets_carnet ON public.tickets(carnet_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON public.tickets(status);
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_responsable ON public.tickets(assigned_responsable_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_agent ON public.tickets(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_agent ON public.tickets(assigned_to_agent_id);
 
 -- -----------------------------------------------------------------------------

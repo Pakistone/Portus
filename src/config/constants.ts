@@ -31,7 +31,7 @@ export const TICKET_PRICE_FCFA = 5000;
  * Si une immatriculation possède déjà un ticket vendu il y a moins de 7 jours,
  * un avertissement doit être affiché et l'agent doit confirmer explicitement.
  */
-export const ACTIVE_TICKET_VALIDITY_DAYS = 7;
+export const ACTIVE_TICKET_VALIDITY_DAYS = 14;
 export const ACTIVE_TICKET_VALIDITY_MS = ACTIVE_TICKET_VALIDITY_DAYS * 24 * 60 * 60 * 1000;
 
 /**
@@ -44,6 +44,8 @@ export const ACTIVE_TICKET_VALIDITY_MS = ACTIVE_TICKET_VALIDITY_DAYS * 24 * 60 *
  */
 export const REMISE_ALERT_START_THRESHOLD = 10;
 export const REMISE_ALERT_STEP = 5;
+export const ALERT_INITIAL_THRESHOLD = REMISE_ALERT_START_THRESHOLD;
+export const ALERT_STEP_THRESHOLD = REMISE_ALERT_STEP;
 
 /**
  * RÈGLES DES CARNETS ET IMPRESSION

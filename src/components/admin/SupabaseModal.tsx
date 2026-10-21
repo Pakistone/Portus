@@ -477,6 +477,77 @@ CREATE TRIGGER trg_remittances_no_delete
 BEFORE DELETE ON public.remittances
 FOR EACH ROW EXECUTE FUNCTION public.fn_prevent_remittance_deletion();
 
+-- MIGRATION AUTOMATIQUE DES COLONNES (Garantit la présence de assigned_responsable_id & colonnes requises sur tables existantes) :
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS username TEXT,
+  ADD COLUMN IF NOT EXISTS email TEXT,
+  ADD COLUMN IF NOT EXISTS full_name TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS phone TEXT,
+  ADD COLUMN IF NOT EXISTS matricule TEXT,
+  ADD COLUMN IF NOT EXISTS brigade TEXT,
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT,
+  ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS failed_attempts INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE public.carnets
+  ADD COLUMN IF NOT EXISTS series_prefix TEXT NOT NULL DEFAULT 'VRD',
+  ADD COLUMN IF NOT EXISTS generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
+  ADD COLUMN IF NOT EXISTS size INT NOT NULL DEFAULT 50,
+  ADD COLUMN IF NOT EXISTS total_tickets INT,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE public.tickets
+  ADD COLUMN IF NOT EXISTS generation_batch TEXT NOT NULL DEFAULT 'GEN-1',
+  ADD COLUMN IF NOT EXISTS series_prefix TEXT,
+  ADD COLUMN IF NOT EXISTS qr_payload TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_to_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_agent_name TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS sale_id UUID,
+  ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'ESPECES',
+  ADD COLUMN IF NOT EXISTS plate_number TEXT,
+  ADD COLUMN IF NOT EXISTS driver_phone TEXT,
+  ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS superseded_by_ticket_id UUID REFERENCES public.tickets(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS covered_by_remittance_id UUID,
+  ADD COLUMN IF NOT EXISTS control_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_controlled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_controlled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cancelled_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+-- Synchronisation rétrocompatible si des colonnes alternatives avaient été renseignées
+UPDATE public.tickets SET assigned_responsable_id = assigned_to_responsable_id WHERE assigned_responsable_id IS NULL AND assigned_to_responsable_id IS NOT NULL;
+UPDATE public.tickets SET assigned_agent_id = assigned_to_agent_id WHERE assigned_agent_id IS NULL AND assigned_to_agent_id IS NOT NULL;
+UPDATE public.carnets SET assigned_to_responsable = assigned_to_responsable_id WHERE assigned_to_responsable IS NULL AND assigned_to_responsable_id IS NOT NULL;
+
+ALTER TABLE public.sales
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '14 days'),
+  ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'ESPECES',
+  ADD COLUMN IF NOT EXISTS payment_reference TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID REFERENCES public.sectors(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS driver_phone TEXT,
+  ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS sync_idempotency_key UUID DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS gps_accuracy NUMERIC(8, 2),
+  ADD COLUMN IF NOT EXISTS covered_by_remittance_id UUID;
+
 -- INDEX DE PERFORMANCE CRITIQUES :
 CREATE INDEX IF NOT EXISTS idx_tickets_ticket_number ON public.tickets(ticket_number);
 CREATE INDEX IF NOT EXISTS idx_tickets_plate_number ON public.tickets(plate_number);
@@ -515,28 +586,40 @@ ALTER TABLE public.sync_queue ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION public.get_current_role()
 RETURNS user_role AS $$
-  SELECT role FROM public.profiles WHERE id = auth.uid();
+  SELECT role::user_role FROM public.profiles WHERE id = auth.uid();
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.profiles 
-    WHERE id = auth.uid() AND role = 'ADMINISTRATEUR' AND is_active = TRUE
+    WHERE id = auth.uid() AND role::TEXT = 'ADMINISTRATEUR' AND is_active = TRUE
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+DROP POLICY IF EXISTS "Admin full access profiles" ON public.profiles;
 CREATE POLICY "Admin full access profiles" ON public.profiles FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access carnets" ON public.carnets;
 CREATE POLICY "Admin full access carnets" ON public.carnets FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access tickets" ON public.tickets;
 CREATE POLICY "Admin full access tickets" ON public.tickets FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access sales" ON public.sales;
 CREATE POLICY "Admin full access sales" ON public.sales FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access remittances" ON public.remittances;
 CREATE POLICY "Admin full access remittances" ON public.remittances FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access controls" ON public.controls;
 CREATE POLICY "Admin full access controls" ON public.controls FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access fraud" ON public.fraud_reports;
 CREATE POLICY "Admin full access fraud" ON public.fraud_reports FOR ALL TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Admin full access audit" ON public.audit_logs;
 CREATE POLICY "Admin full access audit" ON public.audit_logs FOR SELECT TO authenticated USING (public.is_admin());
+DROP POLICY IF EXISTS "Agent read assigned tickets" ON public.tickets;
 CREATE POLICY "Agent read assigned tickets" ON public.tickets FOR SELECT TO authenticated USING (public.get_current_role() = 'AGENT' AND assigned_agent_id = auth.uid());
+DROP POLICY IF EXISTS "Agent insert own sale" ON public.sales;
 CREATE POLICY "Agent insert own sale" ON public.sales FOR INSERT TO authenticated WITH CHECK (public.get_current_role() = 'AGENT' AND agent_id = auth.uid());
+DROP POLICY IF EXISTS "Controleur verify tickets" ON public.tickets;
 CREATE POLICY "Controleur verify tickets" ON public.tickets FOR SELECT TO authenticated USING (public.get_current_role() = 'CONTROLEUR');
+DROP POLICY IF EXISTS "Controleur insert control" ON public.controls;
 CREATE POLICY "Controleur insert control" ON public.controls FOR INSERT TO authenticated WITH CHECK (public.get_current_role() = 'CONTROLEUR' AND controleur_id = auth.uid());
 
 -- FONCTIONS D'AUTHENTIFICATION STRICTES & SÉCURISÉES (PORTUS U.J.S.R.V.)
@@ -648,8 +731,57 @@ GRANT ALL ON ALL ROUTINES IN SCHEMA public TO authenticated, service_role;
 -- Sécurité RLS : Révoquer l'accès anonyme direct aux tables
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
--- Migration colonnes manquantes sur profiles
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS matricule TEXT, ADD COLUMN IF NOT EXISTS brigade TEXT;
+-- Migration colonnes manquantes sur profiles, carnets, tickets et sales (corrige ERROR 42703: column "assigned_responsable_id" does not exist)
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS matricule TEXT,
+  ADD COLUMN IF NOT EXISTS brigade TEXT,
+  ADD COLUMN IF NOT EXISTS avatar_url TEXT,
+  ADD COLUMN IF NOT EXISTS phone TEXT;
+
+ALTER TABLE IF EXISTS public.carnets
+  ADD COLUMN IF NOT EXISTS size INT DEFAULT 50,
+  ADD COLUMN IF NOT EXISTS total_tickets INT,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE IF EXISTS public.tickets
+  ADD COLUMN IF NOT EXISTS generation_batch TEXT DEFAULT 'GEN-1',
+  ADD COLUMN IF NOT EXISTS qr_payload TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_responsable_name TEXT,
+  ADD COLUMN IF NOT EXISTS assigned_to_agent_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS assigned_to_agent_name TEXT,
+  ADD COLUMN IF NOT EXISTS sector_id UUID,
+  ADD COLUMN IF NOT EXISTS sale_id UUID,
+  ADD COLUMN IF NOT EXISTS sold_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'ESPECES',
+  ADD COLUMN IF NOT EXISTS plate_number TEXT,
+  ADD COLUMN IF NOT EXISTS driver_phone TEXT,
+  ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS superseded_by_ticket_id UUID,
+  ADD COLUMN IF NOT EXISTS covered_by_remittance_id UUID,
+  ADD COLUMN IF NOT EXISTS control_count INT DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_controlled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_controlled_by UUID,
+  ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cancelled_by UUID,
+  ADD COLUMN IF NOT EXISTS cancellation_reason TEXT,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+DO $$ BEGIN
+  UPDATE public.tickets SET assigned_responsable_id = assigned_to_responsable_id WHERE assigned_responsable_id IS NULL AND assigned_to_responsable_id IS NOT NULL;
+  UPDATE public.tickets SET assigned_agent_id = assigned_to_agent_id WHERE assigned_agent_id IS NULL AND assigned_to_agent_id IS NOT NULL;
+  UPDATE public.carnets SET assigned_to_responsable = assigned_to_responsable_id WHERE assigned_to_responsable IS NULL AND assigned_to_responsable_id IS NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_responsable ON public.tickets(assigned_responsable_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_assigned_agent ON public.tickets(assigned_agent_id);
 
 -- 2. Fonctions de sécurité sans récursion (SECURITY DEFINER avec search_path sécurisé & PL/pgSQL)
 CREATE OR REPLACE FUNCTION public.get_current_role()
@@ -738,8 +870,12 @@ GRANT EXECUTE ON FUNCTION public.get_my_profile() TO authenticated, anon, servic
 
 -- 3. Accorder l'exécution des fonctions RLS et restreindre les fonctions d'administration sensibles
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated, service_role;
-REVOKE ALL ON FUNCTION public.reset_operational_database(UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.resign_all_existing_tickets() FROM PUBLIC, anon, authenticated;
+DO $$ BEGIN
+  REVOKE ALL ON FUNCTION public.reset_operational_database(UUID, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+EXCEPTION WHEN undefined_function THEN NULL; END $$;
+DO $$ BEGIN
+  REVOKE ALL ON FUNCTION public.resign_all_existing_tickets() FROM PUBLIC, anon, authenticated;
+EXCEPTION WHEN undefined_function THEN NULL; END $$;
 
 -- 4. Rétablissement des politiques RLS propres sans récursion infinie sur 'profiles'
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;

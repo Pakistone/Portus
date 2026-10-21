@@ -36,12 +36,12 @@ export const RemisesListModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
-  // Filtrer selon rôle
+  // Filtrer selon rôle (sans blocage par secteur)
   const visibleRemises = remises.filter((r) => {
     if (currentUser?.role === 'AGENT') {
       if (r.agentId !== currentUser.id) return false;
     } else if (currentUser?.role === 'RESPONSABLE') {
-      if (r.sectorId && currentUser.sectorId && r.sectorId !== currentUser.sectorId) return false;
+      if (r.responsableId && r.responsableId !== currentUser.id) return false;
     }
 
     if (searchTerm) {

@@ -309,25 +309,17 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (activeUser.role === 'ADMINISTRATEUR') {
           visibleAudits = allAudits;
         } else if (activeUser.role === 'RESPONSABLE') {
-          // Gouvernance U.J.P.A.S. : Pool global d'agents mobilisables par tout Responsable
-          const secId = activeUser.sectorId;
+          // Gouvernance U.J.P.A.S. : Pool global d'agents mobilisables par tout Responsable (aucun blocage par secteur)
           visibleUsers = allUsers;
-          visibleCarnets = allCarnets.filter(
-            (c) =>
-              !secId ||
-              c.sectorId === secId ||
-              c.assignedToResponsableId === activeUser.id ||
-              !c.assignedToResponsableId
-          );
+          visibleCarnets = allCarnets;
           visibleTickets = allTickets;
           visibleSales = allSales;
           visibleRemises = allRemises;
           visibleExpenses = allExpenses.filter(
             (e) =>
-              !secId ||
-              e.sectorId === secId ||
               e.responsibleId === activeUser.id ||
-              e.createdBy === activeUser.id
+              e.createdBy === activeUser.id ||
+              !e.responsibleId
           );
           visibleFrauds = allFrauds;
           visibleControls = allControls;

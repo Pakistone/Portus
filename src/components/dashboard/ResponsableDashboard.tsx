@@ -7,8 +7,11 @@ import {
   CheckCircle2,
   Users,
   Receipt,
-  Search,
+  Layers,
   User as UserIcon,
+  ShoppingBag,
+  QrCode,
+  Vault,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -17,27 +20,31 @@ import { CoteDIvoireMap } from '../common/CoteDIvoireMap';
 import { TICKET_PRICE_FCFA } from '../../config/constants';
 import { formatFCFA } from '../../utils/normalization';
 import { EntityRankingChart, EntityRankItem } from './DashboardCharts';
-import { normalizeSectorId } from '../../db/supabaseService';
+import { isTicketEligibleForRemiseByActor } from '../../context/data/hooks/useRemittances';
 
-// Modals
+// Modals autorisés pour le Responsable
 import { TicketAssignmentModal } from '../tickets/TicketAssignmentModal';
+import { CarnetManagementModal } from '../tickets/CarnetManagementModal';
+import { SaleFormModal } from '../sales/SaleFormModal';
 import { RemiseFormModal } from '../remises/RemiseFormModal';
 import { RemisesListModal } from '../remises/RemisesListModal';
 import { TicketListModal } from '../tickets/TicketListModal';
 import { SalesListModal } from '../sales/SalesListModal';
-import { ControlsListModal } from '../controls/ControlsListModal';
 import { VentesARemettreModal } from '../remises/VentesARemettreModal';
-import { AdvancedSearchModal } from '../search/AdvancedSearchModal';
+import { ControlScanModal } from '../controls/ControlScanModal';
+import { DailyOperationsCenterModal } from '../operations/DailyOperationsCenterModal';
 import { ExpensesModule } from '../expenses/ExpensesModule';
 import { AgentDirectoryView } from '../agents/AgentDirectoryView';
 
 export const ResponsableDashboard: React.FC = () => {
   const { currentUser } = useAuth();
-  const { users, tickets, remises, alerts } = useData();
+  const { users, carnets, tickets, remises } = useData();
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'agents' | 'expenses'>('dashboard');
 
   const [assignmentModalOpen, setAssignmentModalOpen] = useState(false);
+  const [carnetModalOpen, setCarnetModalOpen] = useState(false);
+  const [saleFormModalOpen, setSaleFormModalOpen] = useState(false);
   const [remiseModalOpen, setRemiseModalOpen] = useState(false);
   const [selectedAgentForRemise, setSelectedAgentForRemise] = useState<string | undefined>();
   const [ventesARemettreOpen, setVentesARemettreOpen] = useState(false);
@@ -45,8 +52,8 @@ export const ResponsableDashboard: React.FC = () => {
   const [remisesListOpen, setRemisesListOpen] = useState(false);
   const [ticketsListOpen, setTicketsListOpen] = useState(false);
   const [salesListOpen, setSalesListOpen] = useState(false);
-  const [controlsListOpen, setControlsListOpen] = useState(false);
-  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [dailyClosingModalOpen, setDailyClosingModalOpen] = useState(false);
 
   useEffect(() => {
     const handleNotificationClicked = (e: Event) => {
@@ -66,111 +73,97 @@ export const ResponsableDashboard: React.FC = () => {
       window.removeEventListener('portus-notification-clicked', handleNotificationClicked);
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // GOUVERNANCE U.J.P.A.S. : POOL GLOBAL D'AGENTS MOBILES & LOTS DU SUPERVISEUR
-  // ---------------------------------------------------------------------------
-  const respSector = useMemo(() => {
-    return normalizeSectorId(currentUser?.sectorId, currentUser?.sectorName);
-  }, [currentUser?.sectorId, currentUser?.sectorName]);
-
-  // Tous les agents actifs sont mobiles et mobilisables par tout superviseur
-  const sectorAgents = useMemo(() => {
+  // Pool global d'agents mobiles actifs (aucun blocage par secteur)
+  const poolAgents = useMemo(() => {
     return users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
   }, [users]);
 
-  // Tickets gérés par ce superviseur (ou rattachés à son périmètre)
-  const sectorTickets = useMemo(() => {
-    return tickets.filter((t) => {
-      if (t.assignedResponsableId === currentUser?.id) return true;
-      if (!t.assignedResponsableId && !respSector) return true;
-      if (!t.assignedResponsableId && respSector) {
-        const tSector = normalizeSectorId(t.sectorId);
-        return !tSector || tSector === respSector || t.sectorId === currentUser?.sectorId;
-      }
-      return false;
-    });
-  }, [tickets, currentUser, respSector]);
+  // Carnets attribués à ce responsable
+  const myCarnets = useMemo(() => {
+    if (!currentUser) return [];
+    return carnets.filter(
+      (c) => c.status !== 'CANCELLED' && c.assignedToResponsableId === currentUser.id
+    );
+  }, [carnets, currentUser]);
+
+  // Tickets gérés par ce superviseur (rattachés à lui ou à ses carnets, ou éligibles à l'encaissement)
+  const managedTickets = useMemo(() => {
+    if (!currentUser) return [];
+    return tickets.filter(
+      (t) =>
+        t.status !== 'CANCELLED' &&
+        isTicketEligibleForRemiseByActor(t, carnets, currentUser)
+    );
+  }, [tickets, carnets, currentUser]);
 
   // 1. Tickets disponibles (prêts à attribuer ou en main des agents)
-  const availableInSector = useMemo(() => {
-    return sectorTickets.filter(
+  const availableManagedTickets = useMemo(() => {
+    return managedTickets.filter(
       (t) =>
         t.status === 'ASSIGNED_TO_RESPONSIBLE' ||
         t.status === 'AVAILABLE' ||
         t.status === 'ASSIGNED_TO_AGENT'
     );
-  }, [sectorTickets]);
+  }, [managedTickets]);
 
   const readyToAssignCount = useMemo(() => {
-    return sectorTickets.filter(
+    return managedTickets.filter(
       (t) => t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE'
     ).length;
-  }, [sectorTickets]);
+  }, [managedTickets]);
 
   const inAgentHandsCount = useMemo(() => {
-    return sectorTickets.filter((t) => t.status === 'ASSIGNED_TO_AGENT').length;
-  }, [sectorTickets]);
+    return managedTickets.filter((t) => t.status === 'ASSIGNED_TO_AGENT').length;
+  }, [managedTickets]);
 
-  // 2. Tickets vendus du lot superviseur
-  const sectorSoldTickets = useMemo(() => {
-    return sectorTickets.filter((t) => t.status === 'SOLD' || t.status === 'CONTROLLED');
-  }, [sectorTickets]);
-  const ticketsSold = sectorSoldTickets.length;
+  // 2. Tickets vendus
+  const soldManagedTickets = useMemo(() => {
+    return managedTickets.filter((t) => t.status === 'SOLD' || t.status === 'CONTROLLED');
+  }, [managedTickets]);
 
-  // 3. Valeur des ventes
-  const totalSalesAmount = ticketsSold * TICKET_PRICE_FCFA;
+  const ticketsSoldCount = soldManagedTickets.length;
+  const totalSalesAmount = ticketsSoldCount * TICKET_PRICE_FCFA;
 
-  // 4. Remises encaissées par ce superviseur
-  const sectorRemises = useMemo(() => {
-    return remises.filter((r) => {
-      if (r.responsableId === currentUser?.id) return true;
-      if (!r.responsableId && respSector) {
-        const rSector = normalizeSectorId(r.sectorId);
-        return rSector === respSector || r.sectorId === currentUser?.sectorId;
-      }
-      return false;
-    });
-  }, [remises, currentUser, respSector]);
-  const totalRemittedAmount = sectorRemises.reduce((sum, r) => sum + r.amount, 0);
+  // 3. Remises encaissées par ce superviseur
+  const myRemises = useMemo(() => {
+    if (!currentUser) return [];
+    return remises.filter((r) => r.responsableId === currentUser.id || !r.responsableId);
+  }, [remises, currentUser]);
 
-  // 5. Solde à récupérer auprès des agents
-  const remainingSectorBalance = Math.max(0, totalSalesAmount - totalRemittedAmount);
-  const sectorEcart = Math.max(0, totalRemittedAmount - totalSalesAmount);
+  const totalRemittedAmount = useMemo(() => {
+    return myRemises.reduce((sum, r) => sum + r.amount, 0);
+  }, [myRemises]);
 
-  // 6. Alertes financières
-  const sectorAlerts = useMemo(() => {
-    return alerts;
-  }, [alerts]);
+  // 4. Tickets vendus non couverts par une remise
+  const uncoveredTickets = useMemo(() => {
+    return soldManagedTickets.filter((t) => !t.coveredByRemiseId);
+  }, [soldManagedTickets]);
 
-  // 7. Ventes non couvertes
-  const unremittedTickets = useMemo(() => {
-    return sectorSoldTickets.filter((t) => !t.coveredByRemiseId);
-  }, [sectorSoldTickets]);
+  const remainingBalance = uncoveredTickets.length * TICKET_PRICE_FCFA;
 
-  // 8. Ventes par agent (graphique de classement)
+  // 5. Classement par agent mobile
   const salesByAgentItems: EntityRankItem[] = useMemo(() => {
-    return sectorAgents
+    return poolAgents
       .map((ag) => {
-        const agTickets = sectorTickets.filter((t) => t.assignedAgentId === ag.id);
+        const agTickets = managedTickets.filter((t) => t.assignedAgentId === ag.id);
         const count = agTickets.filter(
           (t) => t.status === 'SOLD' || t.status === 'CONTROLLED'
         ).length;
         const amount = count * TICKET_PRICE_FCFA;
-
-        const agRemises = sectorRemises.filter((r) => r.agentId === ag.id);
+        const agRemises = myRemises.filter((r) => r.agentId === ag.id);
         const remitted = agRemises.reduce((sum, r) => sum + r.amount, 0);
 
         return {
           id: ag.id,
           name: ag.fullName,
-          detail: ag.phone || 'Pool Mobile U.J.P.A.S.',
+          detail: ag.phone || `@${ag.username}`,
           count,
           amount,
           remitted,
         };
       })
       .sort((a, b) => b.count - a.count);
-  }, [sectorAgents, sectorTickets, sectorRemises]);
+  }, [poolAgents, managedTickets, myRemises]);
 
   const handleOpenRemiseForAgent = (agentId: string) => {
     setSelectedAgentForRemise(agentId);
@@ -179,7 +172,7 @@ export const ResponsableDashboard: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 space-y-5">
-      {/* Navigation Onglets */}
+      {/* Navigation Onglets Superviseur */}
       <div className="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
         <button
           onClick={() => setActiveTab('dashboard')}
@@ -189,8 +182,8 @@ export const ResponsableDashboard: React.FC = () => {
               : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
           }`}
         >
-          <Users className="w-4 h-4" />
-          <span>Tableau de Bord Superviseur U.J.P.A.S.</span>
+          <Layers className="w-4 h-4" />
+          <span>Dashboard Superviseur</span>
         </button>
         <button
           onClick={() => setActiveTab('agents')}
@@ -201,7 +194,7 @@ export const ResponsableDashboard: React.FC = () => {
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>Trombinoscope &amp; Suivi Agents ({sectorAgents.length})</span>
+          <span>Trombinoscope Agents ({poolAgents.length})</span>
         </button>
         <button
           onClick={() => setActiveTab('expenses')}
@@ -212,19 +205,17 @@ export const ResponsableDashboard: React.FC = () => {
           }`}
         >
           <Receipt className="w-4 h-4" />
-          <span>💰 Dépenses</span>
+          <span>Dépenses de l&apos;Équipe</span>
         </button>
       </div>
 
       {activeTab === 'expenses' ? (
         <ExpensesModule />
       ) : activeTab === 'agents' ? (
-        <AgentDirectoryView viewMode="RESPONSABLE" />
+        <AgentDirectoryView embedded />
       ) : (
         <div className="space-y-5">
-          {/* ========================================================================= */}
-          {/* EN-TÊTE DU TABLEAU DE BORD SUPERVISEUR                                    */}
-          {/* ========================================================================= */}
+          {/* En-tête Superviseur */}
           <div className="relative overflow-hidden rounded-2xl bg-slate-900/80 border border-white/10 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shadow-xl">
             <div className="absolute right-0 top-0 pointer-events-none opacity-5 overflow-hidden">
               <CoteDIvoireMap
@@ -239,369 +230,254 @@ export const ResponsableDashboard: React.FC = () => {
                   Supervision Terrain U.J.P.A.S. 🇨🇮
                 </span>
                 <span className="rounded bg-emerald-950 border border-emerald-500/40 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
-                  {currentUser?.sectorName || 'Zone Portuaire & Industrielle'}
+                  {myCarnets.length} carnet(s) attribué(s)
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
-                Tableau de Bord Superviseur (Responsable)
+                Tableau de Bord Superviseur ({currentUser?.fullName})
               </h2>
               <p className="text-xs text-slate-400">
-                Distribution des carnets au pool global d'agents mobiles et encaissement direct des remises vers l'Administrateur.
+                Attribution aux agents disponibles, enregistrement de vente, encaissement direct des remises et point de caisse vers l&apos;Administrateur.
               </p>
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* BLOC 1 : INDICATEURS CLÉS DE PERFORMANCE (KPIs)                           */}
-          {/* ========================================================================= */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <TicketIcon className="w-4 h-4 text-orange-400" />
-                <span>Bloc 1 — Indicateurs Clés du Périmètre</span>
-              </h3>
-              <span className="text-[11px] text-slate-500 font-mono">Vue En Temps Réel</span>
-            </div>
-
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <StatCard
-                title="Tickets Disponibles"
-                value={availableInSector.length}
-                subtitle={`${readyToAssignCount} prêts • ${inAgentHandsCount} en main`}
-                icon={<TicketIcon className="w-4 h-4" />}
-                variant="blue"
-                onClick={() => setTicketsListOpen(true)}
-              />
-              <StatCard
-                title="Valeur des Ventes"
-                value={formatFCFA(totalSalesAmount)}
-                subtitle={`${ticketsSold} ticket(s) vendu(s)`}
-                icon={<Receipt className="w-4 h-4" />}
-                variant="emerald"
-                onClick={() => setSalesListOpen(true)}
-              />
-              <StatCard
-                title="Remises Encaissées"
-                value={formatFCFA(totalRemittedAmount)}
-                subtitle={`${sectorRemises.length} versement(s)`}
-                icon={<HandCoins className="w-4 h-4" />}
-                variant="blue"
-                onClick={() => setRemisesListOpen(true)}
-              />
-              <StatCard
-                title="Solde à Récupérer"
-                value={formatFCFA(remainingSectorBalance)}
-                subtitle={
-                  sectorEcart > 0
-                    ? `Écart : +${formatFCFA(sectorEcart)}`
-                    : 'A verser par les agents'
-                }
-                icon={<AlertTriangle className="w-4 h-4" />}
-                variant={remainingSectorBalance > 0 ? 'amber' : 'slate'}
-                onClick={() => {
-                  setSelectedAgentForVentes(undefined);
-                  setVentesARemettreOpen(true);
-                }}
-              />
-            </div>
+          {/* BLOC 1 : INDICATEURS CLÉS DE PERFORMANCE */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatCard
+              title="Tickets Disponibles"
+              value={availableManagedTickets.length}
+              subtitle={`${readyToAssignCount} prêts • ${inAgentHandsCount} chez agents`}
+              icon={<TicketIcon className="w-4 h-4" />}
+              variant="blue"
+              onClick={() => setTicketsListOpen(true)}
+            />
+            <StatCard
+              title="Valeur des Ventes"
+              value={formatFCFA(totalSalesAmount)}
+              subtitle={`${ticketsSoldCount} ticket(s) vendu(s)`}
+              icon={<Receipt className="w-4 h-4" />}
+              variant="emerald"
+              onClick={() => setSalesListOpen(true)}
+            />
+            <StatCard
+              title="Remises Encaissées"
+              value={formatFCFA(totalRemittedAmount)}
+              subtitle={`${myRemises.length} versement(s) validé(s)`}
+              icon={<HandCoins className="w-4 h-4" />}
+              variant="blue"
+              onClick={() => setRemisesListOpen(true)}
+            />
+            <StatCard
+              title="Solde à Récupérer"
+              value={formatFCFA(remainingBalance)}
+              subtitle={`${uncoveredTickets.length} ticket(s) non versé(s)`}
+              icon={<AlertTriangle className="w-4 h-4" />}
+              variant={remainingBalance > 0 ? 'amber' : 'slate'}
+              onClick={() => {
+                setSelectedAgentForVentes(undefined);
+                setVentesARemettreOpen(true);
+              }}
+            />
           </div>
 
-          {/* ========================================================================= */}
-          {/* BLOC 2 : ACTIONS TERRAIN IMMÉDIATES (2 Grands Boutons Distincts)          */}
-          {/* ========================================================================= */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <UserPlus className="w-4 h-4 text-orange-400" />
-                <span>Bloc 2 — Actions Terrain Immédiates</span>
-              </h3>
-              <span className="text-[11px] text-slate-500">Supervision directe</span>
-            </div>
+          {/* BLOC 2 : ACTIONS TERRAIN IMMÉDIATES */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+            {/* 1. ATTRIBUER UN CARNET / TICKETS AUX AGENTS LIBRES */}
+            <button
+              onClick={() => setAssignmentModalOpen(true)}
+              className="relative overflow-hidden rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-amber-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-orange-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-orange-400/40 group"
+            >
+              <div className="relative z-10 flex items-center gap-3.5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+                  <UserPlus className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                    Agents Libres Uniquement
+                  </span>
+                  <h4 className="text-base sm:text-lg font-black text-white">
+                    Attribuer un Carnet / Tickets
+                  </h4>
+                  <p className="text-xs text-orange-100/90 mt-0.5">
+                    Bloque si l&apos;agent a déjà des tickets actifs
+                  </p>
+                </div>
+              </div>
+            </button>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {/* BOUTON LARGE 1 : ATTRIBUER TICKETS */}
-              <button
-                onClick={() => setAssignmentModalOpen(true)}
-                className="relative overflow-hidden rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-amber-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-orange-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-orange-400/40 group"
-              >
-                <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
-                  <UserPlus className="w-16 h-16 text-white" />
+            {/* 2. ENREGISTRER VENTE */}
+            <button
+              onClick={() => setSaleFormModalOpen(true)}
+              className="relative overflow-hidden rounded-2xl bg-linear-to-r from-blue-600 via-blue-500 to-indigo-600 p-4 sm:p-5 text-left text-white shadow-xl shadow-blue-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-blue-400/40 group"
+            >
+              <div className="relative z-10 flex items-center gap-3.5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+                  <ShoppingBag className="w-6 h-6" />
                 </div>
-                <div className="relative z-10 flex items-center gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
-                    <UserPlus className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
-                      Attribution Terrain
-                    </span>
-                    <h4 className="text-lg sm:text-xl font-black text-white">Attribuer Carnets / Tickets</h4>
-                    <p className="text-xs text-orange-100/90 mt-0.5">
-                      Confier un carnet ou lot de tickets à un agent libre du pool mobile
-                    </p>
-                  </div>
+                <div>
+                  <span className="inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                    Vente Terrain
+                  </span>
+                  <h4 className="text-base sm:text-lg font-black text-white">
+                    Enregistrer Vente
+                  </h4>
+                  <p className="text-xs text-blue-100/90 mt-0.5">
+                    Vendre un ticket et générer le reçu chauffeur
+                  </p>
                 </div>
-              </button>
+              </div>
+            </button>
 
-              {/* BOUTON LARGE 2 : ENREGISTRER REMISE */}
-              <button
-                onClick={() => {
-                  setSelectedAgentForRemise(undefined);
-                  setRemiseModalOpen(true);
-                }}
-                className="relative overflow-hidden rounded-2xl bg-linear-to-r from-emerald-600 via-emerald-500 to-teal-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-emerald-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-emerald-400/40 group"
-              >
-                <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
-                  <HandCoins className="w-16 h-16 text-white" />
+            {/* 3. ENREGISTRER REMISE (ENCAISSER AGENT) */}
+            <button
+              onClick={() => {
+                setSelectedAgentForRemise(undefined);
+                setRemiseModalOpen(true);
+              }}
+              className="relative overflow-hidden rounded-2xl bg-linear-to-r from-emerald-600 via-emerald-500 to-teal-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-emerald-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-emerald-400/40 group"
+            >
+              <div className="relative z-10 flex items-center gap-3.5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+                  <HandCoins className="w-6 h-6" />
                 </div>
-                <div className="relative z-10 flex items-center gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
-                    <HandCoins className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
-                      Encaissement Fonds
-                    </span>
-                    <h4 className="text-lg sm:text-xl font-black text-white">Enregistrer Remise Agent</h4>
-                    <p className="text-xs text-emerald-100/90 mt-0.5">
-                      Saisir le versement des recettes collectées par un agent sur le terrain
-                    </p>
-                  </div>
+                <div>
+                  <span className="inline-block rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                    Encaissement Direct
+                  </span>
+                  <h4 className="text-base sm:text-lg font-black text-white">
+                    Enregistrer Remise
+                  </h4>
+                  <p className="text-xs text-emerald-100/90 mt-0.5">
+                    Encaisser les tickets vendus d&apos;un agent
+                  </p>
                 </div>
-              </button>
-            </div>
+              </div>
+            </button>
           </div>
 
-          {/* ========================================================================= */}
-          {/* BLOC 3 : GRILLE DE GESTION SECONDAIRE (Grid 2 ou 4 Colonnes Propre)        */}
-          {/* ========================================================================= */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Users className="w-4 h-4 text-purple-400" />
-                <span>Bloc 3 — Modules de Gestion Secondaire</span>
-              </h3>
-              <span className="text-[11px] text-slate-500">Supervision &amp; Registres</span>
+          {/* BLOC 3 : OUTILS DE SUPERVISION AUTORISÉS */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {/* 1. Suivi Financier de ses Carnets */}
+            <div
+              onClick={() => setCarnetModalOpen(true)}
+              className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-purple-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 group-hover:scale-110 transition">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <span className="text-[10px] font-bold rounded-full bg-purple-500/20 text-purple-300 px-2 py-0.5 border border-purple-500/30">
+                  {myCarnets.length} carnet(s)
+                </span>
+              </div>
+              <div className="mt-3">
+                <h4 className="text-xs font-black text-white group-hover:text-purple-400 transition">
+                  Suivi Financier Carnets
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                  Consultation des lots attribués
+                </p>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3">
-              {/* 1. Lot & Stock Tickets */}
-              <div
-                onClick={() => setTicketsListOpen(true)}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-blue-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 group-hover:scale-110 transition">
-                    <TicketIcon className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-blue-500/20 text-blue-300 px-2 py-0.5 border border-blue-500/30">
-                    {sectorTickets.length} ticket(s)
-                  </span>
+            {/* 2. Ventes à Encaisser */}
+            <div
+              onClick={() => {
+                setSelectedAgentForVentes(undefined);
+                setVentesARemettreOpen(true);
+              }}
+              className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-amber-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 group-hover:scale-110 transition">
+                  <CheckCircle2 className="w-5 h-5" />
                 </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-blue-400 transition">
-                    Lot &amp; Stock Tickets
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Vision détaillée des tickets
-                  </p>
-                </div>
+                <span className="text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 border border-amber-500/30">
+                  {uncoveredTickets.length} en attente
+                </span>
               </div>
-
-              {/* 2. Trombinoscope Équipe */}
-              <div
-                onClick={() => setActiveTab('agents')}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-emerald-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 group-hover:scale-110 transition">
-                    <Users className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 border border-emerald-500/30">
-                    {sectorAgents.length} agent(s)
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-emerald-400 transition">
-                    Trombinoscope Équipe
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Photos, rôles &amp; numéros
-                  </p>
-                </div>
+              <div className="mt-3">
+                <h4 className="text-xs font-black text-white group-hover:text-amber-400 transition">
+                  Ventes à Encaisser
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                  Tickets vendus non remis
+                </p>
               </div>
+            </div>
 
-              {/* 3. Registre des Ventes */}
-              <div
-                onClick={() => setSalesListOpen(true)}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-orange-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/20 text-orange-400 border border-orange-500/30 group-hover:scale-110 transition">
-                    <Receipt className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-orange-500/20 text-orange-300 px-2 py-0.5 border border-orange-500/30">
-                    {ticketsSold} vente(s)
-                  </span>
+            {/* 3. Contrôle QR / Plaque */}
+            <div
+              onClick={() => setScanModalOpen(true)}
+              className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-orange-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/20 text-orange-400 border border-orange-500/30 group-hover:scale-110 transition">
+                  <QrCode className="w-5 h-5" />
                 </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-orange-400 transition">
-                    Registre des Ventes
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Historique complet des ventes
-                  </p>
-                </div>
+                <span className="text-[10px] font-bold rounded-full bg-orange-500/20 text-orange-300 px-2 py-0.5 border border-orange-500/30">
+                  Validité 14 j
+                </span>
               </div>
-
-              {/* 4. Historique des Remises */}
-              <div
-                onClick={() => setRemisesListOpen(true)}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-teal-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/20 text-teal-400 border border-teal-500/30 group-hover:scale-110 transition">
-                    <HandCoins className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-teal-500/20 text-teal-300 px-2 py-0.5 border border-teal-500/30">
-                    {sectorRemises.length} remise(s)
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-teal-400 transition">
-                    Historique des Remises
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Flux d'encaissement direct
-                  </p>
-                </div>
+              <div className="mt-3">
+                <h4 className="text-xs font-black text-white group-hover:text-orange-400 transition">
+                  Contrôle QR &amp; Plaque
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                  Vérifier un ticket ou camion
+                </p>
               </div>
+            </div>
 
-              {/* 5. Ventes Non Couvertes */}
-              <div
-                onClick={() => {
-                  setSelectedAgentForVentes(undefined);
-                  setVentesARemettreOpen(true);
-                }}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-amber-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 group-hover:scale-110 transition">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 border border-amber-500/30">
-                    {unremittedTickets.length} non versé(s)
-                  </span>
+            {/* 4. Point de Caisse / Remise Globale vers l'Admin */}
+            <div
+              onClick={() => setDailyClosingModalOpen(true)}
+              className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-emerald-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 group-hover:scale-110 transition">
+                  <Vault className="w-5 h-5" />
                 </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-amber-400 transition">
-                    Ventes Non Couvertes
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Tickets vendus en attente
-                  </p>
-                </div>
+                <span className="text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 border border-emerald-500/30">
+                  Vers Admin
+                </span>
               </div>
-
-              {/* 6. Registre des Contrôles */}
-              <div
-                onClick={() => setControlsListOpen(true)}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-purple-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 group-hover:scale-110 transition">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-purple-500/20 text-purple-300 px-2 py-0.5 border border-purple-500/30">
-                    Secteur
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-purple-400 transition">
-                    Registre des Contrôles
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Passages vérifiés aux barrages
-                  </p>
-                </div>
-              </div>
-
-              {/* 7. Recherche Multicritères */}
-              <div
-                onClick={() => setSearchModalOpen(true)}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-amber-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 group-hover:scale-110 transition">
-                    <Search className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 border border-amber-500/30">
-                    Filtres
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-amber-400 transition">
-                    Recherche Multicritères
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Tickets, camions, agents
-                  </p>
-                </div>
-              </div>
-
-              {/* 8. Dépenses du Secteur */}
-              <div
-                onClick={() => setActiveTab('expenses')}
-                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-emerald-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 group-hover:scale-110 transition">
-                    <Receipt className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 border border-emerald-500/30">
-                    Budget
-                  </span>
-                </div>
-                <div className="mt-3">
-                  <h4 className="text-xs font-black text-white group-hover:text-emerald-400 transition">
-                    Dépenses du Secteur
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                    Frais de fonctionnement
-                  </p>
-                </div>
+              <div className="mt-3">
+                <h4 className="text-xs font-black text-white group-hover:text-emerald-400 transition">
+                  Point de Caisse vers Admin
+                </h4>
+                <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                  Remise globale à l&apos;Administrateur
+                </p>
               </div>
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* GRAPHIQUE DES VENTES PAR AGENT                                            */}
-          {/* ========================================================================= */}
+          {/* GRAPHIQUE DES VENTES PAR AGENT */}
           <EntityRankingChart
-            title="Ventes par Agent Mobile (Vos Lots)"
+            title="Ventes par Agent Mobile"
             items={salesByAgentItems}
-            emptyMessage="Aucun agent n'a encore enregistré de ventes sur vos lots."
+            emptyMessage="Aucun agent n'a encore enregistré de ventes."
             showRemitted={true}
           />
 
-          {/* ========================================================================= */}
-          {/* TABLEAU DU POOL D'AGENTS MOBILES & ÉTAT FINANCIER DÉTAILLÉ                */}
-          {/* ========================================================================= */}
+          {/* TABLEAU DU POOL D'AGENTS MOBILES & ENCAISSEMENT DIRECT */}
           <div className="rounded-2xl border border-slate-800 bg-slate-900/90 p-4 sm:p-5 shadow-sm space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-white">
-                  Pool Global des Agents Mobiles U.J.P.A.S. ({sectorAgents.length})
+                  Pool Global des Agents Mobiles U.J.P.A.S. ({poolAgents.length})
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Suivi individuel des tickets distribués, vendus et des remises directes (Agent → Superviseur → Admin)
+                  Suivi des tickets confiés, vendus et encaissement direct des remises
                 </p>
               </div>
               <button
                 onClick={() => setRemisesListOpen(true)}
                 className="text-xs text-blue-400 hover:underline font-semibold cursor-pointer"
               >
-                Registre des Remises ({sectorRemises.length})
+                Historique des Remises ({myRemises.length})
               </button>
             </div>
 
@@ -611,36 +487,36 @@ export const ResponsableDashboard: React.FC = () => {
                   <tr>
                     <th className="py-2.5 px-3">Agent &amp; Photo</th>
                     <th className="py-2.5 px-3">Téléphone</th>
-                    <th className="py-2.5 px-3 text-center">En Main (Dispo)</th>
-                    <th className="py-2.5 px-3 text-center">Tickets Vendus</th>
-                    <th className="py-2.5 px-3 text-right">Montant Attendu</th>
-                    <th className="py-2.5 px-3 text-right">Montant Remis</th>
-                    <th className="py-2.5 px-3 text-right">Solde Restant</th>
+                    <th className="py-2.5 px-3 text-center">En Main</th>
+                    <th className="py-2.5 px-3 text-center">Vendus</th>
+                    <th className="py-2.5 px-3 text-center">Non Couverts</th>
+                    <th className="py-2.5 px-3 text-right">Solde à Verser</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {sectorAgents.length === 0 ? (
+                  {poolAgents.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-slate-500 font-sans">
+                      <td colSpan={7} className="py-8 text-center text-slate-500 font-sans">
                         Aucun agent actif dans le pool U.J.P.A.S.
                       </td>
                     </tr>
                   ) : (
-                    sectorAgents.map((ag) => {
-                      const agTickets = sectorTickets.filter((t) => t.assignedAgentId === ag.id);
+                    poolAgents.map((ag) => {
+                      const agTickets = tickets.filter(
+                        (t) => t.status !== 'CANCELLED' && t.assignedAgentId === ag.id
+                      );
                       const availableCount = agTickets.filter(
                         (t) => t.status === 'ASSIGNED_TO_AGENT'
                       ).length;
-                      const soldCount = agTickets.filter(
+                      const soldAgTickets = agTickets.filter(
                         (t) => t.status === 'SOLD' || t.status === 'CONTROLLED'
-                      ).length;
-                      const totalEarned = soldCount * TICKET_PRICE_FCFA;
-
-                      const agRemises = sectorRemises.filter((r) => r.agentId === ag.id);
-                      const remitted = agRemises.reduce((sum, r) => sum + r.amount, 0);
-                      const balance = Math.max(0, totalEarned - remitted);
-                      const hasAlert = Math.ceil(balance / TICKET_PRICE_FCFA) >= 10;
+                      );
+                      const uncoveredAgTickets = soldAgTickets.filter(
+                        (t) => !t.coveredByRemiseId
+                      );
+                      const balance = uncoveredAgTickets.length * TICKET_PRICE_FCFA;
+                      const hasAlert = uncoveredAgTickets.length >= 10;
 
                       return (
                         <tr key={ag.id} className="hover:bg-slate-900/40 transition">
@@ -662,7 +538,7 @@ export const ResponsableDashboard: React.FC = () => {
                                   <span>{ag.fullName}</span>
                                   {hasAlert && (
                                     <span className="rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 text-[9px] font-bold">
-                                      ALERTE
+                                      SEUIL 10+
                                     </span>
                                   )}
                                 </div>
@@ -679,13 +555,18 @@ export const ResponsableDashboard: React.FC = () => {
                             {availableCount}
                           </td>
                           <td className="py-3 px-3 text-center text-emerald-400 font-bold whitespace-nowrap">
-                            {soldCount}
+                            {soldAgTickets.length}
                           </td>
-                          <td className="py-3 px-3 text-right text-slate-300 whitespace-nowrap">
-                            {formatFCFA(totalEarned)}
-                          </td>
-                          <td className="py-3 px-3 text-right text-emerald-400 font-bold whitespace-nowrap">
-                            {formatFCFA(remitted)}
+                          <td className="py-3 px-3 text-center whitespace-nowrap">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                uncoveredAgTickets.length > 0
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {uncoveredAgTickets.length}
+                            </span>
                           </td>
                           <td className="py-3 px-3 text-right font-bold whitespace-nowrap">
                             <span className={balance > 0 ? 'text-amber-400' : 'text-slate-400'}>
@@ -725,6 +606,14 @@ export const ResponsableDashboard: React.FC = () => {
             isOpen={assignmentModalOpen}
             onClose={() => setAssignmentModalOpen(false)}
           />
+          <CarnetManagementModal
+            isOpen={carnetModalOpen}
+            onClose={() => setCarnetModalOpen(false)}
+          />
+          <SaleFormModal
+            isOpen={saleFormModalOpen}
+            onClose={() => setSaleFormModalOpen(false)}
+          />
           <RemiseFormModal
             isOpen={remiseModalOpen}
             onClose={() => setRemiseModalOpen(false)}
@@ -744,14 +633,21 @@ export const ResponsableDashboard: React.FC = () => {
             }}
           />
           <TicketListModal isOpen={ticketsListOpen} onClose={() => setTicketsListOpen(false)} />
-          <SalesListModal isOpen={salesListOpen} onClose={() => setSalesListOpen(false)} />
-          <ControlsListModal
-            isOpen={controlsListOpen}
-            onClose={() => setControlsListOpen(false)}
+          <SalesListModal
+            isOpen={salesListOpen}
+            onClose={() => setSalesListOpen(false)}
+            onOpenNewSale={() => {
+              setSalesListOpen(false);
+              setSaleFormModalOpen(true);
+            }}
           />
-          <AdvancedSearchModal
-            isOpen={searchModalOpen}
-            onClose={() => setSearchModalOpen(false)}
+          <ControlScanModal
+            isOpen={scanModalOpen}
+            onClose={() => setScanModalOpen(false)}
+          />
+          <DailyOperationsCenterModal
+            isOpen={dailyClosingModalOpen}
+            onClose={() => setDailyClosingModalOpen(false)}
           />
         </div>
       )}
