@@ -173,7 +173,7 @@ export const QrCameraScanner: React.FC<QrCameraScannerProps> = ({
         if (code && code.data) {
           lastScannedTimeRef.current = now;
           playBeep();
-          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
             try {
               navigator.vibrate(100);
             } catch {

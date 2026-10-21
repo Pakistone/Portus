@@ -87,8 +87,8 @@ export const CarnetPrintModal: React.FC<CarnetPrintModalProps> = ({
         batch.map(async (t) => {
           try {
             const url = await renderTicketToDataUrl(t, {
-              width: 1075, // 300 DPI pour 9.1 cm (longueur augmentée pour combler l'espace blanc à droite)
-              height: 945,  // 300 DPI pour 8.0 cm (hauteur officielle)
+              width: 1181, // 300 DPI pour 10.0 cm (100 mm de longueur officielle)
+              height: 945,  // 300 DPI pour 8.0 cm (80 mm de hauteur officielle)
               enhanceContrast: true,
               watermarkOpacity: 0.58,
               carnetCreatedAt: carnet?.createdAt,
@@ -206,11 +206,11 @@ export const CarnetPrintModal: React.FC<CarnetPrintModalProps> = ({
         <html lang="fr">
           <head>
             <meta charset="utf-8" />
-            <title>Impression Planches Carnet ${carnet.carnetNumber} — PORTUS</title>
+            <title>Impression Planches Carnet ${carnet.carnetNumber} — PORTUS — U.J.P.A.S.</title>
             <style>
               @page {
                 size: A4 landscape;
-                margin: 4mm;
+                margin: 0mm;
               }
               * {
                 box-sizing: border-box;

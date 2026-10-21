@@ -1,6 +1,7 @@
 /**
  * Module de Sécurité Applicative, Assainissement (Sanitization) & Protection Anti-Injection
- * PORTUS — Union des Jeunes de la Sécurité Routière de Vridi (U.J.S.R.V.)
+ * PORTUS — Union des Jeunes du Port pour l'Assistance et la Sécurité (U.J.P.A.S.)
+ * Zone Portuaire & Industrielle d'Abidjan
  * 
  * Protège l'ensemble des formulaires, commentaires, notes, recherches et signalements
  * contre :

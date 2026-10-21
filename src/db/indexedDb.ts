@@ -22,7 +22,7 @@ import type {
   BrigadeAssignment,
 } from '../types';
 
-interface PortusDB extends DBSchema {
+export interface PortusDB extends DBSchema {
   users: {
     key: string;
     value: User;

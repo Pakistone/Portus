@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   UserPlus,
@@ -11,9 +11,13 @@ import {
   RotateCcw,
   Clock,
   UserCheck,
+  Camera,
+  Trash2,
+  User as UserIcon,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { DEFAULT_SECTORS } from '../../config/constants';
+import { compressAvatarImage } from '../../utils/imageCompression';
 import type { Role, User } from '../../types';
 
 interface Props {
@@ -47,7 +51,9 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [role, setRole] = useState<Role>('AGENT');
   const [sectorId, setSectorId] = useState(DEFAULT_SECTORS[0].id);
   const [phone, setPhone] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string>('');
   const [passwordRaw, setPasswordRaw] = useState('');
+  const createFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Modification utilisateur
   const [editTargetUser, setEditTargetUser] = useState<User | null>(null);
@@ -55,6 +61,8 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [editPhone, setEditPhone] = useState('');
   const [editRole, setEditRole] = useState<Role>('AGENT');
   const [editSectorId, setEditSectorId] = useState(DEFAULT_SECTORS[0].id);
+  const [editAvatarUrl, setEditAvatarUrl] = useState<string>('');
+  const editFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Réinitialisation mot de passe
   const [resetTargetUser, setResetTargetUser] = useState<User | null>(null);
@@ -64,8 +72,33 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [deactivateTargetUser, setDeactivateTargetUser] = useState<User | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [compressingPhoto, setCompressingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  const handlePhotoFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    mode: 'CREATE' | 'EDIT'
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCompressingPhoto(true);
+    setError(null);
+    try {
+      const compressedDataUrl = await compressAvatarImage(file, 320, 0.8);
+      if (mode === 'CREATE') {
+        setAvatarUrl(compressedDataUrl);
+      } else {
+        setEditAvatarUrl(compressedDataUrl);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Erreur lors de la compression de la photo.');
+    } finally {
+      setCompressingPhoto(false);
+      e.target.value = '';
+    }
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,12 +118,14 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setLoading(true);
     try {
       // RÈGLE MÉTIER CRITIQUE : Le mot de passe est transmis BRUT sans aucune normalisation
+      // Les agents font partie du Pool Global Mobile U.J.P.A.S. (pas de secteur fixe obligatoire)
       await createUser({
         username: username.trim(),
         fullName: fullName.trim(),
         role,
-        sectorId: role === 'AGENT' || role === 'RESPONSABLE' ? sectorId : undefined,
+        sectorId: role === 'RESPONSABLE' ? sectorId : undefined,
         phone: phone.trim() || undefined,
+        avatarUrl: avatarUrl || undefined,
         passwordRaw,
       });
 
@@ -99,6 +134,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       setFullName('');
       setPasswordRaw('');
       setPhone('');
+      setAvatarUrl('');
       setActiveTab('LIST');
     } catch (err: any) {
       setError(err?.message || 'Erreur lors de la création du compte.');
@@ -113,6 +149,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setEditPhone(u.phone || '');
     setEditRole(u.role);
     setEditSectorId(u.sectorId || DEFAULT_SECTORS[0].id);
+    setEditAvatarUrl(u.avatarUrl || '');
     setError(null);
   };
 
@@ -132,7 +169,8 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
         fullName: editFullName.trim(),
         phone: editPhone.trim() || undefined,
         role: editRole,
-        sectorId: editRole === 'AGENT' || editRole === 'RESPONSABLE' ? editSectorId : undefined,
+        sectorId: editRole === 'RESPONSABLE' ? editSectorId : undefined,
+        avatarUrl: editAvatarUrl,
       });
       setSuccessMessage(`Informations mises à jour pour "${editFullName}"`);
       setEditTargetUser(null);
@@ -155,7 +193,6 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setLoading(true);
     setError(null);
     try {
-      // Mot de passe brut STRICTEMENT conservé (aucune altération)
       await resetUserPassword(resetTargetUser.id, newPasswordRaw);
       setSuccessMessage(
         `Mot de passe réinitialisé pour ${resetTargetUser.fullName}. Le compte est débloqué.`
@@ -191,7 +228,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       await toggleUserActive(deactivateTargetUser.id);
       if (deactivateTargetUser.role === 'AGENT') {
         setSuccessMessage(
-          `Agent ${deactivateTargetUser.fullName} désactivé. Ses tickets non vendus ont été automatiquement retournés à son responsable. Ventes et audits préservés.`
+          `Agent ${deactivateTargetUser.fullName} désactivé. Ses tickets non vendus ont été automatiquement retournés à son superviseur. Ventes et audits préservés.`
         );
       } else if (deactivateTargetUser.role === 'RESPONSABLE') {
         setSuccessMessage(
@@ -225,7 +262,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       case 'AGENT':
         return (
           <span className="rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold">
-            AGENT
+            AGENT MOBILE
           </span>
         );
       case 'CONTROLEUR':
@@ -237,27 +274,29 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     }
   };
 
-  // Calcul du nombre de tickets concernés lors de la désactivation (supportant les deux conventions)
   const getDeactivationDetails = (u: User) => {
     if (u.role === 'AGENT') {
       const unsold = tickets.filter(
-        (t) => (t.assignedAgentId === u.id || (t as any).assignedAgent === u.id) && t.status !== 'SOLD' && t.status !== 'CANCELLED'
+        (t) =>
+          (t.assignedAgentId === u.id || (t as any).assignedAgent === u.id) &&
+          t.status !== 'SOLD' &&
+          t.status !== 'CANCELLED'
       ).length;
       return { unsoldTickets: unsold, carnets: 0 };
     }
     if (u.role === 'RESPONSABLE') {
       const unsold = tickets.filter(
-        (t) => (t.assignedResponsableId === u.id || (t as any).assignedResponsable === u.id) && t.status !== 'SOLD' && t.status !== 'CANCELLED'
+        (t) =>
+          (t.assignedResponsableId === u.id || (t as any).assignedResponsable === u.id) &&
+          t.status !== 'SOLD' &&
+          t.status !== 'CANCELLED'
       ).length;
-      const respCarnets = carnets.filter(
-        (c) => c.assignedToResponsableId === u.id
-      ).length;
+      const respCarnets = carnets.filter((c) => c.assignedToResponsableId === u.id).length;
       return { unsoldTickets: unsold, carnets: respCarnets };
     }
     return { unsoldTickets: 0, carnets: 0 };
   };
 
-  // Gestion Escape pour fermer uniquement la sous-modale active ou la modale principale
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -292,13 +331,18 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
           <div className="flex items-center gap-2">
             <Shield className="w-5 h-5 text-emerald-400" />
             <div>
-              <h3 className="text-base font-bold text-white">Gestion des Comptes & Accès</h3>
+              <h3 className="text-base font-bold text-white">
+                Gestion des Comptes, Photos &amp; Accès U.J.P.A.S.
+              </h3>
               <p className="text-[11px] text-slate-400">
-                Droits exclusifs Administrateur : création, modification, activation, désactivation et réinitialisation
+                Droits exclusifs Administrateur : comptes, photos trombinoscope et pool global d’agents mobiles
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:text-white cursor-pointer">
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1 text-slate-400 hover:text-white cursor-pointer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -324,7 +368,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
             }`}
           >
             <UserPlus className="w-3.5 h-3.5" />
-            <span>Nouveau Compte</span>
+            <span>Nouveau Compte / Agent</span>
           </button>
         </div>
 
@@ -348,10 +392,10 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <table className="w-full text-left text-xs text-slate-300">
                 <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 text-[11px] font-bold uppercase text-slate-400">
                   <tr>
-                    <th className="py-2.5 px-3">Nom & Prénoms</th>
+                    <th className="py-2.5 px-3">Agent / Membre</th>
                     <th className="py-2.5 px-3">Identifiant</th>
                     <th className="py-2.5 px-3">Rôle</th>
-                    <th className="py-2.5 px-3">Secteur</th>
+                    <th className="py-2.5 px-3">Affectation</th>
                     <th className="py-2.5 px-3">Téléphone</th>
                     <th className="py-2.5 px-3">Statut</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
@@ -361,20 +405,50 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   {users.map((u) => {
                     const isLocked =
                       u.lockedUntil && new Date(u.lockedUntil).getTime() > Date.now();
+                    const initials = u.fullName
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase();
 
                     return (
                       <tr key={u.id} className="hover:bg-slate-900/60 transition">
-                        <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
-                          {u.fullName}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="flex items-center gap-2.5">
+                            {u.avatarUrl ? (
+                              <img
+                                src={u.avatarUrl}
+                                alt={u.fullName}
+                                className="w-8 h-8 rounded-full object-cover border border-emerald-500/40 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-black text-emerald-400 shrink-0">
+                                {initials || <UserIcon className="w-3.5 h-3.5" />}
+                              </div>
+                            )}
+                            <div>
+                              <div className="font-bold text-white">{u.fullName}</div>
+                              {u.avatarUrl && (
+                                <span className="text-[9px] text-emerald-400 font-semibold">
+                                  📸 Photo certifiée
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         <td className="py-2.5 px-3 font-mono text-slate-400 whitespace-nowrap">
                           {u.username}
                         </td>
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          {roleBadge(u.role)}
-                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">{roleBadge(u.role)}</td>
                         <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
-                          {u.sectorName || '—'}
+                          {u.role === 'AGENT' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
+                              Pool Mobile Global
+                            </span>
+                          ) : (
+                            u.sectorName || 'Tous secteurs'
+                          )}
                         </td>
                         <td className="py-2.5 px-3 font-mono text-slate-400 whitespace-nowrap">
                           {u.phone || '—'}
@@ -399,16 +473,14 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         </td>
                         <td className="py-2.5 px-3 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
-                            {/* Modifier informations autorisées */}
                             <button
                               onClick={() => openEditModal(u)}
                               className="p-1.5 rounded-lg text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 transition cursor-pointer"
-                              title="Modifier les informations"
+                              title="Modifier profil & photo"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
 
-                            {/* Reset mot de passe */}
                             <button
                               onClick={() => {
                                 setResetTargetUser(u);
@@ -420,7 +492,6 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                               <KeyRound className="w-3.5 h-3.5" />
                             </button>
 
-                            {/* Activer / Désactiver avec protection */}
                             {u.isActive ? (
                               <button
                                 onClick={() => setDeactivateTargetUser(u)}
@@ -450,6 +521,57 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
           ) : (
             /* Formulaire de création */
             <form onSubmit={handleCreateSubmit} className="p-4 space-y-4 max-w-lg mx-auto">
+              {/* Photo d'identité / Trombinoscope */}
+              <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3.5 flex items-center gap-4">
+                <div className="relative w-16 h-16 rounded-2xl bg-slate-800 border-2 border-emerald-500/40 flex items-center justify-center overflow-hidden shrink-0">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt="Aperçu photo"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Camera className="w-6 h-6 text-slate-500" />
+                  )}
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="text-xs font-bold text-white">
+                    Photo Officielle (Trombinoscope &amp; Badge U.J.P.A.S.)
+                  </div>
+                  <p className="text-[10px] text-slate-400">
+                    Visible par les contrôleurs lors du scan QR et par les superviseurs pour l'identification terrain.
+                  </p>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <input
+                      ref={createFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handlePhotoFileChange(e, 'CREATE')}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => createFileInputRef.current?.click()}
+                      disabled={compressingPhoto}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-500/40 px-2.5 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-600/30 transition cursor-pointer"
+                    >
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>{compressingPhoto ? 'Compression...' : avatarUrl ? 'Changer la photo' : 'Ajouter une photo'}</span>
+                    </button>
+                    {avatarUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setAvatarUrl('')}
+                        className="inline-flex items-center gap-1 rounded-lg bg-rose-500/15 border border-rose-500/30 px-2 py-1 text-[11px] font-bold text-rose-300 hover:bg-rose-500/25 transition cursor-pointer"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Retirer</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
@@ -467,7 +589,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Nom complet & Prénoms <span className="text-rose-400">*</span>
+                    Nom complet &amp; Prénoms <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
@@ -490,35 +612,42 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     onChange={(e) => setRole(e.target.value as Role)}
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs text-white focus:border-emerald-500 focus:outline-hidden"
                   >
-                    <option value="AGENT">AGENT DE TERRAIN</option>
-                    <option value="RESPONSABLE">RESPONSABLE SECTEUR</option>
+                    <option value="AGENT">AGENT DE TERRAIN (Pool Mobile)</option>
+                    <option value="RESPONSABLE">RESPONSABLE / SUPERVISEUR</option>
                     <option value="CONTROLEUR">CONTRÔLEUR ROUTIER</option>
                     <option value="ADMINISTRATEUR">ADMINISTRATEUR</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Secteur géographique
+                    Secteur de rattachement
                   </label>
-                  <select
-                    value={sectorId}
-                    onChange={(e) => setSectorId(e.target.value)}
-                    disabled={role === 'ADMINISTRATEUR' || role === 'CONTROLEUR'}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs text-white focus:border-emerald-500 focus:outline-hidden disabled:opacity-40"
-                  >
-                    {DEFAULT_SECTORS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                  {role === 'RESPONSABLE' ? (
+                    <select
+                      value={sectorId}
+                      onChange={(e) => setSectorId(e.target.value)}
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs text-white focus:border-emerald-500 focus:outline-hidden"
+                    >
+                      {DEFAULT_SECTORS.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 px-3 text-xs text-emerald-400 font-semibold">
+                      {role === 'AGENT'
+                        ? 'Pool Mobile Global (Tous secteurs)'
+                        : 'Zone Portuaire & Industrielle (Global)'}
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Téléphone (Facultatif)
+                    Téléphone (Recommandé)
                   </label>
                   <input
                     type="tel"
@@ -544,16 +673,15 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
 
               <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-[11px] text-slate-400 space-y-1">
-                <p className="font-semibold text-slate-300">Règles de sécurité des comptes :</p>
-                <p>• Aucun code PIN ni 2FA. Connexion directe par nom d’utilisateur et mot de passe.</p>
-                <p>• Le mot de passe requiert au moins 6 caractères et est stocké sans altération.</p>
-                <p>• 5 échecs de connexion consécutifs entraînent un blocage automatique pendant 15 minutes.</p>
+                <p className="font-semibold text-slate-300">Règles de gouvernance U.J.P.A.S. :</p>
+                <p>• Les agents de terrain appartiennent au Pool Mobile Global et peuvent recevoir des tickets de tout Responsable ou de l'Administrateur.</p>
+                <p>• La photo de l'agent est compressée hors-ligne (320×320 JPEG) pour un affichage instantané lors des contrôles QR.</p>
               </div>
 
               <div className="pt-2">
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || compressingPhoto}
                   className="w-full rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-500 transition shadow-md disabled:opacity-50 cursor-pointer"
                 >
                   {loading ? 'Création en cours...' : 'Créer le Compte Utilisateur'}
@@ -568,15 +696,61 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
           <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/85 p-4">
             <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-100 shadow-2xl">
               <h4 className="text-base font-bold text-white mb-1">
-                Modifier les informations : {editTargetUser.username}
+                Modifier le profil : {editTargetUser.username}
               </h4>
               <p className="text-xs text-slate-400 mb-4">
-                Seul l'administrateur est autorisé à modifier ces informations.
+                Mise à jour d'identité, photo trombinoscope et rôle.
               </p>
               <form onSubmit={handleEditSubmit} className="space-y-4">
+                {/* Photo dans l'édition */}
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 flex items-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-slate-800 border border-emerald-500/40 flex items-center justify-center overflow-hidden shrink-0">
+                    {editAvatarUrl ? (
+                      <img
+                        src={editAvatarUrl}
+                        alt={editFullName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Camera className="w-5 h-5 text-slate-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <span className="text-xs font-bold text-white block">
+                      Photo d'identification officielle
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={editFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handlePhotoFileChange(e, 'EDIT')}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => editFileInputRef.current?.click()}
+                        disabled={compressingPhoto}
+                        className="rounded-lg bg-blue-600/20 border border-blue-500/40 px-2.5 py-1 text-[11px] font-bold text-blue-300 hover:bg-blue-600/30 transition cursor-pointer"
+                      >
+                        {compressingPhoto ? 'Compression...' : 'Choisir une photo'}
+                      </button>
+                      {editAvatarUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setEditAvatarUrl('')}
+                          className="rounded-lg bg-rose-500/15 border border-rose-500/30 px-2 py-1 text-[11px] font-bold text-rose-300 hover:bg-rose-500/25 transition cursor-pointer"
+                        >
+                          Supprimer
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Nom & Prénoms
+                    Nom &amp; Prénoms
                   </label>
                   <input
                     type="text"
@@ -597,7 +771,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                       onChange={(e) => setEditRole(e.target.value as Role)}
                       className="w-full rounded-xl border border-slate-700 bg-slate-800 p-2 text-xs text-white focus:border-blue-500 focus:outline-hidden"
                     >
-                      <option value="AGENT">AGENT</option>
+                      <option value="AGENT">AGENT MOBILE</option>
                       <option value="RESPONSABLE">RESPONSABLE</option>
                       <option value="CONTROLEUR">CONTRÔLEUR</option>
                       <option value="ADMINISTRATEUR">ADMINISTRATEUR</option>
@@ -617,23 +791,28 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Secteur
-                  </label>
-                  <select
-                    value={editSectorId}
-                    onChange={(e) => setEditSectorId(e.target.value)}
-                    disabled={editRole === 'ADMINISTRATEUR' || editRole === 'CONTROLEUR'}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 p-2 text-xs text-white focus:border-blue-500 focus:outline-hidden disabled:opacity-40"
-                  >
-                    {DEFAULT_SECTORS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {editRole === 'RESPONSABLE' ? (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Secteur de supervision
+                    </label>
+                    <select
+                      value={editSectorId}
+                      onChange={(e) => setEditSectorId(e.target.value)}
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800 p-2 text-xs text-white focus:border-blue-500 focus:outline-hidden"
+                    >
+                      {DEFAULT_SECTORS.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 p-2.5 text-[11px] text-emerald-400">
+                    ✓ Pool Mobile Global U.J.P.A.S. (Sans restriction de secteur fixe)
+                  </div>
+                )}
 
                 <div className="flex gap-2 pt-2">
                   <button
@@ -645,7 +824,7 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading}
+                    disabled={loading || compressingPhoto}
                     className="flex-1 rounded-xl bg-blue-600 py-2 text-xs font-bold text-white hover:bg-blue-500 transition disabled:opacity-50 cursor-pointer"
                   >
                     {loading ? 'Enregistrement...' : 'Enregistrer'}
@@ -722,7 +901,6 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 {deactivateTargetUser.role}) ?
               </p>
 
-              {/* Règle spécifique Agent */}
               {deactivateTargetUser.role === 'AGENT' && (
                 <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200 space-y-1.5 leading-relaxed">
                   <p className="font-bold text-white flex items-center gap-1.5">
@@ -730,14 +908,13 @@ export const UserManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     Règle de désactivation d’un AGENT :
                   </p>
                   <p>
-                    • Ses <strong>{getDeactivationDetails(deactivateTargetUser).unsoldTickets} ticket(s) non vendu(s)</strong> retourneront automatiquement à son responsable de secteur.
+                    • Ses <strong>{getDeactivationDetails(deactivateTargetUser).unsoldTickets} ticket(s) non vendu(s)</strong> retourneront automatiquement au stock superviseur.
                   </p>
                   <p>• Ses ventes historiques resteront définitivement liées à cet agent.</p>
                   <p>• Toutes ses données d’audit restent intégralement conservées.</p>
                 </div>
               )}
 
-              {/* Règle spécifique Responsable */}
               {deactivateTargetUser.role === 'RESPONSABLE' && (
                 <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200 space-y-1.5 leading-relaxed">
                   <p className="font-bold text-white flex items-center gap-1.5">

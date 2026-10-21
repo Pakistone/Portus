@@ -5,6 +5,7 @@ import { getDB } from '../../../db/indexedDb';
 import { normalizePlate, normalizeText } from '../../../utils/normalization';
 import { getCurrentCoordinates } from '../../../utils/geolocation';
 import { parseTicketQRPayload, verifyTicketSecurityToken } from '../../../utils/ticketSecurity';
+import { getTicketValidityStatus } from '../../../utils/expiration';
 import { SupabaseDataLayer } from '../../../db/supabaseService';
 import { generateUUID } from '../../../utils/uuid';
 
@@ -51,6 +52,7 @@ export function useControlsAndFraud(
               ticket: null,
               agentName: secureResult.agent_name || null,
               agentPhone: secureResult.agent_phone || null,
+              agentAvatarUrl: null,
               verifiedVia: 'SERVER',
               message: secureResult.message || 'Signature cryptographique non authentique. Faux ticket détecté !',
               isRepeatedControl: false,
@@ -109,8 +111,9 @@ export function useControlsAndFraud(
         ticket: null,
         agentName: null,
         agentPhone: null,
+        agentAvatarUrl: null,
         verifiedVia,
-        message: 'Ce code ne correspond à aucun ticket enregistré dans la base officielle de l’U.J.S.R.V.',
+        message: 'Ce code ne correspond à aucun ticket enregistré dans la base officielle de l’U.J.P.A.S.',
         isRepeatedControl: false,
         previousControlCount: 0,
       };
@@ -126,6 +129,7 @@ export function useControlsAndFraud(
           ticket: foundTicket,
           agentName: null,
           agentPhone: null,
+          agentAvatarUrl: null,
           verifiedVia,
           message: `ALERTE SÉCURITÉ : Le numéro physique [${foundTicket.ticketNumber}] existe, mais la signature ou le jeton cryptographique est non conforme. Ticket contrefait. (${tokenVerification.reason})`,
           isRepeatedControl: false,
@@ -136,9 +140,10 @@ export function useControlsAndFraud(
 
     const agentUser = users.find((u) => u.id === foundTicket?.assignedAgentId);
     const agentName =
-      foundTicket.assignedAgentName || agentUser?.fullName || 'Agent U.J.S.R.V.';
+      foundTicket.assignedAgentName || agentUser?.fullName || 'Agent U.J.P.A.S.';
     const agentPhone =
       foundTicket.assignedAgentPhone || agentUser?.phone || 'Téléphone non renseigné';
+    const agentAvatarUrl = agentUser?.avatarUrl || null;
 
     const previousControlCount = foundTicket.controlCount || 0;
     const isRepeatedControl = previousControlCount > 0;
@@ -150,8 +155,9 @@ export function useControlsAndFraud(
         ticket: foundTicket,
         agentName,
         agentPhone,
+        agentAvatarUrl,
         verifiedVia,
-        message: `Ce ticket a été annulé par l’administration.${
+        message: `Ce ticket a été annulé par l’administration U.J.P.A.S.${
           foundTicket.cancellationReason ? ' Motif : ' + foundTicket.cancellationReason : ''
         }`,
         isRepeatedControl,
@@ -166,6 +172,7 @@ export function useControlsAndFraud(
         ticket: foundTicket,
         agentName,
         agentPhone,
+        agentAvatarUrl,
         verifiedVia,
         message: `Un nouveau ticket actif a été émis pour ce véhicule (${
           foundTicket.supersededByTicketNumber || 'Nouveau ticket'
@@ -182,8 +189,26 @@ export function useControlsAndFraud(
         ticket: foundTicket,
         agentName,
         agentPhone,
+        agentAvatarUrl,
         verifiedVia,
         message: `Ce ticket figure dans un carnet non vendu (statut actuel : ${foundTicket.status}). Circuler avec ce ticket est non conforme.`,
+        isRepeatedControl,
+        previousControlCount,
+      };
+    }
+
+    // Vérification stricte de la durée de validité de 14 jours U.J.P.A.S.
+    const validity = getTicketValidityStatus(foundTicket.soldAt, foundTicket.expiresAt);
+    if (validity.isExpired) {
+      return {
+        status: 'EXPIRED',
+        bannerTitle: '🔴 TICKET EXPIRÉ — VALIDITÉ DÉPASSÉE (14 JOURS)',
+        ticket: foundTicket,
+        agentName,
+        agentPhone,
+        agentAvatarUrl,
+        verifiedVia,
+        message: `Ce ticket a dépassé sa durée légale de validité de 14 jours (${validity.label}). Le véhicule ${foundTicket.plateNumber || ''} doit acquitter un nouveau ticket U.J.P.A.S.`,
         isRepeatedControl,
         previousControlCount,
       };
@@ -195,8 +220,9 @@ export function useControlsAndFraud(
       ticket: foundTicket,
       agentName,
       agentPhone,
+      agentAvatarUrl,
       verifiedVia,
-      message: `Ticket régulier et conforme pour le véhicule ${foundTicket.plateNumber || 'Enregistré'}.`,
+      message: `Ticket régulier et conforme pour le véhicule ${foundTicket.plateNumber || 'Enregistré'} (${validity.label}).`,
       isRepeatedControl,
       previousControlCount,
     };
@@ -278,7 +304,7 @@ export function useControlsAndFraud(
       t.controlCount = (t.controlCount || 0) + 1;
       t.lastControlledAt = now;
       t.lastControlledBy = currentUser?.fullName;
-      if (t.status === 'SOLD') {
+      if (t.status === 'SOLD' && isValid) {
         t.status = 'CONTROLLED';
       }
       await db.put('tickets', t);
@@ -311,11 +337,11 @@ export function useControlsAndFraud(
         const secureControl = await SupabaseDataLayer.recordControlSecureRPC({
           identifier: cleanNum,
           plateNumber: cleanPlate,
-          location: 'Vridi',
+          location: 'Zone Portuaire Vridi',
           notes: validationMessage,
         });
         if (secureControl) {
-          control.isValid = secureControl.valid;
+          control.isValid = secureControl.valid && isValid;
           if (secureControl.control_id) control.id = secureControl.control_id;
           control.syncStatus = 'SYNCED';
         }

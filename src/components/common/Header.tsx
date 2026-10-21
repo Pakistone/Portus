@@ -21,6 +21,8 @@ import {
   KeyRound,
   CloudUpload,
   Printer,
+  LayoutGrid,
+  ChevronDown,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -60,12 +62,12 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenBadge,
 }) => {
   const { currentUser, logout } = useAuth();
-  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, syncAllToSupabase, isRlsPermissionIssue, lastRlsError, triggerSOSAlert } = useData();
+  const { isOnline, notifications, markNotificationAsRead, markAllNotificationsAsRead, triggerSOSAlert, syncAllToSupabase, isRlsPermissionIssue, lastRlsError } = useData();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const [syncingCloud, setSyncingCloud] = useState(false);
-  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   // States pour SOS d'Urgence
   const [sosConfirmOpen, setSosConfirmOpen] = useState(false);
@@ -77,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
     try {
       await triggerSOSAlert(sosMessage);
       setSosConfirmOpen(false);
-      showToast('success', 'Alerte SOS transmise', "Les coordinateurs et superviseurs ont été notifiés de votre position GPS et de l'état de détresse.");
+      showToast('success', 'Alerte SOS transmise', "Les coordinateurs et superviseurs ont été notifiés de votre position GPS.");
     } catch (err: any) {
       showToast('error', "Échec de l'alerte SOS", err.message || 'Erreur inconnue');
     } finally {
@@ -93,21 +95,11 @@ export const Header: React.FC<HeaderProps> = ({
     window.dispatchEvent(new CustomEvent('portus-notification-clicked', { detail: n }));
   };
 
-  // Notifications pertinentes pour l'utilisateur actuel
   const myNotifications = notifications.filter((n) => {
     if (!currentUser) return false;
     if (n.recipientId && n.recipientId !== currentUser.id) {
-      // Les alertes de fraude destinées aux admins et responsables
-      if (n.type === 'FRAUD_ALERT' && currentUser.role === 'ADMINISTRATEUR') return true;
-      if (n.type === 'FRAUD_ALERT' && currentUser.role === 'RESPONSABLE') return true;
-      // Les alertes financières concernent l'agent, le responsable et l'administrateur
-      if (n.type === 'FINANCIAL_ALERT') {
-        if (currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'FINANCE' || currentUser.role === 'CAISSIER') return true;
-        if (currentUser.role === 'RESPONSABLE') {
-          const metaSector = (n.metadata as any)?.sectorId;
-          return !currentUser.sectorId || !metaSector || metaSector === currentUser.sectorId;
-        }
-      }
+      if (n.type === 'FRAUD_ALERT' && (currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE')) return true;
+      if (n.type === 'FINANCIAL_ALERT' && (currentUser.role === 'ADMINISTRATEUR' || currentUser.role === 'RESPONSABLE')) return true;
       return false;
     }
     return true;
@@ -136,19 +128,19 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-900/95 backdrop-blur-md">
-      {/* Ruban officiel tricolore République de Côte d'Ivoire */}
+    <header className="sticky top-0 z-30 border-b border-white/10 bg-slate-900/90 backdrop-blur-xl shadow-xl">
+      {/* Ruban officiel tricolore Côte d'Ivoire */}
       <div className="h-1 w-full bg-linear-to-r from-orange-500 via-white to-emerald-600" />
 
       {isRlsPermissionIssue && currentUser?.role === 'ADMINISTRATEUR' && (
-        <div className="bg-rose-950/95 border-b border-rose-500/50 px-4 py-2.5 text-xs text-rose-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
+        <div className="bg-rose-950/95 border-b border-rose-500/50 px-4 py-2 text-xs text-rose-200 flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-2.5">
             <span className="flex h-2.5 w-2.5 relative shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
             <span>
-              <strong>Base Supabase (Vercel) :</strong> Permissions PostgreSQL (RLS) manquantes ({lastRlsError || 'permission denied for function is_admin'}). Vos tickets et utilisateurs sont masqués.
+              <strong>Base Supabase :</strong> Permissions PostgreSQL (RLS) manquantes ({lastRlsError || 'permission denied'}).
             </span>
           </div>
           {onOpenSupabase && (
@@ -156,253 +148,210 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={onOpenSupabase}
               className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold transition shadow shrink-0 cursor-pointer"
             >
-              <span>Corriger en 1 clic (Script SQL)</span>
+              <span>Corriger RLS SQL</span>
             </button>
           )}
         </div>
       )}
+
       <div className="mx-auto flex max-w-7xl items-center justify-between px-3 py-2.5 sm:px-6">
-        {/* Logo & Titre */}
-        <div className="flex items-center gap-3">
-          <div className="relative h-12 w-12 shrink-0 rounded-full p-0.5 bg-slate-900 border-2 border-emerald-500/50 shadow-lg shadow-emerald-950/60 flex items-center justify-center transition-transform hover:scale-105">
+        {/* Brand Zone */}
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="relative h-10 w-10 shrink-0 rounded-full p-0.5 bg-slate-900 border border-emerald-500/50 shadow-md flex items-center justify-center">
             <img
               src={ORG_INFO.LOGO_PATH}
-              alt="Emblème Officiel UJPAS"
-              className="h-full w-full rounded-full object-contain filter drop-shadow-md"
+              alt="Logo UJPAS"
+              className="h-full w-full rounded-full object-contain"
               referrerPolicy="no-referrer"
             />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-black tracking-wider text-white">
-                {ORG_INFO.NAME}
-              </span>
-              <span className="rounded bg-linear-to-r from-orange-600 to-emerald-700 px-1.5 py-0.5 text-[10px] font-black text-white shadow-xs">
-                {ORG_INFO.SHORT_ORG_NAME}
-              </span>
-              <span className="hidden sm:inline-block rounded bg-orange-500/10 border border-orange-500/30 px-1.5 py-0.5 text-[10px] font-bold text-orange-400">
-                🇨🇮 Côte d’Ivoire
+            <div className="flex items-center gap-1.5">
+              <span className="text-base font-black tracking-tight text-white whitespace-nowrap">
+                PORTUS <span className="text-emerald-400 font-extrabold">— U.J.P.A.S.</span>
               </span>
             </div>
-            <p className="hidden text-[11px] font-medium text-slate-400 sm:block">
-              {ORG_INFO.FULL_ORG_NAME}
+            <p className="text-[10px] text-slate-400 font-medium whitespace-nowrap hidden sm:block">
+              Gestion Portuaire &amp; Sécurité Routière
             </p>
           </div>
         </div>
 
-        {/* Section droite (Desktop) */}
-        <div className="hidden items-center gap-3 lg:flex">
-          {/* Indicateur Réseau */}
-          <div
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-              isOnline
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-            }`}
-          >
-            {isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-            <span>{isOnline ? 'En ligne' : 'Hors ligne'}</span>
-          </div>
-
-          {/* Bouton Recherche Avancée (Accessible à tous les rôles) */}
+        {/* Navigation / Action Bar Center (Desktop) */}
+        <div className="hidden lg:flex items-center gap-2">
+          {/* Quick Search */}
           {onOpenSearch && (
             <button
-              id="btn-header-search"
               onClick={onOpenSearch}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-amber-500/30 px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-slate-700 hover:border-amber-400 transition cursor-pointer shadow-xs"
-              title="Recherches avancées & filtres"
+              className="flex items-center gap-2 rounded-xl bg-slate-800/80 border border-white/10 px-3.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 hover:border-amber-500/40 transition cursor-pointer"
             >
               <Search className="w-3.5 h-3.5 text-amber-400" />
-              <span>Recherches</span>
+              <span>Recherche</span>
             </button>
           )}
 
-          {/* Bouton Assistant PORTUS (Lecture Seule) */}
-          {onOpenAssistant && (
-            <button
-              onClick={onOpenAssistant}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-indigo-500/30 px-3 py-1.5 text-xs font-bold text-indigo-300 hover:bg-slate-700 hover:border-indigo-400 transition cursor-pointer shadow-xs"
-              title="Assistant Opérationnel PORTUS (Données Réelles)"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Assistant</span>
-            </button>
-          )}
-
-          {/* Bouton Centre des Opérations & Caisse */}
-          {onOpenDailyOps && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CAISSIER' || currentUser?.role === 'FINANCE' || currentUser?.role === 'AUDITEUR') && (
-            <button
-              onClick={onOpenDailyOps}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
-              title="Centre des Opérations & Caisse Journalière"
-            >
-              <Building2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Caisse & Clôture</span>
-            </button>
-          )}
-
-          {/* Bouton Registre Flotte & Véhicules */}
-          {onOpenVehicles && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CONTROLEUR' || currentUser?.role === 'AUDITEUR') && (
-            <button
-              onClick={onOpenVehicles}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-teal-500/30 px-3 py-1.5 text-xs font-bold text-teal-300 hover:bg-slate-700 hover:border-teal-400 transition cursor-pointer shadow-xs"
-              title="Registre des véhicules & camions-citernes"
-            >
-              <Truck className="w-3.5 h-3.5 text-teal-400" />
-              <span>Véhicules</span>
-            </button>
-          )}
-
-          {/* Bouton Traçabilité Chronologique Ticket */}
-          {onOpenTimeline && (
-            <button
-              onClick={onOpenTimeline}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-slate-700 px-3 py-1.5 text-xs font-bold text-slate-300 hover:bg-slate-700 hover:text-white transition cursor-pointer shadow-xs"
-              title="Traçabilité chronologique du ticket"
-            >
-              <History className="w-3.5 h-3.5 text-slate-400" />
-              <span>Timeline</span>
-            </button>
-          )}
-
-          {/* Bouton Centre de Sécurité & Surveillance */}
-          {onOpenSecurityCenter && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'AUDITEUR') && (
-            <button
-              onClick={onOpenSecurityCenter}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-slate-700 hover:border-rose-400 transition cursor-pointer shadow-xs"
-              title="Centre de Sécurité & Surveillance Cryptographique"
-            >
-              <Shield className="w-3.5 h-3.5 text-rose-400" />
-              <span>Sécurité</span>
-            </button>
-          )}
-
-          {/* Bouton Modèle de Ticket & Cachet Officiel UJPAS (Seul l'administrateur peut voir le spécimen) */}
-          {onOpenStamp && currentUser?.role === 'ADMINISTRATEUR' && (
-            <button
-              onClick={onOpenStamp}
-              className="flex items-center gap-1.5 rounded-xl bg-slate-800 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-700 hover:border-emerald-400 transition cursor-pointer shadow-xs"
-              title="Afficher le nouveau modèle de ticket, le logo et le cachet officiel UJPAS"
-            >
-              <Stamp className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Modèle & Cachet UJPAS</span>
-            </button>
-          )}
-
-          {/* Bouton Badges Professionnels de Cou (85x120 mm) */}
-          {onOpenBadge && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE') && (
-            <button
-              onClick={onOpenBadge}
-              className="flex items-center gap-1.5 rounded-xl bg-orange-600/20 border border-orange-500/40 px-3 py-1.5 text-xs font-bold text-orange-300 hover:bg-orange-600/30 hover:border-orange-400 transition cursor-pointer shadow-xs"
-              title="Générateur de Badges Professionnels 85×120 mm avec QR Code et Photo"
-            >
-              <Printer className="w-3.5 h-3.5 text-orange-400" />
-              <span>Badges Pro (85×120)</span>
-            </button>
-          )}
-
-          {/* Bouton PWA */}
-          <PWAInstallButton />
-
-          {/* Liens Admin / Audit / Supabase */}
-          {currentUser?.role === 'ADMINISTRATEUR' && (
-            <div className="flex items-center gap-1.5 border-l border-slate-700 pl-3">
-              {onOpenUsers && (
-                <button
-                  onClick={onOpenUsers}
-                  className="flex items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 transition"
-                  title="Gestion des Comptes"
-                >
-                  <Users className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Comptes</span>
-                </button>
-              )}
-              {onOpenAudit && (
-                <button
-                  onClick={onOpenAudit}
-                  className="flex items-center gap-1 rounded-lg bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 transition"
-                  title="Audit Trail"
-                >
-                  <FileText className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Audit</span>
-                </button>
-              )}
-              {onOpenSupabase && (
-                <button
-                  onClick={onOpenSupabase}
-                  className="flex items-center gap-1 rounded-lg bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-900/60 transition"
-                  title="Configuration Supabase"
-                >
-                  <Database className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Supabase SQL</span>
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Cloche de Notifications */}
+          {/* Menu Outils Opérationnels (Unified Dropdown containing all specialized modals) */}
           <div className="relative">
             <button
-              onClick={() => setNotifModalOpen(true)}
-              className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
-              title="Centre de notifications & alertes"
+              onClick={() => setToolsMenuOpen(!toolsMenuOpen)}
+              className="flex items-center gap-2 rounded-xl bg-slate-800/80 border border-white/10 px-3.5 py-1.5 text-xs font-bold text-slate-200 hover:bg-slate-800 hover:border-emerald-500/40 transition cursor-pointer"
             >
-              <Bell className="w-4 h-4" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-black text-white shadow-xs">
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
+              <LayoutGrid className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Outils Opérationnels</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${toolsMenuOpen ? 'rotate-180' : ''}`} />
             </button>
+
+            {toolsMenuOpen && (
+              <div 
+                className="absolute left-0 mt-2 w-72 rounded-2xl border border-white/10 bg-slate-900/95 p-2 shadow-2xl backdrop-blur-xl z-50 grid grid-cols-1 gap-1 animate-in fade-in-50 zoom-in-95"
+                onClick={() => setToolsMenuOpen(false)}
+              >
+                {onOpenDailyOps && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE' || currentUser?.role === 'CAISSIER' || currentUser?.role === 'FINANCE') && (
+                  <button onClick={onOpenDailyOps} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                    <Building2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-white">Caisse &amp; Clôtures</p>
+                      <p className="text-[10px] text-slate-400">Point financier journalier</p>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenVehicles && (
+                  <button onClick={onOpenVehicles} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                    <Truck className="w-4 h-4 text-teal-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-white">Registre Véhicules</p>
+                      <p className="text-[10px] text-slate-400">Flotte poids lourds &amp; camions</p>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenTimeline && (
+                  <button onClick={onOpenTimeline} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                    <History className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-white">Traçabilité Timeline</p>
+                      <p className="text-[10px] text-slate-400">Suivi chronologique par ticket</p>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenSecurityCenter && (
+                  <button onClick={onOpenSecurityCenter} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                    <Shield className="w-4 h-4 text-rose-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-white">Centre de Sécurité</p>
+                      <p className="text-[10px] text-slate-400">Surveillance &amp; verrous RLS</p>
+                    </div>
+                  </button>
+                )}
+
+                {onOpenBadge && (currentUser?.role === 'ADMINISTRATEUR' || currentUser?.role === 'RESPONSABLE') && (
+                  <button onClick={onOpenBadge} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                    <Printer className="w-4 h-4 text-orange-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-white">Badges Pro (85×120)</p>
+                      <p className="text-[10px] text-slate-400">Impression cartes avec QR</p>
+                    </div>
+                  </button>
+                )}
+
+                {currentUser?.role === 'ADMINISTRATEUR' && (
+                  <>
+                    {onOpenUsers && (
+                      <button onClick={onOpenUsers} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                        <Users className="w-4 h-4 text-blue-400 shrink-0" />
+                        <div>
+                          <p className="font-bold text-white">Gestion des Comptes</p>
+                          <p className="text-[10px] text-slate-400">Utilisateurs &amp; rôles actifs</p>
+                        </div>
+                      </button>
+                    )}
+                    {onOpenAudit && (
+                      <button onClick={onOpenAudit} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                        <FileText className="w-4 h-4 text-purple-400 shrink-0" />
+                        <div>
+                          <p className="font-bold text-white">Journal d'Audit</p>
+                          <p className="text-[10px] text-slate-400">Logs inaltérables Append-only</p>
+                        </div>
+                      </button>
+                    )}
+                    {onOpenSupabase && (
+                      <button onClick={onOpenSupabase} className="flex items-center gap-2.5 rounded-xl p-2.5 text-xs font-semibold text-slate-200 hover:bg-slate-800 text-left transition cursor-pointer">
+                        <Database className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div>
+                          <p className="font-bold text-white">Console Supabase SQL</p>
+                          <p className="text-[10px] text-slate-400">Scripts &amp; schémas DB</p>
+                        </div>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Section Droite Header (Statut, Bell, SOS, Profil) */}
+        <div className="hidden lg:flex items-center gap-3">
+          {/* Status Réseau */}
+          <div className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold bg-slate-800 border border-white/10 text-slate-300">
+            {isOnline ? <Wifi className="w-3.5 h-3.5 text-emerald-400" /> : <WifiOff className="w-3.5 h-3.5 text-amber-400" />}
+            <span className="font-mono">{isOnline ? 'En ligne' : 'Hors ligne'}</span>
           </div>
 
-          {/* Bouton SOS d'urgence d'Abidjan */}
+          <PWAInstallButton />
+
+          {/* Cloche Notifications */}
           <button
-            onClick={() => setSosConfirmOpen(true)}
-            className="flex h-8 px-2.5 items-center justify-center gap-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-black animate-pulse shadow-md shadow-rose-600/30 active:scale-95 transition cursor-pointer"
-            title="DÉCLENCHER UNE ALERTE SOS TERRAIN EN DIRECT"
+            onClick={() => setNotifModalOpen(true)}
+            className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-slate-800 border border-white/10 text-slate-300 hover:bg-slate-700 transition cursor-pointer"
+            title="Notifications"
           >
-            <ShieldAlert className="w-4 h-4 text-white" />
-            <span className="hidden xl:inline">SOS</span>
+            <Bell className="w-4 h-4" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-black text-white shadow-xs">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </button>
 
-          {/* Utilisateur connecté & Logout */}
+          {/* Bouton SOS */}
+          <button
+            onClick={() => setSosConfirmOpen(true)}
+            className="flex h-9 px-3 items-center justify-center gap-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black shadow-md shadow-rose-950/50 transition cursor-pointer"
+            title="DÉCLENCHER ALERTE SOS TERRAIN"
+          >
+            <ShieldAlert className="w-4 h-4 text-white" />
+            <span>SOS</span>
+          </button>
+
+          {/* User Profile */}
           {currentUser && (
-            <div className="flex items-center gap-2 border-l border-slate-700 pl-3">
+            <div className="flex items-center gap-2 border-l border-white/10 pl-3">
               <div className="text-right">
                 <p className="text-xs font-bold text-white leading-tight">
                   {currentUser.fullName}
                 </p>
-                <div className="flex items-center justify-end gap-1">
-                  <span
-                    className={`inline-block rounded-full border px-1.5 py-0.2 text-[9px] font-bold ${
-                      roleColors[currentUser.role]
-                    }`}
-                  >
-                    {roleLabels[currentUser.role]}
-                  </span>
-                  {currentUser.sectorName && (
-                    <span className="text-[9px] text-slate-400 truncate max-w-[120px]">
-                      • {currentUser.sectorName}
-                    </span>
-                  )}
-                </div>
+                <p className="text-[10px] text-emerald-400 font-mono">
+                  {roleLabels[currentUser.role]}
+                </p>
               </div>
 
               <button
                 onClick={() => setChangePasswordOpen(true)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 transition"
-                title="Modifier mon mot de passe"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-amber-400 hover:bg-amber-500/20 hover:text-amber-300 transition cursor-pointer"
+                title="Changer mot de passe"
               >
-                <KeyRound className="w-4 h-4" />
+                <KeyRound className="w-3.5 h-3.5" />
               </button>
 
               <button
                 onClick={() => logout()}
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 transition"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:bg-rose-500/20 hover:text-rose-400 transition cursor-pointer"
                 title="Déconnexion"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
@@ -730,11 +679,15 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 onClick={async () => {
                   setSyncingCloud(true);
-                  const res = await syncAllToSupabase();
-                  setSyncingCloud(false);
-                  setSyncNotice(res.message);
-                  setTimeout(() => setSyncNotice(null), 6000);
-                  setMobileMenuOpen(false);
+                  try {
+                    const res = await syncAllToSupabase();
+                    showToast('success', 'Synchronisation Supabase', res.message);
+                  } catch (e: any) {
+                    showToast('error', 'Échec de la synchronisation', e.message || 'Erreur réseau');
+                  } finally {
+                    setSyncingCloud(false);
+                    setMobileMenuOpen(false);
+                  }
                 }}
                 disabled={syncingCloud}
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-950/80 border border-emerald-500/40 p-2.5 text-xs font-bold text-emerald-300 hover:bg-emerald-900 transition disabled:opacity-50"

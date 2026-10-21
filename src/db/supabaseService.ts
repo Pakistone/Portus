@@ -200,6 +200,7 @@ export const SupabaseDataLayer = {
             sectorId: normalizeSectorId(myProf.sector_id, myProf.sector_name),
             sectorName: myProf.sector_name,
             phone: myProf.phone,
+            avatarUrl: myProf.avatar_url || undefined,
             isActive: myProf.is_active ?? true,
             failedAttempts: myProf.failed_attempts || 0,
             createdAt: myProf.created_at,
@@ -219,6 +220,7 @@ export const SupabaseDataLayer = {
       sectorId: normalizeSectorId(row.sector_id, row.sectors?.name),
       sectorName: row.sectors?.name,
       phone: row.phone,
+      avatarUrl: row.avatar_url || undefined,
       isActive: row.is_active ?? true,
       failedAttempts: row.failed_attempts || 0,
       lockedUntil: row.locked_until,
@@ -236,6 +238,7 @@ export const SupabaseDataLayer = {
     role: string;
     sectorId?: string;
     phone?: string;
+    avatarUrl?: string;
     passwordRaw: string;
   }): Promise<User> {
     const supabase = getSupabase();
@@ -272,6 +275,7 @@ export const SupabaseDataLayer = {
           sectorId: row.sector_id,
           sectorName: row.sector?.name,
           phone: row.phone,
+          avatarUrl: row.avatar_url || userData.avatarUrl || undefined,
           isActive: row.is_active,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until,
@@ -313,6 +317,7 @@ export const SupabaseDataLayer = {
           role: userData.role as any,
           sectorId: (userData.sectorId ? sanitizeUuidOrNull(userData.sectorId) : null) || undefined,
           phone: userData.phone?.trim() || undefined,
+          avatarUrl: userData.avatarUrl || undefined,
           isActive: true,
           failedAttempts: 0,
           createdAt: new Date().toISOString(),
@@ -326,6 +331,7 @@ export const SupabaseDataLayer = {
           role: newProf.role,
           sector_id: newProf.sectorId,
           phone: newProf.phone || null,
+          avatar_url: newProf.avatarUrl || null,
           is_active: true,
           failed_attempts: 0,
           created_at: newProf.createdAt,
@@ -352,6 +358,7 @@ export const SupabaseDataLayer = {
     phone?: string;
     sectorId?: string;
     role?: string;
+    avatarUrl?: string;
     isActive?: boolean;
   }): Promise<User> {
     const supabase = getSupabase();
@@ -388,6 +395,7 @@ export const SupabaseDataLayer = {
           sectorId: row.sector_id,
           sectorName: row.sector?.name,
           phone: row.phone,
+          avatarUrl: row.avatar_url || updates.avatarUrl || undefined,
           isActive: row.is_active,
           failedAttempts: row.failed_attempts || 0,
           lockedUntil: row.locked_until,
@@ -406,6 +414,7 @@ export const SupabaseDataLayer = {
       if (updates.phone !== undefined) dbUpdates.phone = updates.phone?.trim() || null;
       if (updates.sectorId !== undefined) dbUpdates.sector_id = sanitizeUuidOrNull(updates.sectorId);
       if (updates.role !== undefined) dbUpdates.role = updates.role;
+      if (updates.avatarUrl !== undefined) dbUpdates.avatar_url = updates.avatarUrl || null;
       if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
 
       const { data: prof, error: updateErr } = await supabase
@@ -424,6 +433,7 @@ export const SupabaseDataLayer = {
           sectorId: prof.sector_id,
           sectorName: prof.sectors?.name,
           phone: prof.phone,
+          avatarUrl: prof.avatar_url || undefined,
           isActive: prof.is_active,
           failedAttempts: prof.failed_attempts || 0,
           lockedUntil: prof.locked_until,
@@ -493,6 +503,7 @@ export const SupabaseDataLayer = {
         role: user.role,
         sector_id: user.sectorId || null,
         phone: user.phone || null,
+        avatar_url: user.avatarUrl || null,
         is_active: user.isActive,
         failed_attempts: user.failedAttempts,
         locked_until: user.lockedUntil || null,
@@ -1048,6 +1059,7 @@ export const SupabaseDataLayer = {
       plateNumber: row.plate_number,
       driverPhone: row.driver_phone,
       soldAt: row.sold_at,
+      expiresAt: row.expires_at || undefined,
       gpsLatitude: row.gps_latitude,
       gpsLongitude: row.gps_longitude,
       gpsAccuracy: row.gps_accuracy,
@@ -1055,6 +1067,8 @@ export const SupabaseDataLayer = {
       syncedAt: row.synced_at,
       syncStatus: 'SYNCED',
       price: row.price,
+      paymentMethod: row.payment_method || 'ESPECES',
+      paymentReference: row.payment_reference || undefined,
       coveredByRemiseId: row.covered_by_remittance_id,
     }));
   },
@@ -1088,6 +1102,7 @@ export const SupabaseDataLayer = {
       plate_number: sale.plateNumber,
       driver_phone: sale.driverPhone || null,
       sold_at: sale.soldAt, // Date originale préservée
+      expires_at: sale.expiresAt || null,
       synced_at: new Date().toISOString(),
       sync_idempotency_key: sale.id, // Utilise l'ID de vente généré comme clé d'idempotence
       gps_latitude: sale.gpsLatitude,
@@ -1108,6 +1123,181 @@ export const SupabaseDataLayer = {
     }
 
     return { success: true, isDuplicate: false };
+  },
+
+  /**
+   * Insère un lot de ventes par paquets (Chunking de 50 éléments) de façon ultra-performante.
+   */
+  async insertSalesBatchIdempotent(sales: Sale[]): Promise<{ success: boolean; count: number }> {
+    const supabase = getSupabase();
+    if (!supabase || sales.length === 0) return { success: true, count: 0 };
+
+    let syncedCount = 0;
+    const chunkSize = 50;
+    for (let i = 0; i < sales.length; i += chunkSize) {
+      const chunk = sales.slice(i, i + chunkSize);
+      const rows = chunk.map((sale) => ({
+        id: sale.id,
+        ticket_id: sale.ticketId,
+        ticket_number: sale.ticketNumber,
+        agent_id: sale.agentId,
+        sector_id: sale.sectorId || null,
+        plate_number: sale.plateNumber,
+        driver_phone: sale.driverPhone || null,
+        sold_at: sale.soldAt,
+        expires_at: sale.expiresAt || null,
+        synced_at: new Date().toISOString(),
+        sync_idempotency_key: sale.id,
+        gps_latitude: sale.gpsLatitude,
+        gps_longitude: sale.gpsLongitude,
+        gps_accuracy: sale.gpsAccuracy,
+        gps_status: sale.gpsStatus,
+        price: sale.price || 1000,
+        payment_method: sale.paymentMethod || 'ESPECES',
+        payment_reference: sale.paymentReference || null,
+      }));
+
+      const { error } = await supabase.from('sales').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+      if (!error) {
+        syncedCount += chunk.length;
+      } else {
+        console.warn('Supabase insertSalesBatchIdempotent error:', error.message);
+      }
+    }
+
+    return { success: syncedCount > 0, count: syncedCount };
+  },
+
+  /**
+   * Insère un lot de contrôles routiers (Chunking de 50 éléments).
+   */
+  async insertControlsBatch(controls: Control[]): Promise<{ success: boolean; count: number }> {
+    const supabase = getSupabase();
+    if (!supabase || controls.length === 0) return { success: true, count: 0 };
+
+    let syncedCount = 0;
+    const chunkSize = 50;
+    for (let i = 0; i < controls.length; i += chunkSize) {
+      const chunk = controls.slice(i, i + chunkSize);
+      const rows = chunk.map((ctrl) => ({
+        id: ctrl.id,
+        ticket_id: ctrl.ticketId || null,
+        ticket_number: ctrl.ticketNumber,
+        plate_number: ctrl.plateNumber,
+        controleur_id: ctrl.controleurId,
+        is_valid: ctrl.isValid,
+        validation_message: ctrl.validationMessage || null,
+        created_at: ctrl.controlledAt,
+      }));
+
+      const { error } = await supabase.from('controls').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+      if (!error) {
+        syncedCount += chunk.length;
+      } else {
+        console.warn('Supabase insertControlsBatch error:', error.message);
+      }
+    }
+
+    return { success: syncedCount > 0, count: syncedCount };
+  },
+
+  /**
+   * Insère un lot de signalements de fraudes (Chunking de 50 éléments).
+   */
+  async insertFraudReportsBatch(frauds: FraudReport[]): Promise<{ success: boolean; count: number }> {
+    const supabase = getSupabase();
+    if (!supabase || frauds.length === 0) return { success: true, count: 0 };
+
+    let syncedCount = 0;
+    const chunkSize = 50;
+    for (let i = 0; i < frauds.length; i += chunkSize) {
+      const chunk = frauds.slice(i, i + chunkSize);
+      const rows = chunk.map((f) => ({
+        id: f.id,
+        plate_number: f.plateNumber,
+        controleur_id: f.controleurId,
+        sector_id: f.sectorId || null,
+        ticket_number: f.ticketNumber || null,
+        type: f.type,
+        type_label: f.typeLabel,
+        description: f.comment || null,
+        photos: f.photos || [],
+        status: f.status || 'NOUVEAU',
+        created_at: f.reportedAt,
+      }));
+
+      const { error } = await supabase.from('fraud_reports').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+      if (!error) {
+        syncedCount += chunk.length;
+      } else {
+        console.warn('Supabase insertFraudReportsBatch error:', error.message);
+      }
+    }
+
+    return { success: syncedCount > 0, count: syncedCount };
+  },
+
+  /**
+   * Alimente la file d'attente de synchronisation par paquets de 50 items.
+   */
+  async pushToSyncQueueBatch(items: SyncQueueItem[]): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase || items.length === 0) return true;
+
+    const chunkSize = 50;
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      const rows = chunk.map((item) => ({
+        client_mutation_id: item.clientMutationId,
+        agent_id: item.agentId,
+        entity_type: item.entityType,
+        operation: item.operation,
+        payload: item.payload,
+        status: 'PENDING',
+        client_timestamp: item.clientTimestamp,
+      }));
+
+      const { error } = await supabase.from('sync_queue').upsert(rows, { onConflict: 'client_mutation_id', ignoreDuplicates: true });
+      if (error && error.code !== '23505') {
+        console.warn('Supabase pushToSyncQueueBatch error:', error.message);
+      }
+    }
+    return true;
+  },
+
+  /**
+   * Insère un lot de logs d'audit (Chunking de 50 éléments) de manière asynchrone non bloquante.
+   */
+  async insertAuditLogBatch(logs: AuditLog[]): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase || logs.length === 0) return true;
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const chunkSize = 50;
+    for (let i = 0; i < logs.length; i += chunkSize) {
+      const chunk = logs.slice(i, i + chunkSize);
+      const rows = chunk.map((log) => ({
+        id: (log.id && uuidRegex.test(log.id)) ? log.id : crypto.randomUUID(),
+        actor_id: (log.actorId && uuidRegex.test(log.actorId)) ? log.actorId : null,
+        actor_name: log.actorName,
+        actor_role: log.actorRole,
+        action: log.action,
+        timestamp: log.timestamp,
+        target_entity: log.targetEntity,
+        target_id: log.targetId,
+        old_value: log.oldValue || null,
+        new_value: log.newValue || null,
+        gps_latitude: log.gpsLatitude || null,
+        gps_longitude: log.gpsLongitude || null,
+        details: log.details || null,
+      }));
+
+      const { error } = await supabase.from('audit_logs').insert(rows);
+      if (error) {
+        console.warn('Supabase insertAuditLogBatch error:', error.message);
+      }
+    }
+    return true;
   },
 
   // ------------------------------------------------------------------

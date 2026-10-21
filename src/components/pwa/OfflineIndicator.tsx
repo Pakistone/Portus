@@ -1,5 +1,5 @@
 import React from 'react';
-import { WifiOff, CloudUpload, CheckCircle2 } from 'lucide-react';
+import { WifiOff, CloudUpload, CheckCircle2, RefreshCw } from 'lucide-react';
 import { useOnlineStatus } from './usePWAInstall';
 
 interface Props {
@@ -21,33 +21,37 @@ export const OfflineIndicator: React.FC<Props> = ({
     <>
       {/* Bannière Hors Ligne */}
       {!isOnline && (
-        <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between bg-amber-500 px-4 py-1.5 text-xs font-semibold text-slate-950 shadow-md">
-          <div className="flex items-center gap-2">
-            <WifiOff className="w-4 h-4 animate-bounce" />
-            <span>MODE HORS LIGNE ACTIF — Ventes et contrôles enregistrés localement</span>
+        <aside
+          role="status"
+          aria-live="polite"
+          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b border-amber-600/30 bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 shadow-md transition-all"
+        >
+          <div className="flex items-center gap-2.5">
+            <WifiOff className="w-4 h-4 animate-pulse shrink-0" />
+            <span>MODE HORS LIGNE ACTIF — Ventes et contrôles enregistrés localement sur l’appareil</span>
           </div>
-          <span className="text-[11px] font-bold uppercase bg-amber-600/30 px-2 py-0.5 rounded">
+          <span className="text-[10px] font-black uppercase tracking-wider bg-slate-950/15 px-2.5 py-0.5 rounded-full">
             Autonome
           </span>
-        </div>
+        </aside>
       )}
 
-      {/* Badge synchronisation flottant si ventes en attente */}
+      {/* Badge synchronisation flottant si opérations en attente */}
       {pendingSyncCount > 0 && (
         <aside
-          aria-label="Synchronisation des ventes"
-          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 z-40 flex items-center justify-between rounded-xl border border-amber-500/40 bg-slate-900/95 p-3.5 shadow-2xl backdrop-blur-md"
+          aria-label="Synchronisation des opérations de terrain"
+          className="fixed bottom-4 left-4 right-4 md:left-auto md:right-6 md:w-96 z-40 flex items-center justify-between rounded-2xl border border-amber-500/40 bg-slate-950/95 p-3.5 shadow-2xl backdrop-blur-md"
         >
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30">
               <CloudUpload className="w-5 h-5 animate-pulse" />
             </div>
             <div>
               <p className="text-xs font-bold text-amber-300">
-                🟠 VENTE ENREGISTRÉE — SYNCHRONISATION EN ATTENTE
+                Opérations en attente de synchronisation
               </p>
-              <p className="text-[11px] text-slate-400">
-                {pendingSyncCount} opération{pendingSyncCount > 1 ? 's' : ''} en attente sur cet appareil
+              <p className="text-[11px] text-slate-400 mt-0.5 font-medium">
+                <span className="font-bold text-white tabular-nums">{pendingSyncCount}</span> élément{pendingSyncCount > 1 ? 's' : ''} enregistré{pendingSyncCount > 1 ? 's' : ''} localement
               </p>
             </div>
           </div>
@@ -55,9 +59,10 @@ export const OfflineIndicator: React.FC<Props> = ({
             <button
               onClick={onManualSync}
               disabled={isSyncing}
-              className="ml-2 shrink-0 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+              className="ml-3 shrink-0 flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white shadow-md hover:bg-emerald-500 disabled:opacity-50 transition cursor-pointer"
             >
-              {isSyncing ? 'En cours...' : 'Synchroniser'}
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'En cours…' : 'Synchroniser'}</span>
             </button>
           )}
         </aside>
@@ -66,11 +71,12 @@ export const OfflineIndicator: React.FC<Props> = ({
       {/* Confirmation temporaire de synchronisation */}
       {lastSyncedSaleNumber && pendingSyncCount === 0 && (
         <aside
-          aria-label="Statut de synchronisation"
-          className="fixed bottom-4 right-4 z-40 flex items-center gap-2.5 rounded-xl border border-emerald-500/40 bg-slate-900/95 px-4 py-2.5 shadow-xl backdrop-blur-md text-emerald-400 text-xs font-bold animate-in fade-in slide-in-from-bottom duration-300"
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 right-4 z-40 flex items-center gap-2.5 rounded-2xl border border-emerald-500/40 bg-slate-950/95 px-4 py-3 shadow-2xl backdrop-blur-md text-emerald-400 text-xs font-bold animate-in fade-in slide-in-from-bottom duration-300"
         >
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          <span>🟢 VENTE SYNCHRONISÉE ({lastSyncedSaleNumber})</span>
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>Vente synchronisée avec succès : <span className="font-mono text-white tabular-nums">{lastSyncedSaleNumber}</span></span>
         </aside>
       )}
     </>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, ReactNode, useRef } from 'react';
+import type { IDBPDatabase } from 'idb';
 import { DataContext } from './DataContext';
 import type { DataContextType } from './types';
 import type {
@@ -19,7 +20,7 @@ import type {
   BrigadeAssignment,
 } from '../../types';
 import { DEFAULT_SECTORS } from '../../config/constants';
-import { getDB, initializeDatabase } from '../../db/indexedDb';
+import { getDB, initializeDatabase, type PortusDB } from '../../db/indexedDb';
 import { useAuth } from '../AuthContext';
 import { getSupabase } from '../../db/supabaseClient';
 import {
@@ -28,10 +29,10 @@ import {
   getLastRlsErrorMessage,
 } from '../../db/supabaseService';
 import { usePortusStore } from '../../store/usePortusStore';
-import { getStoredDeletedCarnetIds } from './constants';
+import { getStoredDeletedCarnetIds, isVisibleOperationalRole } from './constants';
 
 import { useOnlineAndSyncState } from './hooks/useOnlineAndSyncState';
-import { useAuditLogs } from './hooks/useAuditLogs';
+import { useAuditLogs, type AuditLogValue } from './hooks/useAuditLogs';
 import { useNotifications } from './hooks/useNotifications';
 import { useRealtimeIncidents } from './hooks/useRealtimeIncidents';
 import { useUsers } from './hooks/useUsers';
@@ -58,8 +59,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       targetEntity: string,
       targetId: string,
       details?: string,
-      oldValue?: any,
-      newValue?: any
+      oldValue?: AuditLogValue,
+      newValue?: AuditLogValue
     ) => recordAuditRaw(action, targetEntity, targetId, details, oldValue, newValue, currentUser),
     [recordAuditRaw, currentUser]
   );
@@ -138,13 +139,22 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     createCarnet,
     assignCarnetToResponsable,
     cancelCarnet,
-    deleteCarnet,
+    deleteCarnet: deleteCarnetHook,
     updateTicketStatus,
     cancelTicket,
     assignTicketsToAgent,
     reassignUnsoldTickets,
     correctPlateNumber,
   } = useCarnetsAndTickets(currentUser, 5000, recordAudit, handleRefresh, setNotifications);
+
+  // Suppression définitive unifiée via Zustand + IndexedDB + Supabase CASCADE
+  const deleteCarnetPermanently = useCallback(
+    async (carnetId: string): Promise<void> => {
+      await usePortusStore.getState().deleteCarnetPermanently(carnetId);
+      await deleteCarnetHook(carnetId);
+    },
+    [deleteCarnetHook]
+  );
 
   // 7. Daily Closings & Vehicles
   const {
@@ -236,12 +246,12 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   } = useSOSAndLitiges(currentUser, recordAudit, handleRefresh, () => {});
 
   // --------------------------------------------------------------------------
-  // Apply Local Data (IndexedDB -> React state with RBAC filtering)
+  // Apply Local Data (IndexedDB -> Zustand & React state with U.J.P.A.S. RBAC)
   // --------------------------------------------------------------------------
   const applyLocalData = useCallback(
-    async (db: any) => {
+    async (db: IDBPDatabase<PortusDB>) => {
       const [
-        allUsers,
+        allUsersRaw,
         allCarnets,
         allTickets,
         allSales,
@@ -276,9 +286,14 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         db.objectStoreNames.contains('brigades_plannings') ? db.getAll('brigades_plannings') : Promise.resolve([]),
       ]);
 
+      // Masquer totalement tout ancien rôle TRESORIER
+      const allUsers = allUsersRaw.filter((u) => isVisibleOperationalRole(u.role));
+
       const activeSessionUserId =
-        sessionStorage.getItem('portus_session_user_id') || sessionStorage.getItem('portus_current_user_id');
-      const activeUser = currentUser || allUsers.find((u: User) => u.id === activeSessionUserId) || null;
+        sessionStorage.getItem('portus_session_user_id') ||
+        sessionStorage.getItem('portus_current_user_id');
+      const activeUser =
+        currentUser || allUsers.find((u) => u.id === activeSessionUserId) || null;
 
       let visibleUsers = allUsers;
       let visibleCarnets = allCarnets;
@@ -294,60 +309,93 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (activeUser.role === 'ADMINISTRATEUR') {
           visibleAudits = allAudits;
         } else if (activeUser.role === 'RESPONSABLE') {
+          // Gouvernance U.J.P.A.S. : Pool global d'agents mobilisables par tout Responsable
           const secId = activeUser.sectorId;
-          visibleUsers = allUsers.filter((u: User) => u.sectorId === secId || u.id === activeUser.id);
-          visibleCarnets = allCarnets.filter((c: Carnet) => c.sectorId === secId || c.assignedToResponsableId === activeUser.id);
-          visibleTickets = allTickets.filter((t: Ticket) => t.sectorId === secId || t.assignedResponsableId === activeUser.id);
-          visibleSales = allSales.filter((s: Sale) => s.sectorId === secId);
-          visibleRemises = allRemises.filter((r: Remise) => r.sectorId === secId || r.responsableId === activeUser.id);
-          visibleExpenses = allExpenses.filter(
-            (e: Expense) => e.sectorId === secId || e.responsibleId === activeUser.id || e.createdBy === activeUser.id
+          visibleUsers = allUsers;
+          visibleCarnets = allCarnets.filter(
+            (c) =>
+              !secId ||
+              c.sectorId === secId ||
+              c.assignedToResponsableId === activeUser.id ||
+              !c.assignedToResponsableId
           );
-          visibleFrauds = allFrauds.filter((f: FraudReport) => !f.sectorId || f.sectorId === secId);
-          visibleControls = allControls.filter((c: Control) => {
-            const tkt = allTickets.find((t: Ticket) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
-            return !tkt || tkt.sectorId === secId;
-          });
+          visibleTickets = allTickets;
+          visibleSales = allSales;
+          visibleRemises = allRemises;
+          visibleExpenses = allExpenses.filter(
+            (e) =>
+              !secId ||
+              e.sectorId === secId ||
+              e.responsibleId === activeUser.id ||
+              e.createdBy === activeUser.id
+          );
+          visibleFrauds = allFrauds;
+          visibleControls = allControls;
           visibleAudits = [];
         } else if (activeUser.role === 'AGENT') {
-          visibleUsers = allUsers.filter((u: User) => u.id === activeUser.id);
+          visibleUsers = allUsers;
           visibleCarnets = [];
-          visibleTickets = allTickets.filter((t: Ticket) => t.assignedAgentId === activeUser.id);
-          visibleSales = allSales.filter((s: Sale) => s.agentId === activeUser.id);
-          visibleRemises = allRemises.filter((r: Remise) => r.agentId === activeUser.id);
-          visibleExpenses = allExpenses.filter((e: Expense) => e.createdBy === activeUser.id);
+          visibleTickets = allTickets.filter((t) => t.assignedAgentId === activeUser.id);
+          visibleSales = allSales.filter((s) => s.agentId === activeUser.id);
+          visibleRemises = allRemises.filter((r) => r.agentId === activeUser.id);
+          visibleExpenses = allExpenses.filter((e) => e.createdBy === activeUser.id);
           visibleFrauds = [];
-          visibleControls = allControls.filter((c: Control) => {
-            const tkt = allTickets.find((t: Ticket) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber);
-            return tkt && tkt.assignedAgentId === activeUser.id;
+          visibleControls = allControls.filter((c) => {
+            const tkt = allTickets.find(
+              (t) => t.id === c.ticketId || t.ticketNumber === c.ticketNumber
+            );
+            return Boolean(tkt && tkt.assignedAgentId === activeUser.id);
           });
           visibleAudits = [];
         } else if (activeUser.role === 'CONTROLEUR') {
-          visibleUsers = allUsers.filter((u: User) => u.id === activeUser.id);
+          // Le contrôleur doit accéder à tous les profils d'agents pour le Trombinoscope de confrontation
+          visibleUsers = allUsers;
           visibleCarnets = [];
-          visibleTickets = [];
-          visibleSales = [];
+          visibleTickets = allTickets;
+          visibleSales = allSales;
           visibleRemises = [];
           visibleExpenses = [];
-          visibleControls = allControls.filter((c: Control) => c.controleurId === activeUser.id);
-          visibleFrauds = allFrauds.filter((f: FraudReport) => f.controleurId === activeUser.id);
+          visibleControls = allControls;
+          visibleFrauds = allFrauds;
           visibleAudits = [];
         }
       }
 
-      const sortedCarnets = visibleCarnets.sort((a: Carnet, b: Carnet) => b.createdAt.localeCompare(a.createdAt));
-      const sortedTickets = visibleTickets.sort((a: Ticket, b: Ticket) => a.ticketNumber.localeCompare(b.ticketNumber));
-      const sortedSales = visibleSales.sort((a: Sale, b: Sale) => b.soldAt.localeCompare(a.soldAt));
-      const sortedControls = visibleControls.sort((a: Control, b: Control) => b.controlledAt.localeCompare(a.controlledAt));
-      const sortedFrauds = visibleFrauds.sort((a: FraudReport, b: FraudReport) => b.reportedAt.localeCompare(a.reportedAt));
-      const sortedRemises = visibleRemises.sort((a: Remise, b: Remise) => b.createdAt.localeCompare(a.createdAt));
-      const sortedExpenses = visibleExpenses.sort((a: Expense, b: Expense) => b.createdAt.localeCompare(a.createdAt));
-      const sortedAudits = visibleAudits.sort((a: AuditLog, b: AuditLog) => b.timestamp.localeCompare(a.timestamp));
-      const sortedNotifs = allNotifications.sort((a: NotificationRecord, b: NotificationRecord) => b.createdAt.localeCompare(a.createdAt));
-      const sortedClosings = allClosings.sort((a: DailyClosing, b: DailyClosing) => (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || ''));
-      const sortedSos = allSos.sort((a: SOSAlert, b: SOSAlert) => b.alertedAt.localeCompare(a.alertedAt));
-      const sortedLitiges = allLitiges.sort((a: LitigeChauffeur, b: LitigeChauffeur) => b.createdAt.localeCompare(a.createdAt));
-      const sortedBrigades = allPlannings.sort((a: BrigadeAssignment, b: BrigadeAssignment) => b.shiftDate.localeCompare(a.shiftDate));
+      const sortedCarnets = [...visibleCarnets].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      const sortedTickets = [...visibleTickets].sort((a, b) =>
+        a.ticketNumber.localeCompare(b.ticketNumber)
+      );
+      const sortedSales = [...visibleSales].sort((a, b) => b.soldAt.localeCompare(a.soldAt));
+      const sortedControls = [...visibleControls].sort((a, b) =>
+        b.controlledAt.localeCompare(a.controlledAt)
+      );
+      const sortedFrauds = [...visibleFrauds].sort((a, b) =>
+        b.reportedAt.localeCompare(a.reportedAt)
+      );
+      const sortedRemises = [...visibleRemises].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      const sortedExpenses = [...visibleExpenses].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      const sortedAudits = [...visibleAudits].sort((a, b) =>
+        b.timestamp.localeCompare(a.timestamp)
+      );
+      const sortedNotifs = [...allNotifications].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      const sortedClosings = [...allClosings].sort((a, b) =>
+        (b.closingDate || b.date || '').localeCompare(a.closingDate || a.date || '')
+      );
+      const sortedSos = [...allSos].sort((a, b) => b.alertedAt.localeCompare(a.alertedAt));
+      const sortedLitiges = [...allLitiges].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      const sortedBrigades = [...allPlannings].sort((a, b) =>
+        b.shiftDate.localeCompare(a.shiftDate)
+      );
 
       usePortusStore.getState().setAllData({
         users: visibleUsers,
@@ -378,7 +426,6 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setRemises(sortedRemises);
         setExpenses(sortedExpenses);
         setAuditLogs(sortedAudits);
-
         setNotifications(sortedNotifs);
         setDailyClosings(sortedClosings);
         setVehicles(allVehicles);
@@ -388,9 +435,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setBrigadeAssignments(sortedBrigades);
       });
 
-      const pendingSales = allSales.filter((s: Sale) => s.syncStatus === 'PENDING_SYNC');
-      const pendingControls = allControls.filter((c: Control) => c.syncStatus === 'PENDING_SYNC');
-      const pendingFrauds = allFrauds.filter((f: FraudReport) => f.syncStatus === 'PENDING_SYNC');
+      const pendingSales = allSales.filter((s) => s.syncStatus === 'PENDING_SYNC');
+      const pendingControls = allControls.filter((c) => c.syncStatus === 'PENDING_SYNC');
+      const pendingFrauds = allFrauds.filter((f) => f.syncStatus === 'PENDING_SYNC');
       setPendingSyncCount(pendingSales.length + pendingControls.length + pendingFrauds.length);
 
       calculateFinancialAlerts(allUsers, allTickets, allRemises);
@@ -423,268 +470,293 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   // --------------------------------------------------------------------------
   // Sync Remote Data (Supabase Cloud -> IndexedDB bulk updates)
   // --------------------------------------------------------------------------
-  const syncRemoteData = useCallback(async (db: any): Promise<boolean> => {
-    if (isSyncingRemoteRef.current) return false;
-    isSyncingRemoteRef.current = true;
-    try {
-      const [
-        profilesResult,
-        sectorsResult,
-        carnetsResult,
-        ticketsResult,
-        salesResult,
-        remittancesResult,
-        controlsResult,
-        fraudsResult,
-        auditLogsResult,
-        expensesResult,
-        closingsResult,
-        vehiclesResult,
-      ] = await Promise.allSettled([
-        SupabaseDataLayer.fetchProfiles(),
-        SupabaseDataLayer.fetchSectors(),
-        SupabaseDataLayer.fetchCarnets(),
-        SupabaseDataLayer.fetchTickets(),
-        SupabaseDataLayer.fetchSales(),
-        SupabaseDataLayer.fetchRemittances(),
-        SupabaseDataLayer.fetchControls(),
-        SupabaseDataLayer.fetchFraudReports(),
-        SupabaseDataLayer.fetchAuditLogs(),
-        SupabaseDataLayer.fetchExpenses(),
-        SupabaseDataLayer.fetchDailyClosings(),
-        SupabaseDataLayer.fetchVehicles(),
-      ]);
+  const syncRemoteData = useCallback(
+    async (db: IDBPDatabase<PortusDB>): Promise<boolean> => {
+      if (isSyncingRemoteRef.current) return false;
+      isSyncingRemoteRef.current = true;
+      try {
+        const [
+          profilesResult,
+          carnetsResult,
+          ticketsResult,
+          salesResult,
+          remittancesResult,
+          controlsResult,
+          fraudsResult,
+          auditLogsResult,
+          expensesResult,
+          closingsResult,
+          vehiclesResult,
+        ] = await Promise.allSettled([
+          SupabaseDataLayer.fetchProfiles(),
+          SupabaseDataLayer.fetchCarnets(),
+          SupabaseDataLayer.fetchTickets(),
+          SupabaseDataLayer.fetchSales(),
+          SupabaseDataLayer.fetchRemittances(),
+          SupabaseDataLayer.fetchControls(),
+          SupabaseDataLayer.fetchFraudReports(),
+          SupabaseDataLayer.fetchAuditLogs(),
+          SupabaseDataLayer.fetchExpenses(),
+          SupabaseDataLayer.fetchDailyClosings(),
+          SupabaseDataLayer.fetchVehicles(),
+        ]);
 
-      if (isRlsPermissionIssueDetected()) {
-        setIsRlsPermissionIssue(true);
-        setLastRlsError(getLastRlsErrorMessage());
-      } else {
-        setIsRlsPermissionIssue(false);
-        setLastRlsError('');
-      }
+        if (isRlsPermissionIssueDetected()) {
+          setIsRlsPermissionIssue(true);
+          setLastRlsError(getLastRlsErrorMessage());
+        } else {
+          setIsRlsPermissionIssue(false);
+          setLastRlsError('');
+        }
 
-      const remoteProfiles = profilesResult.status === 'fulfilled' ? profilesResult.value : [];
-      const remoteCarnets = carnetsResult.status === 'fulfilled' ? carnetsResult.value : [];
-      const remoteTickets = ticketsResult.status === 'fulfilled' ? ticketsResult.value : [];
-      const remoteSales = salesResult.status === 'fulfilled' ? salesResult.value : [];
-      const remoteRemises = remittancesResult.status === 'fulfilled' ? remittancesResult.value : [];
-      const remoteControls = controlsResult.status === 'fulfilled' ? controlsResult.value : [];
-      const remoteFrauds = fraudsResult.status === 'fulfilled' ? fraudsResult.value : [];
-      const remoteAuditLogs = auditLogsResult.status === 'fulfilled' ? auditLogsResult.value : [];
-      const remoteExpenses = expensesResult.status === 'fulfilled' ? expensesResult.value : [];
-      const remoteClosings = closingsResult.status === 'fulfilled' ? closingsResult.value : [];
-      const remoteVehicles = vehiclesResult.status === 'fulfilled' ? vehiclesResult.value : [];
+        const remoteProfiles = profilesResult.status === 'fulfilled' ? profilesResult.value : [];
+        const remoteCarnets = carnetsResult.status === 'fulfilled' ? carnetsResult.value : [];
+        const remoteTickets = ticketsResult.status === 'fulfilled' ? ticketsResult.value : [];
+        const remoteSales = salesResult.status === 'fulfilled' ? salesResult.value : [];
+        const remoteRemises =
+          remittancesResult.status === 'fulfilled' ? remittancesResult.value : [];
+        const remoteControls = controlsResult.status === 'fulfilled' ? controlsResult.value : [];
+        const remoteFrauds = fraudsResult.status === 'fulfilled' ? fraudsResult.value : [];
+        const remoteAuditLogs =
+          auditLogsResult.status === 'fulfilled' ? auditLogsResult.value : [];
+        const remoteExpenses = expensesResult.status === 'fulfilled' ? expensesResult.value : [];
+        const remoteClosings = closingsResult.status === 'fulfilled' ? closingsResult.value : [];
+        const remoteVehicles = vehiclesResult.status === 'fulfilled' ? vehiclesResult.value : [];
 
-      if (remoteProfiles && remoteProfiles.length > 0) {
-        const currentLocalUsers: User[] = await db.getAll('users');
-        const localUserMap = new Map<string, User>(currentLocalUsers.map((u: User) => [u.id, u]));
+        if (remoteProfiles && remoteProfiles.length > 0) {
+          const currentLocalUsers: User[] = await db.getAll('users');
+          const localUserMap = new Map<string, User>(currentLocalUsers.map((u) => [u.id, u]));
 
-        const mergedProfiles: User[] = [];
-        for (const rp of remoteProfiles) {
-          const lu = localUserMap.get(rp.id);
-          if (lu) {
-            const localTime = lu.updatedAt ? new Date(lu.updatedAt).getTime() : 0;
-            const remoteTime = rp.updatedAt ? new Date(rp.updatedAt).getTime() : 0;
-            if (localTime > remoteTime) {
-              mergedProfiles.push(lu);
-              SupabaseDataLayer.upsertProfile(lu).catch(() => {});
+          const mergedProfiles: User[] = [];
+          for (const rp of remoteProfiles) {
+            if (!isVisibleOperationalRole(rp.role)) continue;
+            const lu = localUserMap.get(rp.id);
+            if (lu) {
+              const localTime = lu.updatedAt ? new Date(lu.updatedAt).getTime() : 0;
+              const remoteTime = rp.updatedAt ? new Date(rp.updatedAt).getTime() : 0;
+              if (localTime > remoteTime) {
+                mergedProfiles.push({
+                  ...lu,
+                  avatarUrl: lu.avatarUrl || rp.avatarUrl,
+                });
+                SupabaseDataLayer.upsertProfile(lu).catch((err: unknown) => {
+                  console.warn('[PORTUS Sync] Différé profil:', err);
+                });
+              } else {
+                mergedProfiles.push({
+                  ...rp,
+                  avatarUrl: rp.avatarUrl || lu.avatarUrl,
+                });
+              }
             } else {
               mergedProfiles.push(rp);
             }
-          } else {
-            mergedProfiles.push(rp);
           }
-        }
-        for (const lu of currentLocalUsers) {
-          if (!mergedProfiles.some((u) => u.id === lu.id)) {
-            mergedProfiles.push(lu);
-          }
-        }
-
-        const tx = db.transaction('users', 'readwrite');
-        const store = tx.objectStore('users');
-        await Promise.all([...mergedProfiles.map((p: User) => store.put(p)), tx.done]);
-      }
-
-      if (remoteCarnets && Array.isArray(remoteCarnets)) {
-        const deletedSet = getStoredDeletedCarnetIds();
-        const uniqueRemoteCarnets: Carnet[] = [];
-        const seenCarnetIds = new Set<string>();
-        const seenCarnetNums = new Set<string>();
-        for (const c of remoteCarnets) {
-          if (
-            c &&
-            c.id &&
-            !seenCarnetIds.has(c.id) &&
-            !deletedSet.has(c.id) &&
-            !(c.carnetNumber && deletedSet.has(c.carnetNumber))
-          ) {
-            seenCarnetIds.add(c.id);
-            let safeNum = c.carnetNumber;
-            if (!safeNum) {
-              safeNum = `C-REC-${c.id.slice(0, 6)}`;
-            } else if (seenCarnetNums.has(safeNum)) {
-              safeNum = `${safeNum}-${c.id.slice(0, 4)}`;
+          for (const lu of currentLocalUsers) {
+            if (isVisibleOperationalRole(lu.role) && !mergedProfiles.some((u) => u.id === lu.id)) {
+              mergedProfiles.push(lu);
             }
-            seenCarnetNums.add(safeNum);
-            uniqueRemoteCarnets.push({
-              ...c,
-              carnetNumber: safeNum,
-            });
           }
+
+          const tx = db.transaction('users', 'readwrite');
+          const store = tx.objectStore('users');
+          await Promise.all([...mergedProfiles.map((p) => store.put(p)), tx.done]);
         }
 
-        const remoteCarnetIds = new Set(uniqueRemoteCarnets.map((c) => c.id));
-        const currentLocalCarnets: Carnet[] = await db.getAll('carnets');
-        const carnetsToDelete: string[] = [];
-        for (const lc of currentLocalCarnets) {
-          const isDeleted = deletedSet.has(lc.id) || (lc.carnetNumber && deletedSet.has(lc.carnetNumber));
-          const isRecent = lc.createdAt && (Date.now() - new Date(lc.createdAt).getTime() < 15 * 60 * 1000);
-          if (isDeleted || (!remoteCarnetIds.has(lc.id) && !isRecent)) {
-            carnetsToDelete.push(lc.id);
+        if (remoteCarnets && Array.isArray(remoteCarnets)) {
+          const deletedSet = getStoredDeletedCarnetIds();
+          const uniqueRemoteCarnets: Carnet[] = [];
+          const seenCarnetIds = new Set<string>();
+          const seenCarnetNums = new Set<string>();
+          for (const c of remoteCarnets) {
+            if (
+              c &&
+              c.id &&
+              !seenCarnetIds.has(c.id) &&
+              !deletedSet.has(c.id) &&
+              !(c.carnetNumber && deletedSet.has(c.carnetNumber))
+            ) {
+              seenCarnetIds.add(c.id);
+              let safeNum = c.carnetNumber;
+              if (!safeNum) {
+                safeNum = `C-REC-${c.id.slice(0, 6)}`;
+              } else if (seenCarnetNums.has(safeNum)) {
+                safeNum = `${safeNum}-${c.id.slice(0, 4)}`;
+              }
+              seenCarnetNums.add(safeNum);
+              uniqueRemoteCarnets.push({
+                ...c,
+                carnetNumber: safeNum,
+              });
+            }
           }
+
+          const remoteCarnetIds = new Set(uniqueRemoteCarnets.map((c) => c.id));
+          const currentLocalCarnets: Carnet[] = await db.getAll('carnets');
+          const carnetsToDelete: string[] = [];
+          for (const lc of currentLocalCarnets) {
+            const isDeleted =
+              deletedSet.has(lc.id) || Boolean(lc.carnetNumber && deletedSet.has(lc.carnetNumber));
+            const isRecent =
+              lc.createdAt && Date.now() - new Date(lc.createdAt).getTime() < 15 * 60 * 1000;
+            if (isDeleted || (!remoteCarnetIds.has(lc.id) && !isRecent)) {
+              carnetsToDelete.push(lc.id);
+            }
+          }
+
+          const tx = db.transaction('carnets', 'readwrite');
+          const store = tx.objectStore('carnets');
+          await Promise.all([
+            ...carnetsToDelete.map((id) => store.delete(id)),
+            ...uniqueRemoteCarnets.map((c) => store.put(c)),
+            tx.done,
+          ]);
         }
 
-        const tx = db.transaction('carnets', 'readwrite');
-        const store = tx.objectStore('carnets');
-        await Promise.all([
-          ...carnetsToDelete.map((id) => store.delete(id)),
-          ...uniqueRemoteCarnets.map((c) => store.put(c)),
-          tx.done,
-        ]);
-      }
+        if (remoteTickets && Array.isArray(remoteTickets)) {
+          const deletedSet = getStoredDeletedCarnetIds();
+          const validRemoteTickets = remoteTickets.filter(
+            (t) =>
+              !deletedSet.has(t.carnetId) &&
+              !(t.carnetNumber && deletedSet.has(t.carnetNumber))
+          );
+          const remoteTicketIds = new Set(validRemoteTickets.map((t) => t.id));
+          const currentLocalTickets: Ticket[] = await db.getAll('tickets');
+          const localTicketMap = new Map<string, Ticket>(currentLocalTickets.map((t) => [t.id, t]));
 
-      if (remoteTickets && Array.isArray(remoteTickets)) {
-        const deletedSet = getStoredDeletedCarnetIds();
-        const validRemoteTickets = remoteTickets.filter(
-          (t: Ticket) => !deletedSet.has(t.carnetId) && !(t.carnetNumber && deletedSet.has(t.carnetNumber))
-        );
-        const remoteTicketIds = new Set(validRemoteTickets.map((t: Ticket) => t.id));
-        const currentLocalTickets: Ticket[] = await db.getAll('tickets');
-        const localTicketMap = new Map<string, Ticket>(currentLocalTickets.map((t) => [t.id, t]));
-
-        const ticketsToDelete: string[] = [];
-        for (const lt of currentLocalTickets) {
-          const isDeleted = deletedSet.has(lt.carnetId) || (lt.carnetNumber && deletedSet.has(lt.carnetNumber));
-          const isRecent = lt.createdAt && (Date.now() - new Date(lt.createdAt).getTime() < 15 * 60 * 1000);
-          const isSyntheticTest =
-            lt.id?.startsWith('f0000000-') ||
-            (lt.carnetId === 'c0000000-0000-0000-0000-000000000001' &&
-              lt.ticketNumber &&
-              !['VRD-000001', 'VRD-000002', 'VRD-000003'].includes(lt.ticketNumber));
-
-          if (isDeleted || isSyntheticTest || (!remoteTicketIds.has(lt.id) && !isRecent)) {
-            ticketsToDelete.push(lt.id);
+          const ticketsToDelete: string[] = [];
+          for (const lt of currentLocalTickets) {
+            const isDeleted =
+              deletedSet.has(lt.carnetId) ||
+              Boolean(lt.carnetNumber && deletedSet.has(lt.carnetNumber));
+            const isRecent =
+              lt.createdAt && Date.now() - new Date(lt.createdAt).getTime() < 15 * 60 * 1000;
+            if (isDeleted || (!remoteTicketIds.has(lt.id) && !isRecent)) {
+              ticketsToDelete.push(lt.id);
+            }
           }
-        }
 
-        const mergedTickets: Ticket[] = [];
-        for (const rt of validRemoteTickets) {
-          const lt = localTicketMap.get(rt.id);
-          if (lt) {
-            const localTime = lt.updatedAt
-              ? new Date(lt.updatedAt).getTime()
-              : lt.soldAt
-              ? new Date(lt.soldAt).getTime()
-              : 0;
-            const remoteTime = rt.updatedAt
-              ? new Date(rt.updatedAt).getTime()
-              : rt.soldAt
-              ? new Date(rt.soldAt).getTime()
-              : 0;
+          const mergedTickets: Ticket[] = [];
+          for (const rt of validRemoteTickets) {
+            const lt = localTicketMap.get(rt.id);
+            if (lt) {
+              const localTime = lt.updatedAt
+                ? new Date(lt.updatedAt).getTime()
+                : lt.soldAt
+                ? new Date(lt.soldAt).getTime()
+                : 0;
+              const remoteTime = rt.updatedAt
+                ? new Date(rt.updatedAt).getTime()
+                : rt.soldAt
+                ? new Date(rt.soldAt).getTime()
+                : 0;
 
-            if (localTime > remoteTime) {
-              mergedTickets.push(lt);
-              SupabaseDataLayer.updateTicketStatus({
-                ticketId: lt.id,
-                status: lt.status,
-                assignedAgentId: lt.assignedAgentId,
-                assignedResponsableId: lt.assignedResponsableId,
-              }).catch(() => {});
+              if (localTime > remoteTime) {
+                mergedTickets.push(lt);
+                SupabaseDataLayer.updateTicketStatus({
+                  ticketId: lt.id,
+                  status: lt.status,
+                  assignedAgentId: lt.assignedAgentId,
+                  assignedResponsableId: lt.assignedResponsableId,
+                }).catch((err: unknown) => {
+                  console.warn('[PORTUS Sync] Différé statut ticket:', err);
+                });
+              } else {
+                mergedTickets.push(rt);
+              }
             } else {
               mergedTickets.push(rt);
             }
-          } else {
-            mergedTickets.push(rt);
           }
+
+          const tx = db.transaction('tickets', 'readwrite');
+          const store = tx.objectStore('tickets');
+          await Promise.all([
+            ...ticketsToDelete.map((id) => store.delete(id)),
+            ...mergedTickets.map((t) => store.put(t)),
+            tx.done,
+          ]);
         }
 
-        const tx = db.transaction('tickets', 'readwrite');
-        const store = tx.objectStore('tickets');
-        await Promise.all([
-          ...ticketsToDelete.map((id) => store.delete(id)),
-          ...mergedTickets.map((t: Ticket) => store.put(t)),
-          tx.done,
-        ]);
-      }
+        if (remoteExpenses && remoteExpenses.length > 0) {
+          const tx = db.transaction('expenses', 'readwrite');
+          const store = tx.objectStore('expenses');
+          await Promise.all([...remoteExpenses.map((exp) => store.put(exp)), tx.done]);
+        }
 
-      if (remoteExpenses && remoteExpenses.length > 0) {
-        const tx = db.transaction('expenses', 'readwrite');
-        const store = tx.objectStore('expenses');
-        await Promise.all([...remoteExpenses.map((exp: Expense) => store.put(exp)), tx.done]);
-      }
+        if (
+          remoteClosings &&
+          remoteClosings.length > 0 &&
+          db.objectStoreNames.contains('daily_closings')
+        ) {
+          const tx = db.transaction('daily_closings', 'readwrite');
+          const store = tx.objectStore('daily_closings');
+          await Promise.all([...remoteClosings.map((cl) => store.put(cl)), tx.done]);
+        }
 
-      if (remoteClosings && remoteClosings.length > 0 && db.objectStoreNames.contains('daily_closings')) {
-        const tx = db.transaction('daily_closings', 'readwrite');
-        const store = tx.objectStore('daily_closings');
-        await Promise.all([...remoteClosings.map((cl: DailyClosing) => store.put(cl)), tx.done]);
-      }
+        if (
+          remoteVehicles &&
+          remoteVehicles.length > 0 &&
+          db.objectStoreNames.contains('vehicles')
+        ) {
+          const tx = db.transaction('vehicles', 'readwrite');
+          const store = tx.objectStore('vehicles');
+          await Promise.all([...remoteVehicles.map((v) => store.put(v)), tx.done]);
+        }
 
-      if (remoteVehicles && remoteVehicles.length > 0 && db.objectStoreNames.contains('vehicles')) {
-        const tx = db.transaction('vehicles', 'readwrite');
-        const store = tx.objectStore('vehicles');
-        await Promise.all([...remoteVehicles.map((v: Vehicle) => store.put(v)), tx.done]);
-      }
+        if (remoteSales && remoteSales.length > 0) {
+          const tx = db.transaction('sales', 'readwrite');
+          const store = tx.objectStore('sales');
+          await Promise.all([...remoteSales.map((s) => store.put(s)), tx.done]);
+        }
 
-      if (remoteSales && remoteSales.length > 0) {
-        const tx = db.transaction('sales', 'readwrite');
-        const store = tx.objectStore('sales');
-        await Promise.all([...remoteSales.map((s: Sale) => store.put(s)), tx.done]);
-      }
+        if (remoteRemises && remoteRemises.length > 0) {
+          const tx = db.transaction('remises', 'readwrite');
+          const store = tx.objectStore('remises');
+          await Promise.all([...remoteRemises.map((r) => store.put(r)), tx.done]);
+        }
 
-      if (remoteRemises && remoteRemises.length > 0) {
-        const tx = db.transaction('remises', 'readwrite');
-        const store = tx.objectStore('remises');
-        await Promise.all([...remoteRemises.map((r: Remise) => store.put(r)), tx.done]);
-      }
+        if (remoteControls && remoteControls.length > 0) {
+          const tx = db.transaction('controls', 'readwrite');
+          const store = tx.objectStore('controls');
+          await Promise.all([...remoteControls.map((c) => store.put(c)), tx.done]);
+        }
 
-      if (remoteControls && remoteControls.length > 0) {
-        const tx = db.transaction('controls', 'readwrite');
-        const store = tx.objectStore('controls');
-        await Promise.all([...remoteControls.map((c: Control) => store.put(c)), tx.done]);
-      }
+        if (remoteFrauds && remoteFrauds.length > 0) {
+          const tx = db.transaction('fraud_reports', 'readwrite');
+          const store = tx.objectStore('fraud_reports');
+          await Promise.all([...remoteFrauds.map((f) => store.put(f)), tx.done]);
+        }
 
-      if (remoteFrauds && remoteFrauds.length > 0) {
-        const tx = db.transaction('fraud_reports', 'readwrite');
-        const store = tx.objectStore('fraud_reports');
-        await Promise.all([...remoteFrauds.map((f: FraudReport) => store.put(f)), tx.done]);
-      }
+        if (remoteAuditLogs && remoteAuditLogs.length > 0) {
+          const tx = db.transaction('audit_logs', 'readwrite');
+          const store = tx.objectStore('audit_logs');
+          await Promise.all([...remoteAuditLogs.map((a) => store.put(a)), tx.done]);
+        }
 
-      if (remoteAuditLogs && remoteAuditLogs.length > 0) {
-        const tx = db.transaction('audit_logs', 'readwrite');
-        const store = tx.objectStore('audit_logs');
-        await Promise.all([...remoteAuditLogs.map((a: AuditLog) => store.put(a)), tx.done]);
-      }
+        const allLocalTktsAfter: Ticket[] = await db.getAll('tickets');
+        const remoteTicketIds = new Set((remoteTickets || []).map((t) => t.id));
+        const unsyncedTkts = allLocalTktsAfter.filter((t) => !remoteTicketIds.has(t.id));
+        if (unsyncedTkts.length > 0) {
+          const allLocalCarnets = await db.getAll('carnets');
+          SupabaseDataLayer.syncCarnetsBatch(allLocalCarnets, unsyncedTkts).catch(
+            (syncBatchErr: unknown) => {
+              console.warn('[PORTUS AutoSync] Erreur synchro lot tickets:', syncBatchErr);
+            }
+          );
+        }
 
-      const allLocalTktsAfter: Ticket[] = await db.getAll('tickets');
-      const remoteTicketIds = new Set((remoteTickets || []).map((t: Ticket) => t.id));
-      const unsyncedTkts = allLocalTktsAfter.filter((t: Ticket) => !remoteTicketIds.has(t.id));
-      if (unsyncedTkts.length > 0) {
-        const allLocalCarnets = await db.getAll('carnets');
-        SupabaseDataLayer.syncCarnetsBatch(allLocalCarnets, unsyncedTkts).catch((e) =>
-          console.warn('[PORTUS AutoSync] Erreur synchro tickets:', e)
-        );
+        lastSyncTime = Date.now();
+        return true;
+      } catch (syncErr: unknown) {
+        console.warn('[PORTUS DataProvider] Erreur synchro distante:', syncErr);
+        return false;
+      } finally {
+        isSyncingRemoteRef.current = false;
       }
-
-      lastSyncTime = Date.now();
-      return true;
-    } catch (syncErr) {
-      console.warn('[PORTUS DataContext] Erreur synchro distante:', syncErr);
-      return false;
-    } finally {
-      isSyncingRemoteRef.current = false;
-    }
-  }, [setIsRlsPermissionIssue, setLastRlsError]);
+    },
+    [setIsRlsPermissionIssue, setLastRlsError]
+  );
 
   // --------------------------------------------------------------------------
   // Stale-While-Revalidate Refresh Data
@@ -695,11 +767,9 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await initializeDatabase();
         const db = await getDB();
 
-        // Step 1: Instant local render
         await applyLocalData(db);
         setIsLoading(false);
 
-        // Step 2: Background revalidation
         const isAuthenticated = Boolean(currentUser && currentUser.isActive);
         let hasActiveSupabaseSession = false;
         const client = getSupabase();
@@ -709,15 +779,19 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               data: { session },
             } = await client.auth.getSession();
             hasActiveSupabaseSession = Boolean(session && session.user);
-          } catch {
+          } catch (sessionErr: unknown) {
+            console.warn('[PORTUS DataProvider] Session Supabase non disponible:', sessionErr);
             hasActiveSupabaseSession = false;
           }
         }
 
         const shouldSyncNetwork =
-          isAuthenticated && hasActiveSupabaseSession && (forceSync || Date.now() - lastSyncTime > 5000);
+          isAuthenticated &&
+          hasActiveSupabaseSession &&
+          (forceSync || Date.now() - lastSyncTime > 5000);
 
         if (SupabaseDataLayer.isAvailable() && shouldSyncNetwork) {
+          lastSyncTime = Date.now();
           if (forceSync) {
             const didSync = await syncRemoteData(db);
             if (didSync) {
@@ -727,21 +801,24 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             syncRemoteData(db)
               .then((didSync) => {
                 if (didSync) {
-                  applyLocalData(db).catch(() => {});
+                  applyLocalData(db).catch((applyErr: unknown) => {
+                    console.warn('[PORTUS DataProvider] Erreur réapplication locale:', applyErr);
+                  });
                 }
               })
-              .catch(() => {});
+              .catch((bgErr: unknown) => {
+                console.warn('[PORTUS DataProvider] Synchro arrière-plan différée:', bgErr);
+              });
           }
         }
-      } catch (err) {
-        console.error('Erreur chargement données', err);
+      } catch (err: unknown) {
+        console.warn('[PORTUS DataProvider] Erreur chargement données:', err);
         setIsLoading(false);
       }
     },
     [currentUser, applyLocalData, syncRemoteData]
   );
 
-  // Keep ref up to date
   useEffect(() => {
     refreshDataRef.current = refreshData;
   }, [refreshData]);
@@ -811,7 +888,8 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     createCarnet,
     assignCarnetToResponsable,
     cancelCarnet,
-    deleteCarnet,
+    deleteCarnet: deleteCarnetPermanently,
+    deleteCarnetPermanently,
     updateTicketStatus,
     cancelTicket,
     correctRemiseAdmin,

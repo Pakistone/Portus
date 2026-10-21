@@ -3,10 +3,8 @@ import {
   X,
   ShoppingCart,
   AlertTriangle,
-  MapPin,
   Phone,
   CheckCircle2,
-  Clock,
   Sparkles,
   MessageSquare,
   Shield,
@@ -18,12 +16,10 @@ import {
   Check,
   Printer,
   Camera,
-  Flashlight,
   Smartphone,
   Coins,
-  QrCode,
-  Wallet,
   CreditCard,
+  CalendarClock,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { useData } from '../../context/DataContext';
@@ -37,9 +33,10 @@ import {
   formatDateTime,
 } from '../../utils/normalization';
 import { CEDEAO_COUNTRIES, generateWhatsAppReceiptUrl } from '../../utils/cedeao';
+import { TICKET_VALIDITY_DAYS, getTicketValidityStatus } from '../../utils/expiration';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
-import { showToast } from '../common/ToastNotification';
-import type { Ticket, Sale } from '../../types';
+import { AnprCameraScannerModal } from '../common/AnprCameraScannerModal';
+import type { Ticket, Sale, PortusPaymentMethod } from '../../types';
 
 interface Props {
   isOpen: boolean;
@@ -63,7 +60,6 @@ export const SaleFormModal: React.FC<Props> = ({
     sellTicket,
     checkDuplicatePlate,
     getRecentPlates,
-    isOnline,
   } = useData();
 
   const isAdmin = currentUser?.role === 'ADMINISTRATEUR';
@@ -76,7 +72,7 @@ export const SaleFormModal: React.FC<Props> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // État de confirmation spéciale : Doublon actif < 7 jours
+  // État de confirmation spéciale : Doublon actif < 14 jours
   const [duplicateWarning, setDuplicateWarning] = useState<{
     oldTicket: Ticket;
     daysRemaining: number;
@@ -94,30 +90,39 @@ export const SaleFormModal: React.FC<Props> = ({
 
   // States pour le scanneur de plaques d'immatriculation (ANPR)
   const [showAnpr, setShowAnpr] = useState(false);
-  const [anprScanning, setAnprScanning] = useState(false);
   const [anprStream, setAnprStream] = useState<MediaStream | null>(null);
   const [anprSuccessMsg, setAnprSuccessMsg] = useState<string | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
-  // Ref de verrou synchrone anti-double clic / double soumission (défini en haut du composant - Rules of Hooks)
   const isSubmittingRef = React.useRef(false);
 
-  // States pour les paiements Mobile Money (Wave, Orange, MTN) et Bons d'abonnement
+  // States pour les paiements Mobile Money (Wave, Orange, Moov, MTN) et Bons d'abonnement
   const [paymentMethod, setPaymentMethod] = useState<'ESPECES' | 'MOBILE_MONEY' | 'BON_ABONNEMENT'>('ESPECES');
-  const [momoProvider, setMomoProvider] = useState<'WAVE' | 'ORANGE' | 'MTN'>('WAVE');
+  const [momoProvider, setMomoProvider] = useState<'WAVE' | 'ORANGE' | 'MOOV' | 'MTN'>('WAVE');
   const [paymentReference, setPaymentReference] = useState('');
   const [momoQrUrl, setMomoQrUrl] = useState<string | null>(null);
+
+  // Nettoyage strict du flux vidéo ANPR à la fermeture ou au démontage
+  useEffect(() => {
+    return () => {
+      if (anprStream) {
+        anprStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [anprStream]);
 
   // Génération dynamique d'un QR code de paiement Mobile Money
   useEffect(() => {
     if (paymentMethod === 'MOBILE_MONEY') {
       const ticketNum = tickets.find((t) => t.id === selectedTicketId)?.ticketNumber || 'VRD-0000';
       const cleanPlate = plateInput.trim() || 'CAMION';
-      
+
       let payload = '';
       if (momoProvider === 'WAVE') {
         payload = `wave://pay/ujpas-corridor-vridi?amount=5000&ticket=${ticketNum}&plate=${cleanPlate}`;
       } else if (momoProvider === 'ORANGE') {
         payload = `orange://ussd/*144*4*2*882911*5000%23?ticket=${ticketNum}&plate=${cleanPlate}`;
+      } else if (momoProvider === 'MOOV') {
+        payload = `moov://pay/ujpas-port-abidjan?amount=5000&ticket=${ticketNum}&plate=${cleanPlate}`;
       } else {
         payload = `mtn://pay/ujpas-momo-merchant?amount=5000&id=102832&ticket=${ticketNum}&plate=${cleanPlate}`;
       }
@@ -134,76 +139,14 @@ export const SaleFormModal: React.FC<Props> = ({
     }
   }, [paymentMethod, momoProvider, selectedTicketId, plateInput, tickets]);
 
-  const startAnprCamera = async () => {
+  const startAnprCamera = () => {
     setShowAnpr(true);
-    setAnprScanning(true);
-    setAnprSuccessMsg(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      });
-      setAnprStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      
-      // Simulation OCR / ANPR intelligente après 2.5 secondes
-      setTimeout(() => {
-        // Liste de camions simulés sur le corridor de Vridi (Abidjan)
-        const commonPlates = ['5829HZ01', '9021GF01', '3048FK01', '7721HG01', '8019AB01'];
-        const randomArray = new Uint32Array(1);
-        window.crypto.getRandomValues(randomArray);
-        const randomPlate = commonPlates[randomArray[0] % commonPlates.length];
-        
-        // Jouer un petit bip sonore d'accroche ANPR
-        try {
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-          const ctx = new AudioContextClass();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(1200, ctx.currentTime);
-          gain.gain.setValueAtTime(0.1, ctx.currentTime);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.1);
-        } catch {}
-
-        setAnprSuccessMsg(`PLAQUE DÉTECTÉE : ${randomPlate}`);
-        setPlateInput(randomPlate);
-        
-        // Arrêter le flux après détection
-        stream.getTracks().forEach((track) => track.stop());
-        setAnprStream(null);
-        setAnprScanning(false);
-        
-        // Fermer l'overlay après 1.2s supplémentaires
-        setTimeout(() => {
-          setShowAnpr(false);
-          setAnprSuccessMsg(null);
-        }, 1200);
-
-      }, 2500);
-
-    } catch (err: any) {
-      console.warn('Erreur caméra ANPR:', err);
-      setAnprScanning(false);
-      showToast('error', 'Accès Caméra Impossible', err.message || 'Permissions manquantes');
-    }
   };
 
   const stopAnprCamera = () => {
-    if (anprStream) {
-      anprStream.getTracks().forEach((track) => track.stop());
-      setAnprStream(null);
-    }
-    setAnprScanning(false);
     setShowAnpr(false);
   };
 
-  // Tickets disponibles à la vente (Tous pour l'admin, attribués pour l'agent)
   const availableTickets = useMemo(() => {
     return tickets.filter((t) => {
       if (t.status === 'SOLD' || t.status === 'CANCELLED') return false;
@@ -229,11 +172,10 @@ export const SaleFormModal: React.FC<Props> = ({
     }
   }, [defaultTicketId, availableTickets, selectedTicketId]);
 
-  // Auto-remplissage intelligent (téléphone & nom chauffeur) si le véhicule ou des ventes passées sont trouvés
+  // Auto-remplissage intelligent (téléphone & nom chauffeur)
   useEffect(() => {
     const cleanCurrent = normalizePlate(plateInput);
     if (cleanCurrent.length >= 3) {
-      // 1. Rechercher d'abord dans le registre officiel des camions
       const foundVehicle = vehicles?.find((v) => normalizePlate(v.plateNumber) === cleanCurrent);
       if (foundVehicle) {
         if (foundVehicle.driverPhone && !phoneInput) {
@@ -252,8 +194,9 @@ export const SaleFormModal: React.FC<Props> = ({
         return;
       }
 
-      // 2. En repli, rechercher dans l'historique des ventes passées
-      const foundSale = sales.find((s) => normalizePlate(s.plateNumber) === cleanCurrent && (s.driverPhone || s.driverName));
+      const foundSale = sales.find(
+        (s) => normalizePlate(s.plateNumber) === cleanCurrent && (s.driverPhone || s.driverName)
+      );
       if (foundSale) {
         if (foundSale.driverPhone && !phoneInput) {
           const existingPhone = foundSale.driverPhone.trim();
@@ -274,11 +217,14 @@ export const SaleFormModal: React.FC<Props> = ({
 
   // Génération automatique du reçu électronique image lors du succès de la vente
   useEffect(() => {
+    let createdUrl: string | null = null;
     if (completedSale) {
       const run = async () => {
         setIsGeneratingImg(true);
         try {
-          const ticketObj = tickets.find((t) => t.id === completedSale.ticketId || t.ticketNumber === completedSale.ticketNumber);
+          const ticketObj = tickets.find(
+            (t) => t.id === completedSale.ticketId || t.ticketNumber === completedSale.ticketNumber
+          );
           const carnetNumber = ticketObj ? ticketObj.carnetNumber : undefined;
 
           const blob = await generateReceiptImageBlob({
@@ -292,8 +238,8 @@ export const SaleFormModal: React.FC<Props> = ({
             carnetNumber: carnetNumber,
             qrPayload: completedSale.ticketNumber,
           });
-          const url = URL.createObjectURL(blob);
-          setReceiptImgUrl(url);
+          createdUrl = URL.createObjectURL(blob);
+          setReceiptImgUrl(createdUrl);
         } catch (err) {
           console.error('[PORTUS] Erreur génération image reçu:', err);
         } finally {
@@ -302,14 +248,11 @@ export const SaleFormModal: React.FC<Props> = ({
       };
       run();
     } else {
-      if (receiptImgUrl) {
-        URL.revokeObjectURL(receiptImgUrl);
-      }
       setReceiptImgUrl(null);
     }
     return () => {
-      if (receiptImgUrl) {
-        URL.revokeObjectURL(receiptImgUrl);
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
       }
     };
   }, [completedSale]);
@@ -328,13 +271,15 @@ export const SaleFormModal: React.FC<Props> = ({
     try {
       const response = await fetch(receiptImgUrl);
       const blob = await response.blob();
-      const file = new File([blob], `Recu_PORTUS_${completedSale.ticketNumber}.png`, { type: 'image/png' });
+      const file = new File([blob], `Recu_PORTUS_${completedSale.ticketNumber}.png`, {
+        type: 'image/png',
+      });
 
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
           title: `Reçu PORTUS ${completedSale.ticketNumber}`,
-          text: `Reçu officiel de stationnement pour le véhicule ${completedSale.plateNumber}.`,
+          text: `Reçu officiel de stationnement U.J.P.A.S. (valable 14 jours) pour le véhicule ${completedSale.plateNumber}.`,
         });
       } else {
         handleDownloadReceiptImage();
@@ -362,12 +307,12 @@ export const SaleFormModal: React.FC<Props> = ({
     try {
       const response = await fetch(receiptImgUrl);
       const blob = await response.blob();
-      
+
       if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
         await navigator.clipboard.write([
           new ClipboardItem({
-            'image/png': blob
-          })
+            'image/png': blob,
+          }),
         ]);
         setCopiedImageSuccess(true);
         setTimeout(() => setCopiedImageSuccess(false), 2000);
@@ -375,7 +320,7 @@ export const SaleFormModal: React.FC<Props> = ({
         handleDownloadReceiptImage();
       }
     } catch (err) {
-      console.error('[PORTUS Copy] Échec de copie de l\'image, repli téléchargement:', err);
+      console.error("[PORTUS Copy] Échec de copie de l'image, repli téléchargement:", err);
       handleDownloadReceiptImage();
     }
   };
@@ -391,9 +336,9 @@ export const SaleFormModal: React.FC<Props> = ({
       iframe.style.height = '0';
       iframe.style.border = '0';
       iframe.name = 'print-iframe';
-      
+
       document.body.appendChild(iframe);
-      
+
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (doc) {
         doc.write(`
@@ -429,7 +374,9 @@ export const SaleFormModal: React.FC<Props> = ({
       }
 
       setTimeout(() => {
-        document.body.removeChild(iframe);
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
       }, 10000);
     } catch (err) {
       console.error('[PORTUS Print] Erreur lors de l’impression du reçu:', err);
@@ -472,8 +419,13 @@ export const SaleFormModal: React.FC<Props> = ({
   const executeSale = async (overrideOldTicketId?: string) => {
     if (isSubmittingRef.current || loading) return;
 
-    if ((paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT') && !paymentReference.trim()) {
-      setError('Une référence de transaction ou numéro de bon est obligatoire pour ce mode de règlement.');
+    if (
+      (paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT') &&
+      !paymentReference.trim()
+    ) {
+      setError(
+        'Une référence de transaction ou numéro de bon est obligatoire pour ce mode de règlement.'
+      );
       return;
     }
 
@@ -488,10 +440,11 @@ export const SaleFormModal: React.FC<Props> = ({
           : `${selectedDialCode} ${cleanPhone}`
         : undefined;
 
-      let finalPaymentMethod: any = 'ESPECES';
+      let finalPaymentMethod: PortusPaymentMethod = 'ESPECES';
       if (paymentMethod === 'MOBILE_MONEY') {
         if (momoProvider === 'WAVE') finalPaymentMethod = 'WAVE';
         else if (momoProvider === 'ORANGE') finalPaymentMethod = 'ORANGE_MONEY';
+        else if (momoProvider === 'MOOV') finalPaymentMethod = 'MOOV';
         else if (momoProvider === 'MTN') finalPaymentMethod = 'MTN_MOMO';
       } else if (paymentMethod === 'BON_ABONNEMENT') {
         finalPaymentMethod = 'BON_ABONNEMENT';
@@ -504,7 +457,10 @@ export const SaleFormModal: React.FC<Props> = ({
         driverName: driverNameInput.trim() || undefined,
         overrideOldTicketId,
         paymentMethod: finalPaymentMethod,
-        paymentReference: paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT' ? paymentReference.trim().toUpperCase() : undefined,
+        paymentReference:
+          paymentMethod === 'MOBILE_MONEY' || paymentMethod === 'BON_ABONNEMENT'
+            ? paymentReference.trim().toUpperCase()
+            : undefined,
       });
 
       setCompletedSale(sale);
@@ -521,6 +477,7 @@ export const SaleFormModal: React.FC<Props> = ({
   };
 
   const handleResetAndClose = () => {
+    stopAnprCamera();
     setPlateInput('');
     setPhoneInput('');
     setDriverNameInput('');
@@ -546,13 +503,17 @@ export const SaleFormModal: React.FC<Props> = ({
               <ShoppingCart className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Guichet de Vente Poids Lourd</h3>
-              <p className="text-[11px] text-slate-400">Tarif officiel : {formatFCFA(TICKET_PRICE_FCFA)}</p>
+              <h3 className="text-sm font-bold text-white">
+                Guichet de Vente Poids Lourd — U.J.P.A.S.
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                Tarif officiel : {formatFCFA(TICKET_PRICE_FCFA)} • Validité : {TICKET_VALIDITY_DAYS} jours
+              </p>
             </div>
           </div>
           <button
             onClick={handleResetAndClose}
-            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -564,32 +525,33 @@ export const SaleFormModal: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Modal d'avertissement doublon actif < 7 jours */}
+        {/* Modal d'avertissement doublon actif < 14 jours */}
         {duplicateWarning && (
           <div className="mt-4 rounded-2xl border border-amber-500/50 bg-amber-500/10 p-4 space-y-3 animate-fadeIn">
             <div className="flex items-center gap-2 text-amber-300 font-bold text-sm">
               <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
-              <span>ALERTE DOUBLON : TICKET ACTIF DÉJÀ EXISTANT</span>
+              <span>ALERTE DOUBLON : TICKET ACTIF DÉJÀ EN COURS DE VALIDITÉ</span>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
               Le camion <strong>{formatPlateDisplay(plateInput)}</strong> possède déjà un ticket actif n°{' '}
               <strong className="text-white">{duplicateWarning.oldTicket.ticketNumber}</strong> émis il y a{' '}
-              {7 - duplicateWarning.daysRemaining} jour(s) (encore valide {duplicateWarning.daysRemaining} jour(s)).
+              {Math.max(0, TICKET_VALIDITY_DAYS - duplicateWarning.daysRemaining)} jour(s) (encore valide{' '}
+              {duplicateWarning.daysRemaining} jour(s) sur {TICKET_VALIDITY_DAYS}).
             </p>
             <div className="flex gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setDuplicateWarning(null)}
-                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition"
+                className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
               >
                 Annuler
               </button>
               <button
                 type="button"
                 onClick={() => executeSale(duplicateWarning.oldTicket.id)}
-                className="flex-1 rounded-xl bg-amber-600 py-2.5 text-xs font-bold text-white hover:bg-amber-500 transition shadow-md"
+                className="flex-1 rounded-xl bg-amber-600 py-2.5 text-xs font-bold text-white hover:bg-amber-500 transition shadow-md cursor-pointer"
               >
-                Forcer & Remplacer
+                Forcer &amp; Remplacer
               </button>
             </div>
           </div>
@@ -611,14 +573,23 @@ export const SaleFormModal: React.FC<Props> = ({
                 <p className="text-xs font-bold text-emerald-400">
                   Véhicule : {formatPlateDisplay(completedSale.plateNumber)}
                 </p>
+                {(() => {
+                  const val = getTicketValidityStatus(completedSale.soldAt, completedSale.expiresAt);
+                  return (
+                    <span className="inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-300">
+                      <CalendarClock className="w-3 h-3" />
+                      <span>Valable 14 jours ({val.label})</span>
+                    </span>
+                  );
+                })()}
               </div>
 
               {/* Aperçu visuel officiel du reçu électronique (Image) */}
               <div className="space-y-1.5 text-center">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                  Reçu Électronique Officiel (Image)
+                  Reçu Électronique Officiel U.J.P.A.S. (Image)
                 </span>
-                
+
                 {receiptImgUrl ? (
                   <div className="relative mx-auto max-w-[250px] rounded-xl overflow-hidden border-2 border-emerald-500/40 shadow-2xl bg-white aspect-[500/770] transition-transform hover:scale-[1.02]">
                     <img
@@ -634,9 +605,6 @@ export const SaleFormModal: React.FC<Props> = ({
                     <span className="text-[11px] text-slate-400">Dessin du reçu image...</span>
                   </div>
                 )}
-                <p className="text-[10px] text-slate-500 italic">
-                  Les chauffeurs étant pour la plupart illettrés, l'image ci-dessus contient tous les détails visuels.
-                </p>
               </div>
             </div>
 
@@ -644,10 +612,9 @@ export const SaleFormModal: React.FC<Props> = ({
             <div className="rounded-xl bg-slate-900/50 p-3.5 border border-slate-800/90 space-y-3 text-left">
               <span className="text-xs font-black text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
                 <MessageSquare className="w-4 h-4 text-emerald-500 animate-bounce" />
-                Partage Direct WhatsApp (Vendeur)
+                Partage Direct WhatsApp (Chauffeur)
               </span>
 
-              {/* Champ d'Ajustement du Numéro WhatsApp */}
               <div className="space-y-1">
                 <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">
                   Numéro de Téléphone WhatsApp :
@@ -662,7 +629,6 @@ export const SaleFormModal: React.FC<Props> = ({
               </div>
 
               <div className="grid grid-cols-1 gap-2 pt-1">
-                {/* Bouton Envoi Texte WhatsApp Officiel */}
                 <a
                   href={generateWhatsAppReceiptUrl({
                     dialCode: '',
@@ -672,6 +638,7 @@ export const SaleFormModal: React.FC<Props> = ({
                     amount: completedSale.price,
                     agentName: completedSale.agentName,
                     dateStr: formatDateTime(completedSale.soldAt),
+                    soldAtIso: completedSale.soldAt,
                   })}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -681,7 +648,6 @@ export const SaleFormModal: React.FC<Props> = ({
                   <span>Envoyer Reçu Officiel sur WhatsApp</span>
                 </a>
 
-                {/* Bouton Partage Image par Web Share */}
                 <button
                   type="button"
                   onClick={handleShareReceiptImage}
@@ -696,7 +662,6 @@ export const SaleFormModal: React.FC<Props> = ({
 
             {/* Actions Supplémentaires de Reçu */}
             <div className="space-y-2 pt-3 border-t border-slate-800/80">
-              {/* 🖨️ Imprimer le Reçu */}
               <button
                 type="button"
                 onClick={handlePrintReceipt}
@@ -708,7 +673,6 @@ export const SaleFormModal: React.FC<Props> = ({
               </button>
 
               <div className="grid grid-cols-2 gap-2">
-                {/* 📋 Copier l'Image */}
                 <button
                   type="button"
                   onClick={handleCopyReceiptImage}
@@ -728,7 +692,6 @@ export const SaleFormModal: React.FC<Props> = ({
                   )}
                 </button>
 
-                {/* ⬇️ Télécharger l'Image */}
                 <button
                   type="button"
                   onClick={handleDownloadReceiptImage}
@@ -755,7 +718,6 @@ export const SaleFormModal: React.FC<Props> = ({
           /* Formulaire standard */
           <form onSubmit={handlePrevalidate} className="mt-4 space-y-4 flex-1 flex flex-col justify-between">
             <div className="space-y-4">
-              {/* En-tête mode administrateur */}
               {isAdmin && (
                 <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-300">
                   <Shield className="w-4 h-4 shrink-0 text-emerald-400" />
@@ -763,7 +725,6 @@ export const SaleFormModal: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* Filtre Carnet pour l'administrateur */}
               {isAdmin && carnets.length > 0 && (
                 <div>
                   <div className="flex items-center gap-1.5 mb-1">
@@ -777,31 +738,43 @@ export const SaleFormModal: React.FC<Props> = ({
                     onChange={(e) => setCarnetFilter(e.target.value)}
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs font-semibold text-slate-200 focus:border-emerald-500 focus:outline-hidden"
                   >
-                    <option value="ALL">Tous les carnets actifs ({tickets.filter(t => t.status !== 'SOLD' && t.status !== 'CANCELLED').length} tickets disponibles)</option>
-                    {carnets.filter(c => c.status !== 'CANCELLED').map((c) => {
-                      const cAvail = tickets.filter(t => (t.carnetId === c.id || t.carnetNumber === c.carnetNumber) && t.status !== 'SOLD' && t.status !== 'CANCELLED').length;
-                      return (
-                        <option key={c.id} value={c.id}>
-                          {c.carnetNumber} ({c.seriesPrefix}) — {cAvail} tickets disponibles
-                        </option>
-                      );
-                    })}
+                    <option value="ALL">
+                      Tous les carnets actifs (
+                      {tickets.filter((t) => t.status !== 'SOLD' && t.status !== 'CANCELLED').length} tickets disponibles)
+                    </option>
+                    {carnets
+                      .filter((c) => c.status !== 'CANCELLED')
+                      .map((c) => {
+                        const cAvail = tickets.filter(
+                          (t) =>
+                            (t.carnetId === c.id || t.carnetNumber === c.carnetNumber) &&
+                            t.status !== 'SOLD' &&
+                            t.status !== 'CANCELLED'
+                        ).length;
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.carnetNumber} ({c.seriesPrefix}) — {cAvail} tickets disponibles
+                          </option>
+                        );
+                      })}
                   </select>
                 </div>
               )}
 
-              {/* Choix du ticket dans le lot de l'agent ou de l'admin */}
+              {/* Choix du ticket */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
                   {isAdmin
-                    ? `Sélectionner le ticket (${availableTickets.length} disponible${availableTickets.length > 1 ? 's' : ''})`
+                    ? `Sélectionner le ticket (${availableTickets.length} disponible${
+                        availableTickets.length > 1 ? 's' : ''
+                      })`
                     : `Ticket attribué à utiliser (${availableTickets.length} en stock)`}
                 </label>
                 {availableTickets.length === 0 ? (
                   <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
                     {isAdmin
                       ? 'Aucun ticket disponible dans le carnet sélectionné.'
-                      : "Vous n'avez aucun ticket disponible. Veuillez demander un carnet ou des tickets à votre responsable."}
+                      : "Vous n'avez aucun ticket disponible. Veuillez demander un carnet ou des tickets à votre superviseur."}
                   </div>
                 ) : (
                   <select
@@ -819,7 +792,7 @@ export const SaleFormModal: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Plaque d'immatriculation avec auto-remplissage auto en arrière-plan */}
+              {/* Plaque d'immatriculation */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-semibold text-slate-300">
@@ -827,7 +800,7 @@ export const SaleFormModal: React.FC<Props> = ({
                   </label>
                   <span className="text-[11px] text-slate-400 font-mono">Lecteur ANPR par caméra actif</span>
                 </div>
-                
+
                 <div className="flex gap-2">
                   <input
                     id="input-sale-plate"
@@ -842,7 +815,7 @@ export const SaleFormModal: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={startAnprCamera}
-                    className="px-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 flex items-center gap-1.5 transition text-xs font-black shrink-0"
+                    className="px-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 flex items-center gap-1.5 transition text-xs font-black shrink-0 cursor-pointer"
                     title="Reconnaissance automatique de plaque d'immatriculation par caméra (ANPR)"
                   >
                     <Camera className="w-4 h-4 animate-pulse" />
@@ -851,72 +824,24 @@ export const SaleFormModal: React.FC<Props> = ({
                   </button>
                 </div>
 
-                {/* Caméra ANPR en superposition */}
-                {showAnpr && (
-                  <div className="fixed inset-0 z-55 flex flex-col items-center justify-center bg-black/95 p-4 backdrop-blur-md animate-fadeIn">
-                    <div className="relative w-full max-w-md rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-2xl flex flex-col">
-                      <div className="p-3 border-b border-slate-800 bg-slate-900 flex justify-between items-center text-xs">
-                        <span className="font-black text-emerald-400 flex items-center gap-1.5">
-                          <Camera className="w-4 h-4 animate-bounce" />
-                          <span>LECTURE OPTIQUE DE PLAQUE (ANPR)</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={stopAnprCamera}
-                          className="rounded-lg bg-slate-800 p-1 text-slate-400 hover:text-white"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      <div className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
-                        <video
-                          ref={videoRef}
-                          autoPlay
-                          playsInline
-                          muted
-                          className="w-full h-full object-cover"
-                        />
-
-                        {/* Réticule de ciblage plaque d'immatriculation horizontal */}
-                        <div className="absolute inset-x-8 h-16 border-2 border-dashed border-emerald-400 rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(52,211,153,0.25)]">
-                          <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-emerald-400 rounded-tl-md" />
-                          <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-emerald-400 rounded-tr-md" />
-                          <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-emerald-400 rounded-bl-md" />
-                          <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-emerald-400 rounded-br-md" />
-
-                          {/* Faisceau laser jaune horizontal en mouvement */}
-                          <div className="absolute inset-x-0 h-0.5 bg-yellow-400 shadow-[0_0_8px_#facc15] animate-pulse" />
-
-                          {!anprSuccessMsg ? (
-                            <span className="bg-black/60 px-3 py-1 rounded-full text-[10px] font-mono font-bold tracking-widest text-emerald-400 animate-pulse border border-emerald-500/30">
-                              ANALYSE EN COURS...
-                            </span>
-                          ) : (
-                            <span className="bg-emerald-600 px-3 py-1 rounded-full text-[11px] font-mono font-black text-white tracking-widest border border-emerald-400 shadow-lg animate-bounce">
-                              {anprSuccessMsg}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Indication Vridi */}
-                        <div className="absolute bottom-2 inset-x-0 text-center text-[10px] text-slate-400 font-semibold bg-black/40 py-1">
-                          Veuillez cadrer la plaque d'immatriculation du camion
-                        </div>
-                      </div>
-
-                      <div className="p-3 text-center bg-slate-900 border-t border-slate-800 text-[11px] text-slate-400 font-medium">
-                        Algorithme OCR optimisé pour plaques d'immatriculation d'Afrique de l'Ouest (Côte d'Ivoire)
-                      </div>
-                    </div>
-                  </div>
-                )}
+                <AnprCameraScannerModal
+                  isOpen={showAnpr}
+                  onClose={() => setShowAnpr(false)}
+                  onPlateDetected={(detectedPlate) => {
+                    setPlateInput(normalizePlate(detectedPlate));
+                    setShowAnpr(false);
+                  }}
+                  initialPlate={plateInput}
+                />
 
                 {liveDuplicateCheck?.hasActiveTicket && liveDuplicateCheck.activeTicket && (
                   <div className="mt-2.5 rounded-xl border border-amber-500/50 bg-amber-500/15 p-3 text-xs text-amber-200 space-y-1 animate-fadeIn">
                     <div className="flex items-center gap-1.5 font-bold text-amber-300">
                       <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                      <span>⚠️ CETTE IMMATRICULATION POSSÈDE DÉJÀ UN TICKET ACTIF RÉCENT.</span>
+                      <span>
+                        ⚠️ CETTE IMMATRICULATION POSSÈDE DÉJÀ UN TICKET ACTIF (Encore valide{' '}
+                        {liveDuplicateCheck.daysRemaining}j / 14j).
+                      </span>
                     </div>
                   </div>
                 )}
@@ -931,7 +856,7 @@ export const SaleFormModal: React.FC<Props> = ({
                         key={rp}
                         type="button"
                         onClick={() => handleSelectRecentPlate(rp)}
-                        className="rounded-md border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[11px] font-mono text-slate-300 hover:border-emerald-500 hover:text-white"
+                        className="rounded-md border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[11px] font-mono text-slate-300 hover:border-emerald-500 hover:text-white cursor-pointer"
                       >
                         {formatPlateDisplay(rp)}
                       </button>
@@ -943,7 +868,7 @@ export const SaleFormModal: React.FC<Props> = ({
               {/* Nom & Prénoms du Chauffeur */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Nom & Prénoms du Chauffeur
+                  Nom &amp; Prénoms du Chauffeur
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 absolute left-3 top-3.5 text-slate-500" />
@@ -960,7 +885,7 @@ export const SaleFormModal: React.FC<Props> = ({
               {/* Téléphone du Chauffeur avec sélecteur d'indicatif CEDEAO */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Téléphone du Chauffeur & Indicatif CEDEAO
+                  Téléphone du Chauffeur &amp; Indicatif CEDEAO
                 </label>
                 <div className="flex gap-2">
                   <select
@@ -987,7 +912,7 @@ export const SaleFormModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* Mode de Paiement (Espèces vs Mobile Money) */}
+              {/* Mode de Paiement */}
               <div className="space-y-3">
                 <label className="block text-xs font-semibold text-slate-300">
                   Mode d'Encaissement du Ticket <span className="text-rose-400">*</span>
@@ -996,196 +921,159 @@ export const SaleFormModal: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('ESPECES')}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
+                    className={`flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
                       paymentMethod === 'ESPECES'
-                        ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.15)]'
-                        : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                        ? 'border-emerald-500 bg-emerald-500/20 text-white shadow-md'
+                        : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800'
                     }`}
                   >
-                    <Coins className="w-3.5 h-3.5" />
+                    <Coins className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>Espèces</span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('MOBILE_MONEY')}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
+                    className={`flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
                       paymentMethod === 'MOBILE_MONEY'
-                        ? 'border-blue-500 bg-blue-500/10 text-blue-400 shadow-[0_0_12px_rgba(59,130,246,0.15)]'
-                        : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                        ? 'border-blue-500 bg-blue-500/20 text-white shadow-md'
+                        : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800'
                     }`}
                   >
-                    <Smartphone className="w-3.5 h-3.5" />
+                    <Smartphone className="w-4 h-4 text-blue-400 shrink-0" />
                     <span>Mobile Money</span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('BON_ABONNEMENT')}
-                    className={`flex items-center justify-center gap-1.5 rounded-xl py-3 px-2 border text-[11px] font-bold transition-all ${
+                    className={`flex flex-col items-center justify-center gap-1 py-2.5 px-2 rounded-xl border text-[11px] font-bold transition cursor-pointer ${
                       paymentMethod === 'BON_ABONNEMENT'
-                        ? 'border-amber-500 bg-amber-500/10 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
-                        : 'border-slate-800 bg-slate-800/40 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                        ? 'border-amber-500 bg-amber-500/20 text-white shadow-md'
+                        : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800'
                     }`}
                   >
-                    <CreditCard className="w-3.5 h-3.5" />
+                    <CreditCard className="w-4 h-4 text-amber-400 shrink-0" />
                     <span>Bon Flotte</span>
                   </button>
                 </div>
 
+                {paymentMethod === 'MOBILE_MONEY' && (
+                  <div className="rounded-xl border border-blue-500/30 bg-slate-950 p-3.5 space-y-3 animate-fadeIn">
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setMomoProvider('WAVE')}
+                        className={`py-2 px-1 rounded-lg border text-[10px] font-black transition cursor-pointer ${
+                          momoProvider === 'WAVE'
+                            ? 'bg-sky-500 border-sky-400 text-white shadow-md'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🐧 WAVE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMomoProvider('ORANGE')}
+                        className={`py-2 px-1 rounded-lg border text-[10px] font-black transition cursor-pointer ${
+                          momoProvider === 'ORANGE'
+                            ? 'bg-orange-500 border-orange-400 text-white shadow-md'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🟠 ORANGE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMomoProvider('MOOV')}
+                        className={`py-2 px-1 rounded-lg border text-[10px] font-black transition cursor-pointer ${
+                          momoProvider === 'MOOV'
+                            ? 'bg-blue-600 border-blue-400 text-white shadow-md'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🔵 MOOV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMomoProvider('MTN')}
+                        className={`py-2 px-1 rounded-lg border text-[10px] font-black transition cursor-pointer ${
+                          momoProvider === 'MTN'
+                            ? 'bg-yellow-500 border-yellow-400 text-slate-950 shadow-md'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🟡 MTN
+                      </button>
+                    </div>
+
+                    {momoQrUrl && (
+                      <div className="flex items-center gap-3 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+                        <img
+                          src={momoQrUrl}
+                          alt="QR Marchand"
+                          className="w-16 h-16 rounded-lg bg-white p-1 shrink-0"
+                        />
+                        <div className="text-[11px] text-slate-300 space-y-0.5">
+                          <div className="font-bold text-white">QR Marchand U.J.P.A.S. ({momoProvider})</div>
+                          <p className="text-[10px] text-slate-400">
+                            Montant : <strong className="text-emerald-400">5 000 FCFA</strong>
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Référence SMS / ID Transaction {momoProvider} <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={paymentReference}
+                        onChange={(e) => setPaymentReference(e.target.value.toUpperCase())}
+                        placeholder="Ex: TXN-92837465"
+                        className="w-full rounded-xl border border-slate-700 bg-slate-900 py-2 px-3 text-xs font-mono text-white uppercase focus:border-blue-500 focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {paymentMethod === 'BON_ABONNEMENT' && (
-                  <div className="rounded-2xl border border-amber-500/20 bg-slate-950/80 p-4 space-y-2 mt-3 animate-fadeIn">
-                    <label className="block text-[11px] font-bold text-amber-400 uppercase tracking-wider">
-                      Référence Compte Flotte / Bon
+                  <div className="rounded-xl border border-amber-500/30 bg-slate-950 p-3.5 space-y-2 animate-fadeIn">
+                    <label className="block text-[11px] font-bold text-amber-300">
+                      N° du Bon de Stationnement / Entreprise Partenaire <span className="text-rose-400">*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={paymentReference}
-                      onChange={(e) => setPaymentReference(e.target.value)}
-                      placeholder="EX: FLEET-BOLLORE-2026"
-                      className="w-full rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs font-semibold text-slate-100 outline-none focus:border-amber-500 transition-all uppercase"
+                      onChange={(e) => setPaymentReference(e.target.value.toUpperCase())}
+                      placeholder="Ex: BON-UJPAS-2026-089"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 py-2 px-3 text-xs font-mono text-white uppercase focus:border-amber-500 focus:outline-hidden"
                     />
-                    <p className="text-[10px] text-slate-500">
-                      Veuillez renseigner le code d'abonnement ou le numéro de bon validé avec le Trésorier Général.
-                    </p>
                   </div>
                 )}
-
-                {paymentMethod === 'MOBILE_MONEY' && (
-                  <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-4 animate-fadeIn">
-                    {/* Opérateurs */}
-                    <div className="space-y-1.5">
-                      <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                        Sélectionner l'Opérateur MoMo
-                      </label>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setMomoProvider('WAVE')}
-                          className={`rounded-xl py-2 px-1 text-center text-xs font-black transition-all border ${
-                            momoProvider === 'WAVE'
-                              ? 'border-sky-400 bg-sky-500/20 text-sky-400'
-                              : 'border-slate-800 bg-slate-900/60 text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          WAVE
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMomoProvider('ORANGE')}
-                          className={`rounded-xl py-2 px-1 text-center text-xs font-black transition-all border ${
-                            momoProvider === 'ORANGE'
-                              ? 'border-orange-500 bg-orange-600/20 text-orange-400'
-                              : 'border-slate-800 bg-slate-900/60 text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          ORANGE
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMomoProvider('MTN')}
-                          className={`rounded-xl py-2 px-1 text-center text-xs font-black transition-all border ${
-                            momoProvider === 'MTN'
-                              ? 'border-yellow-500 bg-yellow-600/20 text-yellow-400'
-                              : 'border-slate-800 bg-slate-900/60 text-slate-500 hover:text-slate-300'
-                          }`}
-                        >
-                          MTN MOMO
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* QR Code et Instructions */}
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center border-t border-b border-slate-800/60 py-3.5">
-                      <div className="sm:col-span-4 flex justify-center">
-                        {momoQrUrl ? (
-                          <div className={`p-1.5 rounded-xl bg-white border-2 ${
-                            momoProvider === 'WAVE' ? 'border-sky-400' : momoProvider === 'ORANGE' ? 'border-orange-500' : 'border-yellow-500'
-                          }`}>
-                            <img src={momoQrUrl} alt="QR Code de paiement" className="w-24 h-24 select-none object-contain" />
-                          </div>
-                        ) : (
-                          <div className="w-24 h-24 flex items-center justify-center rounded-xl bg-slate-900 border border-slate-800">
-                            <span className="text-[10px] text-slate-500 text-center">Génération...</span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="sm:col-span-8 space-y-1.5 text-xs">
-                        <div className="flex items-center gap-1">
-                          <QrCode className={`w-3.5 h-3.5 ${
-                            momoProvider === 'WAVE' ? 'text-sky-400' : momoProvider === 'ORANGE' ? 'text-orange-400' : 'text-yellow-400'
-                          }`} />
-                          <span className="font-bold text-white uppercase tracking-wide">Paiement Mobile Assisté</span>
-                        </div>
-                        {momoProvider === 'WAVE' && (
-                          <p className="text-slate-400 leading-relaxed text-[11px]">
-                            Présentez le code QR au chauffeur. Le chauffeur scanne avec son application <strong className="text-sky-400">Wave</strong> pour confirmer le transfert de <strong className="text-white">5 000 FCFA</strong>.
-                          </p>
-                        )}
-                        {momoProvider === 'ORANGE' && (
-                          <p className="text-slate-400 leading-relaxed text-[11px]">
-                            Le chauffeur peut composer <strong className="text-orange-400">*144*4*2*882911*5000#</strong> ou scanner le code QR Orange Money depuis son téléphone.
-                          </p>
-                        )}
-                        {momoProvider === 'MTN' && (
-                          <p className="text-slate-400 leading-relaxed text-[11px]">
-                            Le chauffeur scanne le QR Code MTN MoMo Merchant, ou compose le menu de transfert de <strong className="text-yellow-400">5 000 FCFA</strong> vers le compte marchand UJPAS.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Référence de Transaction (Exigée) */}
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                          Référence de Transaction / N° Payeur <span className="text-rose-400">*</span>
-                        </label>
-                        <span className="text-[9px] text-rose-400 font-bold uppercase">Strictement requis</span>
-                      </div>
-                      <div className="relative">
-                        <Wallet className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                        <input
-                          type="text"
-                          required={paymentMethod === 'MOBILE_MONEY'}
-                          value={paymentReference}
-                          onChange={(e) => setPaymentReference(e.target.value)}
-                          placeholder="ex: REF98102, W-9281, ou n° de téléphone"
-                          className="w-full rounded-xl border border-slate-700 bg-slate-900 py-2.5 pl-9 pr-3 text-xs font-mono font-bold text-white focus:border-blue-500 focus:outline-hidden uppercase"
-                        />
-                      </div>
-                      <p className="text-[10px] text-slate-500 mt-1">
-                        Permet de réconcilier ce ticket de 5 000 FCFA avec les relevés mobiles {momoProvider}.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-1.5 text-xs text-slate-400">
-                <div className="flex items-center gap-2 text-slate-300">
-                  <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>GPS automatique lors de la validation</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-300">
-                  <Clock className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Mode 100% hors-ligne avec synchronisation IndexedDB</span>
-                </div>
               </div>
             </div>
 
-            <div className="flex gap-2 pt-4 border-t border-slate-800">
+            {/* Boutons de soumission */}
+            <div className="flex gap-2 pt-4 border-t border-slate-800 mt-4">
               <button
                 type="button"
                 onClick={handleResetAndClose}
-                className="flex-1 rounded-xl bg-slate-800 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                className="rounded-xl bg-slate-800 px-4 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
               >
                 Annuler
               </button>
               <button
                 type="submit"
                 disabled={loading || availableTickets.length === 0 || !plateInput.trim()}
-                className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-bold text-white hover:bg-emerald-500 transition shadow-lg shadow-emerald-950 disabled:opacity-50"
+                className="flex-1 rounded-xl bg-emerald-600 py-3 text-xs font-black uppercase tracking-wider text-white hover:bg-emerald-500 transition shadow-lg shadow-emerald-900/30 disabled:opacity-50 cursor-pointer"
               >
-                {loading ? 'Validation...' : `Encaisser ${formatFCFA(TICKET_PRICE_FCFA)}`}
+                {loading
+                  ? 'Validation en cours...'
+                  : `Valider & Encaisser (${formatFCFA(TICKET_PRICE_FCFA)})`}
               </button>
             </div>
           </form>

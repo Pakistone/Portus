@@ -1,6 +1,11 @@
 {
-  "name": "PORTUS UJSRV App",
-  "description": "Système de gestion de tickets, surveillance camion, contrôles et remises financières — Union des Jeunes du Port pour l'Assistance et la Sécurité (UJPAS)",
-  "requestFramePermissions": ["camera", "geolocation"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "PORTUS — U.J.P.A.S.",
+  "description": "Système officiel de gestion de tickets, surveillance poids lourds, contrôles QR et remises financières — Union des Jeunes du Port pour l'Assistance et la Sécurité (U.J.P.A.S. — Zone Portuaire & Industrielle d'Abidjan)",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

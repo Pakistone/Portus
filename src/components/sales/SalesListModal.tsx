@@ -1,11 +1,23 @@
 import React, { useState } from 'react';
-import { X, Search, FileSpreadsheet, MapPin, CheckCircle, Clock, Plus, ShoppingCart, Printer, MessageSquare } from 'lucide-react';
+import {
+  X,
+  Search,
+  FileSpreadsheet,
+  MapPin,
+  CheckCircle,
+  Clock,
+  Plus,
+  Printer,
+  MessageSquare,
+} from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { exportSalesToExcel } from '../../utils/excelExport';
 import { formatFCFA, formatDateTime, formatPlateDisplay } from '../../utils/normalization';
+import { getTicketValidityStatus } from '../../utils/expiration';
 import { generateReceiptImageBlob } from '../../utils/receiptImageGenerator';
 import { generateWhatsAppReceiptUrl } from '../../utils/cedeao';
+import type { Sale } from '../../types';
 
 interface Props {
   isOpen: boolean;
@@ -19,10 +31,12 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
   const [searchTerm, setSearchTerm] = useState('');
   const [printingTicketId, setPrintingTicketId] = useState<string | null>(null);
 
-  const handlePrintReceipt = async (sale: any) => {
+  const handlePrintReceipt = async (sale: Sale) => {
     setPrintingTicketId(sale.id);
     try {
-      const ticketObj = tickets.find((t) => t.id === sale.ticketId || t.ticketNumber === sale.ticketNumber);
+      const ticketObj = tickets.find(
+        (t) => t.id === sale.ticketId || t.ticketNumber === sale.ticketNumber
+      );
       const carnetNumber = ticketObj ? ticketObj.carnetNumber : undefined;
 
       const blob = await generateReceiptImageBlob({
@@ -31,10 +45,13 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
         amount: sale.price,
         agentName: sale.agentName,
         dateStr: formatDateTime(sale.soldAt),
+        soldAtIso: sale.soldAt,
+        expiresAtStr: sale.expiresAt ? formatDateTime(sale.expiresAt) : undefined,
+        paymentMethod: sale.paymentMethod || 'ESPECES',
         driverName: sale.driverName || 'Chauffeur non spécifié',
         driverPhone: sale.driverPhone || 'Non renseigné',
-        carnetNumber: carnetNumber,
-        qrPayload: sale.ticketNumber,
+        carnetNumber,
+        qrPayload: ticketObj?.qrPayload || sale.ticketNumber,
       });
 
       const url = URL.createObjectURL(blob);
@@ -46,15 +63,15 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
       iframe.style.height = '0';
       iframe.style.border = '0';
       iframe.name = 'print-iframe';
-      
+
       document.body.appendChild(iframe);
-      
+
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       if (doc) {
         doc.write(`
           <html>
             <head>
-              <title>Impression Reçu PORTUS - ${sale.ticketNumber}</title>
+              <title>Impression Reçu PORTUS U.J.P.A.S. - ${sale.ticketNumber}</title>
               <style>
                 body { margin: 0; padding: 10px; display: flex; justify-content: center; align-items: flex-start; background-color: white; }
                 img { max-width: 100%; height: auto; object-fit: contain; }
@@ -84,7 +101,9 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
       }
 
       setTimeout(() => {
-        document.body.removeChild(iframe);
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
         URL.revokeObjectURL(url);
       }, 10000);
     } catch (err) {
@@ -96,12 +115,9 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
 
   if (!isOpen) return null;
 
-  // Filtrer selon rôle
   const visibleSales = sales.filter((s) => {
     if (currentUser?.role === 'AGENT') {
       if (s.agentId !== currentUser.id) return false;
-    } else if (currentUser?.role === 'RESPONSABLE') {
-      if (s.sectorId && currentUser.sectorId && s.sectorId !== currentUser.sectorId) return false;
     }
 
     if (searchTerm) {
@@ -114,22 +130,97 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
     return true;
   });
 
+  const renderPaymentBadge = (s: Sale) => {
+    const method = String(s.paymentMethod || 'ESPECES');
+    if (method === 'ESPECES' || method === 'CASH') {
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+          💵 Espèces
+        </span>
+      );
+    }
+    if (method === 'WAVE') {
+      return (
+        <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-sky-500/10 text-sky-400 border-sky-500/20">
+          <span className="font-black text-[9px] uppercase tracking-wider">WAVE</span>
+          {s.paymentReference && (
+            <span className="font-mono text-[9px] text-slate-400">{s.paymentReference}</span>
+          )}
+        </span>
+      );
+    }
+    if (method === 'ORANGE_MONEY') {
+      return (
+        <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-orange-500/10 text-orange-400 border-orange-500/20">
+          <span className="font-black text-[9px] uppercase tracking-wider">ORANGE MONEY</span>
+          {s.paymentReference && (
+            <span className="font-mono text-[9px] text-slate-400">{s.paymentReference}</span>
+          )}
+        </span>
+      );
+    }
+    if (method === 'MOOV') {
+      return (
+        <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+          <span className="font-black text-[9px] uppercase tracking-wider">MOOV MONEY</span>
+          {s.paymentReference && (
+            <span className="font-mono text-[9px] text-slate-400">{s.paymentReference}</span>
+          )}
+        </span>
+      );
+    }
+    if (method === 'MTN_MOMO') {
+      return (
+        <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-yellow-500/10 text-yellow-400 border-yellow-500/20">
+          <span className="font-black text-[9px] uppercase tracking-wider">MTN MOMO</span>
+          {s.paymentReference && (
+            <span className="font-mono text-[9px] text-slate-400">{s.paymentReference}</span>
+          )}
+        </span>
+      );
+    }
+    if (method === 'BON_ABONNEMENT' || method === 'VOUCHER') {
+      return (
+        <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-purple-500/10 text-purple-400 border-purple-500/20">
+          <span className="font-black text-[9px] uppercase tracking-wider">BON FLOTTE</span>
+          {s.paymentReference && (
+            <span className="font-mono text-[9px] text-slate-400">{s.paymentReference}</span>
+          )}
+        </span>
+      );
+    }
+
+    const refStr = s.paymentReference || '';
+    const dashIdx = refStr.indexOf('-');
+    const provider = dashIdx !== -1 ? refStr.slice(0, dashIdx) : method;
+    const ref = dashIdx !== -1 ? refStr.slice(dashIdx + 1) : refStr;
+
+    return (
+      <span className="inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold bg-blue-500/10 text-blue-400 border-blue-500/20">
+        <span className="font-black text-[9px] uppercase tracking-wider">{provider}</span>
+        {ref && <span className="font-mono text-[9px] text-slate-400">{ref}</span>}
+      </span>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-xs">
-      <div className="w-full max-w-5xl rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl text-slate-100 max-h-[90vh] flex flex-col">
+      <div className="w-full max-w-6xl rounded-2xl border border-slate-800 bg-slate-900 p-5 shadow-2xl text-slate-100 max-h-[90vh] flex flex-col">
         {/* En-tête */}
         <div className="flex items-center justify-between border-b border-slate-800 pb-3">
           <div>
-            <h3 className="text-base font-bold text-white">Historique Détaillé des Ventes</h3>
+            <h3 className="text-base font-bold text-white">
+              Historique Détaillé des Ventes U.J.P.A.S.
+            </h3>
             <p className="text-xs text-slate-400">
-              {visibleSales.length} vente(s) enregistrée(s)
+              {visibleSales.length} vente(s) enregistrée(s) • Validité réglementaire de 14 jours
             </p>
           </div>
           <div className="flex items-center gap-2">
             {onOpenNewSale && (
               <button
                 onClick={onOpenNewSale}
-                className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-md hover:bg-emerald-500 transition"
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-md hover:bg-emerald-500 transition cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 <span>Nouvelle Vente</span>
@@ -137,13 +228,16 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
             )}
             <button
               onClick={() => exportSalesToExcel(visibleSales)}
-              className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600/30 transition"
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600/20 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600/30 transition cursor-pointer"
               title="Exporter vers Excel"
             >
               <FileSpreadsheet className="w-4 h-4" />
               <span className="hidden sm:inline">Export Excel</span>
             </button>
-            <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:text-white">
+            <button
+              onClick={onClose}
+              className="rounded-lg p-1 text-slate-400 hover:text-white cursor-pointer"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -169,7 +263,7 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                 <th className="py-2.5 px-3">Ticket</th>
                 <th className="py-2.5 px-3">Immatriculation</th>
                 <th className="py-2.5 px-3">Agent</th>
-                <th className="py-2.5 px-3">Date Vente (Originale)</th>
+                <th className="py-2.5 px-3">Date Vente &amp; Validité (14j)</th>
                 <th className="py-2.5 px-3">Téléphone</th>
                 <th className="py-2.5 px-3">GPS</th>
                 <th className="py-2.5 px-3">Mode</th>
@@ -186,111 +280,107 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
                   </td>
                 </tr>
               ) : (
-                visibleSales.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-900/60 transition">
-                    <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
-                      {s.ticketNumber}
-                    </td>
-                    <td className="py-2.5 px-3 font-bold text-emerald-400 whitespace-nowrap">
-                      {formatPlateDisplay(s.plateNumber)}
-                    </td>
-                    <td className="py-2.5 px-3 font-sans text-slate-300 whitespace-nowrap">
-                      {s.agentName}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
-                      {formatDateTime(s.soldAt)}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
-                      {s.driverPhone || '—'}
-                    </td>
-                    <td className="py-2.5 px-3 font-sans whitespace-nowrap">
-                      {s.gpsStatus === 'AVAILABLE' ? (
-                        <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                          <MapPin className="w-3 h-3 text-emerald-400" />
-                          <span>{s.gpsLatitude?.toFixed(3)}, {s.gpsLongitude?.toFixed(3)}</span>
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-600">Non capturé</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 font-sans whitespace-nowrap">
-                      {s.paymentMethod === 'MOBILE_MONEY' ? (
-                        (() => {
-                          const refStr = s.paymentReference || '';
-                          const dashIdx = refStr.indexOf('-');
-                          const provider = dashIdx !== -1 ? refStr.slice(0, dashIdx) : 'MOMO';
-                          const ref = dashIdx !== -1 ? refStr.slice(dashIdx + 1) : refStr;
-                          
-                          let bg = 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-                          if (provider === 'WAVE') bg = 'bg-sky-500/10 text-sky-400 border-sky-500/20';
-                          else if (provider === 'ORANGE') bg = 'bg-orange-500/10 text-orange-400 border-orange-500/20';
-                          else if (provider === 'MTN') bg = 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
-                          
-                          return (
-                            <span className={`inline-flex flex-col rounded-lg border px-2 py-0.5 text-[10px] font-bold ${bg}`}>
-                              <span className="font-black text-[9px] uppercase tracking-wider">{provider}</span>
-                              {ref && <span className="font-mono text-[9px] text-slate-400">{ref}</span>}
-                            </span>
-                          );
-                        })()
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                          💵 Espèces
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 font-sans whitespace-nowrap">
-                      {s.syncStatus === 'SYNCED' ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                          <CheckCircle className="w-3 h-3" /> Synchronisé
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
-                          <Clock className="w-3 h-3" /> En attente
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-bold text-white whitespace-nowrap">
-                      {formatFCFA(s.price)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => handlePrintReceipt(s)}
-                          disabled={!!printingTicketId}
-                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
-                          title="Imprimer le ticket"
-                        >
-                          <Printer className="w-3.5 h-3.5 text-emerald-400" />
-                          <span className="text-[10px] font-bold">Imprimer</span>
-                        </button>
-
-                        <a
-                          href={generateWhatsAppReceiptUrl({
-                            dialCode: '',
-                            phoneNumber: s.driverPhone || '',
-                            ticketNumber: s.ticketNumber,
-                            plateNumber: s.plateNumber,
-                            amount: s.price,
-                            agentName: s.agentName,
-                            dateStr: formatDateTime(s.soldAt),
-                          })}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={`p-1.5 rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
-                            s.driverPhone 
-                              ? 'bg-emerald-600/20 border-emerald-500/30 hover:bg-emerald-600/40 text-emerald-300' 
-                              : 'bg-slate-800/40 border-slate-700/30 hover:bg-slate-800 text-slate-500 hover:text-slate-400'
+                visibleSales.map((s) => {
+                  const validity = getTicketValidityStatus(s.soldAt, s.expiresAt);
+                  return (
+                    <tr key={s.id} className="hover:bg-slate-900/60 transition">
+                      <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                        {s.ticketNumber}
+                      </td>
+                      <td className="py-2.5 px-3 font-bold text-emerald-400 whitespace-nowrap">
+                        {formatPlateDisplay(s.plateNumber)}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans text-slate-300 whitespace-nowrap">
+                        {s.agentName}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
+                        <div>{formatDateTime(s.soldAt)}</div>
+                        <div
+                          className={`text-[10px] font-sans font-semibold ${
+                            validity.isExpired ? 'text-rose-400' : 'text-emerald-400'
                           }`}
-                          title={s.driverPhone ? "Partager le ticket via WhatsApp" : "Partager sans numéro prédéfini"}
                         >
-                          <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
-                          <span className="text-[10px] font-bold">WhatsApp</span>
-                        </a>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          {validity.isExpired
+                            ? 'Expiré (> 14j)'
+                            : `Valide (${validity.daysRemaining}j restants)`}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-400 whitespace-nowrap">
+                        {s.driverPhone || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans whitespace-nowrap">
+                        {s.gpsStatus === 'AVAILABLE' ? (
+                          <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                            <MapPin className="w-3 h-3 text-emerald-400" />
+                            <span>
+                              {s.gpsLatitude?.toFixed(3)}, {s.gpsLongitude?.toFixed(3)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-600">Non capturé</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans whitespace-nowrap">
+                        {renderPaymentBadge(s)}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans whitespace-nowrap">
+                        {s.syncStatus === 'SYNCED' ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                            <CheckCircle className="w-3 h-3" /> Synchronisé
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                            <Clock className="w-3 h-3" /> En attente
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-bold text-white whitespace-nowrap">
+                        {formatFCFA(s.price)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => handlePrintReceipt(s)}
+                            disabled={!!printingTicketId}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50 inline-flex items-center gap-1"
+                            title="Imprimer le ticket"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-[10px] font-bold">Imprimer</span>
+                          </button>
+
+                          <a
+                            href={generateWhatsAppReceiptUrl({
+                              dialCode: '',
+                              phoneNumber: s.driverPhone || '',
+                              ticketNumber: s.ticketNumber,
+                              plateNumber: s.plateNumber,
+                              amount: s.price,
+                              agentName: s.agentName,
+                              dateStr: formatDateTime(s.soldAt),
+                              soldAtIso: s.soldAt,
+                            })}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`p-1.5 rounded-lg border transition inline-flex items-center gap-1 cursor-pointer ${
+                              s.driverPhone
+                                ? 'bg-emerald-600/20 border-emerald-500/30 hover:bg-emerald-600/40 text-emerald-300'
+                                : 'bg-slate-800/40 border-slate-700/30 hover:bg-slate-800 text-slate-500 hover:text-slate-400'
+                            }`}
+                            title={
+                              s.driverPhone
+                                ? 'Partager le ticket via WhatsApp'
+                                : 'Partager sans numéro prédéfini'
+                            }
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-500" />
+                            <span className="text-[10px] font-bold">WhatsApp</span>
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -299,7 +389,7 @@ export const SalesListModal: React.FC<Props> = ({ isOpen, onClose, onOpenNewSale
         <div className="flex justify-end pt-3 border-t border-slate-800">
           <button
             onClick={onClose}
-            className="rounded-xl bg-slate-800 px-5 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+            className="rounded-xl bg-slate-800 px-5 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
           >
             Fermer
           </button>

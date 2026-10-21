@@ -1,17 +1,112 @@
 @import "tailwindcss";
 
+/* Configuration d'impression haute fidélité pour PORTUS — U.J.P.A.S. */
 @page {
   size: A4 landscape;
-  margin: 3mm;
+  margin: 0mm;
 }
 
 @media print {
-  html, body {
+  html,
+  body {
     background: #ffffff !important;
-    color: #000000 !important;
     margin: 0 !important;
     padding: 0 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
+
+  /* Préservation impérative des couleurs dynamiques, logos, tampons et filigranes */
+  .ticket-print-card,
+  .ticket-print-item,
+  .print-sheet-grid,
+  .ticket-color-element,
+  [data-print-preserve] {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Éléments d'interface utilisateur masqués à l'impression */
+  .no-print,
+  button,
+  header,
+  nav,
+  aside {
+    display: none !important;
+  }
+}
+
+/* Grille d'Impression Chirurgicale 3x2 sur A4 Paysage (297 mm x 210 mm) */
+/* 6 tickets par page : 3 colonnes de 100mm x 2 lignes de 80mm */
+.print-sheet-grid {
+  width: 297mm;
+  height: 210mm;
+  max-width: 297mm;
+  max-height: 210mm;
+  display: grid;
+  grid-template-columns: repeat(3, 100mm);
+  grid-template-rows: repeat(2, 80mm);
+  justify-content: center;
+  align-content: center;
+  margin: 0 auto;
+  box-sizing: border-box;
+  overflow: hidden;
+  page-break-after: always;
+  break-after: page;
+  background: #ffffff;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+}
+
+/* Ticket individuel aux dimensions physiques invariables : 10 cm x 8 cm */
+.ticket-print-item {
+  width: 100mm !important;
+  height: 80mm !important;
+  max-width: 100mm !important;
+  max-height: 80mm !important;
+  box-sizing: border-box;
+  overflow: hidden;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  position: relative;
+  border: 0.3mm dashed #94a3b8;
+  background: #ffffff;
+  -webkit-print-color-adjust: exact !important;
+  print-color-adjust: exact !important;
+}
+
+/* Repères de découpe manuelle et massicotage */
+.cut-mark-corner {
+  position: absolute;
+  width: 4mm;
+  height: 4mm;
+  border-color: #64748b;
+  border-style: solid;
+  pointer-events: none;
+}
+
+.cut-mark-tl {
+  top: 0;
+  left: 0;
+  border-width: 0.3mm 0 0 0.3mm;
+}
+
+.cut-mark-tr {
+  top: 0;
+  right: 0;
+  border-width: 0.3mm 0.3mm 0 0;
+}
+
+.cut-mark-bl {
+  bottom: 0;
+  left: 0;
+  border-width: 0 0 0.3mm 0.3mm;
+}
+
+.cut-mark-br {
+  bottom: 0;
+  right: 0;
+  border-width: 0 0.3mm 0.3mm 0;
 }

@@ -3,28 +3,23 @@ import {
   X,
   Layers,
   Search,
-  Filter,
   Printer,
   Eye,
   Ban,
   UserCheck,
   History,
-  Calendar,
   CheckCircle2,
   AlertTriangle,
   Plus,
   ArrowLeft,
-  FileSpreadsheet,
   QrCode,
-  ShieldCheck,
-  Clock,
-  User,
   CloudUpload,
   Lock,
+  Trash2,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import { generateCarnetPrintPDF, printPdfDocument } from '../../utils/pdfGenerator';
+import { generateCarnetPrintPDF } from '../../utils/pdfGenerator';
 import { formatDateTime, formatPlateDisplay } from '../../utils/normalization';
 import { CarnetGeneratorModal } from './CarnetGeneratorModal';
 import { CarnetPrintModal } from './CarnetPrintModal';
@@ -47,8 +42,8 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
     assignCarnetToResponsable,
     cancelCarnet,
     deleteCarnet,
+    deleteCarnetPermanently,
     cancelTicket,
-    updateTicketStatus,
     syncAllToSupabase,
     refreshData,
   } = useData();
@@ -68,9 +63,11 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [assignModalCarnet, setAssignModalCarnet] = useState<Carnet | null>(null);
   const [selectedResponsableId, setSelectedResponsableId] = useState('');
 
-  // Modals d'annulation avec confirmation obligatoire
+  // Modals d'annulation et suppression avec confirmation obligatoire
   const [cancelModalCarnet, setCancelModalCarnet] = useState<Carnet | null>(null);
   const [cancelCarnetReason, setCancelCarnetReason] = useState('');
+
+  const [deleteConfirmCarnet, setDeleteConfirmCarnet] = useState<Carnet | null>(null);
 
   const [cancelModalTicket, setCancelModalTicket] = useState<Ticket | null>(null);
   const [cancelTicketReason, setCancelTicketReason] = useState('');
@@ -82,7 +79,11 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [downloadUrl, setDownloadUrl] = useState<{ url: string; filename: string } | null>(null);
-  const [printModalData, setPrintModalData] = useState<{ carnet: Carnet; url: string; filename: string } | null>(null);
+  const [printModalData, setPrintModalData] = useState<{
+    carnet: Carnet;
+    url: string;
+    filename: string;
+  } | null>(null);
 
   const responsables = users.filter((u) => u.role === 'RESPONSABLE' && u.isActive);
 
@@ -92,7 +93,6 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       if (statusFilter !== 'ALL') {
         if (c.status !== statusFilter) return false;
       } else {
-        // Masquer les carnets annulés par défaut dans la liste générale "Tous les statuts"
         if (c.status === 'CANCELLED') return false;
       }
       if (searchTerm.trim()) {
@@ -123,38 +123,48 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
         log.action === 'CARNET_CANCELLED' ||
         log.targetEntity === 'Carnet';
       if (selectedCarnet) {
+        const detailsStr =
+          typeof log.details === 'string' ? log.details : JSON.stringify(log.details ?? '');
         return (
           isCarnetAction &&
           (log.targetId === selectedCarnet.id ||
-            (log.details || '').includes(selectedCarnet.carnetNumber))
+            detailsStr.includes(selectedCarnet.carnetNumber))
         );
       }
       return isCarnetAction;
     });
   }, [auditLogs, selectedCarnet]);
 
-  // Handler d'impression PDF A4 Paysage (9 tickets/page) (Réservé à l'administrateur pour éviter toute falsification)
+  // Handler d'impression PDF A4 Paysage (6 tickets/page, Grille 3×2)
   const handlePrintPDF = async (c: Carnet) => {
     if (currentUser?.role !== 'ADMINISTRATEUR') {
-      setActionError("Accès refusé : Seul l’administrateur général de l’UJPAS est autorisé à générer, visualiser ou imprimer des tickets d’entrée officiels.");
+      setActionError(
+        "Accès refusé : Seul l’administrateur général de l’U.J.P.A.S. est autorisé à générer, visualiser ou imprimer des tickets d’entrée officiels."
+      );
       return;
     }
     setActionLoading(true);
     setActionError(null);
     setDownloadUrl(null);
     try {
-      const cTickets = tickets.filter((t) => t.carnetId === c.id || t.carnetNumber === c.carnetNumber);
-      const filename = `PORTUS_UJPAS_CARNET_${c.carnetNumber}_${c.size || 9}TICKETS.pdf`;
+      const cTickets = tickets.filter(
+        (t) => t.carnetId === c.id || t.carnetNumber === c.carnetNumber
+      );
+      const filename = `PORTUS_UJPAS_CARNET_${c.carnetNumber}_${c.size || 6}TICKETS.pdf`;
       const url = await generateCarnetPrintPDF(c, cTickets);
       if (url) {
         setDownloadUrl({ url, filename });
         setPrintModalData({ carnet: c, url, filename });
       }
-      setActionSuccess(`Le PDF du carnet ${c.carnetNumber} a été généré et téléchargé avec succès.`);
+      setActionSuccess(
+        `Le PDF du carnet ${c.carnetNumber} a été généré et téléchargé avec succès.`
+      );
       setTimeout(() => setActionSuccess(null), 6000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Erreur lors de l’impression du carnet:', err);
-      setActionError(err?.message || 'Erreur lors de la génération du PDF.');
+      setActionError(
+        err instanceof Error ? err.message : 'Erreur lors de la génération du PDF.'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -173,8 +183,10 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       setAssignModalCarnet(null);
       setSelectedResponsableId('');
       setTimeout(() => setActionSuccess(null), 3000);
-    } catch (err: any) {
-      setActionError(err?.message || 'Erreur lors de l’attribution du carnet.');
+    } catch (err: unknown) {
+      setActionError(
+        err instanceof Error ? err.message : 'Erreur lors de l’attribution du carnet.'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -193,8 +205,43 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       setCancelModalCarnet(null);
       setCancelCarnetReason('');
       setTimeout(() => setActionSuccess(null), 3000);
-    } catch (err: any) {
-      setActionError(err?.message || 'Erreur lors de l’annulation du carnet.');
+    } catch (err: unknown) {
+      setActionError(
+        err instanceof Error ? err.message : 'Erreur lors de l’annulation du carnet.'
+      );
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Suppression définitive d'un carnet avec confirmation in-app
+  const handlePermanentDeleteSubmit = async () => {
+    if (!deleteConfirmCarnet) return;
+    setActionLoading(true);
+    setActionSuccess(null);
+    setActionError(null);
+    try {
+      const carnetNum = deleteConfirmCarnet.carnetNumber;
+      const carnetId = deleteConfirmCarnet.id;
+      if (deleteCarnetPermanently) {
+        await deleteCarnetPermanently(carnetId);
+      } else {
+        await deleteCarnet(carnetId);
+      }
+      if (selectedCarnet?.id === carnetId) {
+        setSelectedCarnet(null);
+      }
+      setDeleteConfirmCarnet(null);
+      const msg = `Le carnet ${carnetNum} et tous ses tickets associés ont été définitivement supprimés de la base locale et Supabase.`;
+      setActionSuccess(msg);
+      showToast('success', 'Carnet supprimé définitivement', msg, 6000);
+      setTimeout(() => setActionSuccess(null), 8000);
+    } catch (err: unknown) {
+      const errMsg =
+        err instanceof Error ? err.message : 'Erreur lors de la suppression du carnet.';
+      setActionError(errMsg);
+      showToast('error', 'Échec de suppression', errMsg, 6000);
+      setTimeout(() => setActionError(null), 8000);
     } finally {
       setActionLoading(false);
     }
@@ -213,8 +260,10 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       setCancelModalTicket(null);
       setCancelTicketReason('');
       setTimeout(() => setActionSuccess(null), 3000);
-    } catch (err: any) {
-      setActionError(err?.message || 'Erreur lors de l’annulation du ticket.');
+    } catch (err: unknown) {
+      setActionError(
+        err instanceof Error ? err.message : 'Erreur lors de l’annulation du ticket.'
+      );
     } finally {
       setActionLoading(false);
     }
@@ -231,7 +280,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       case 'ASSIGNED_TO_RESPONSIBLE':
         return (
           <span className="rounded-md bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-300 border border-purple-500/30">
-            ATTRIBUÉ RESPONSABLE
+            ATTRIBUÉ SUPERVISEUR
           </span>
         );
       case 'CANCELLED':
@@ -260,7 +309,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       case 'ASSIGNED_TO_RESPONSIBLE':
         return (
           <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] font-bold text-purple-300">
-            RESPONSABLE
+            SUPERVISEUR
           </span>
         );
       case 'AVAILABLE':
@@ -314,7 +363,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               {selectedCarnet ? (
                 <button
                   onClick={() => setSelectedCarnet(null)}
-                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-slate-800 transition"
+                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   <span>Retour aux Carnets</span>
@@ -326,10 +375,10 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-white">
-                      Gestion des Carnets & Numérotation des Tickets
+                      Gestion des Carnets &amp; Numérotation des Tickets U.J.P.A.S.
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Multiples obligatoires de 3 (ex: 3, 6, 9... 150, 153). Impression PDF 9/page A4.
+                      Multiples de 3 (6 tickets/page A4 Paysage • Grille 3×2 • Validité 14 jours après vente).
                     </p>
                   </div>
                 </div>
@@ -341,7 +390,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <>
                   <button
                     onClick={() => setActiveTab('LIST')}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-xl transition ${
+                    className={`px-3 py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
                       activeTab === 'LIST'
                         ? 'bg-slate-800 text-white border border-slate-700'
                         : 'text-slate-400 hover:text-slate-200'
@@ -351,7 +400,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   </button>
                   <button
                     onClick={() => setActiveTab('HISTORY')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition cursor-pointer ${
                       activeTab === 'HISTORY'
                         ? 'bg-slate-800 text-white border border-slate-700'
                         : 'text-slate-400 hover:text-slate-200'
@@ -369,22 +418,26 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         await refreshData();
                         setActionSuccess(res.message || 'Synchronisation terminée avec succès.');
                         setTimeout(() => setActionSuccess(null), 4000);
-                      } catch (err: any) {
-                        setActionError(err?.message || 'Erreur lors de la synchronisation.');
+                      } catch (err: unknown) {
+                        setActionError(
+                          err instanceof Error ? err.message : 'Erreur lors de la synchronisation.'
+                        );
                       } finally {
                         setSyncingCloud(false);
                       }
                     }}
                     disabled={syncingCloud}
                     title="Envoyer et synchroniser tous les carnets et tickets locaux vers Supabase Cloud"
-                    className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition disabled:opacity-50"
+                    className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-500/20 transition disabled:opacity-50 cursor-pointer"
                   >
-                    <CloudUpload className={`w-3.5 h-3.5 text-emerald-400 ${syncingCloud ? 'animate-spin' : ''}`} />
+                    <CloudUpload
+                      className={`w-3.5 h-3.5 text-emerald-400 ${syncingCloud ? 'animate-spin' : ''}`}
+                    />
                     <span>{syncingCloud ? 'Synchro en cours...' : 'Synchroniser Cloud'}</span>
                   </button>
                   <button
                     onClick={() => setGeneratorModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition"
+                    className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Générer Carnet</span>
@@ -393,7 +446,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               )}
               <button
                 onClick={onClose}
-                className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800"
+                className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -428,43 +481,54 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
           {/* CONTENU SELON LA VUE */}
           {selectedCarnet ? (
-            /* ========================================================================= */
-            /* VUE DÉTAILLÉE : TICKETS DU CARNET SÉLECTIONNÉ                             */
-            /* ========================================================================= */
             <div className="mt-4 flex-1 flex flex-col min-h-0 space-y-4">
               {/* Carte Récapitulative du Carnet */}
               <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4 grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
                 <div>
-                  <span className="text-[11px] text-slate-500 uppercase font-bold">Référence Carnet</span>
-                  <p className="text-base font-black text-white font-mono mt-0.5">{selectedCarnet.carnetNumber}</p>
-                  <p className="text-[11px] text-slate-400 mt-1 font-mono">UUID: {selectedCarnet.id}</p>
+                  <span className="text-[11px] text-slate-500 uppercase font-bold">
+                    Référence Carnet
+                  </span>
+                  <p className="text-base font-black text-white font-mono mt-0.5">
+                    {selectedCarnet.carnetNumber}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-mono">
+                    UUID: {selectedCarnet.id}
+                  </p>
                 </div>
                 <div>
-                  <span className="text-[11px] text-slate-500 uppercase font-bold">Volume & Série</span>
+                  <span className="text-[11px] text-slate-500 uppercase font-bold">
+                    Volume &amp; Série
+                  </span>
                   <p className="text-sm font-bold text-slate-200 mt-0.5">
                     {selectedCarnet.size} tickets ({Math.ceil(selectedCarnet.size / 6)} page(s) A4)
                   </p>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Numéros {selectedCarnet.seriesPrefix}-{String(selectedCarnet.startNumber).padStart(6, '0')} à{' '}
-                    {selectedCarnet.seriesPrefix}-{String(selectedCarnet.endNumber).padStart(6, '0')}
+                    Numéros {selectedCarnet.seriesPrefix}-
+                    {String(selectedCarnet.startNumber).padStart(6, '0')} à{' '}
+                    {selectedCarnet.seriesPrefix}-
+                    {String(selectedCarnet.endNumber).padStart(6, '0')}
                   </p>
                 </div>
                 <div>
-                  <span className="text-[11px] text-slate-500 uppercase font-bold">Statut & Affectation</span>
+                  <span className="text-[11px] text-slate-500 uppercase font-bold">
+                    Statut &amp; Affectation
+                  </span>
                   <div className="mt-1">{getCarnetStatusBadge(selectedCarnet.status)}</div>
                   <p className="text-[11px] text-slate-300 mt-1 font-semibold">
                     {selectedCarnet.assignedToResponsableName
-                      ? `Resp: ${selectedCarnet.assignedToResponsableName}`
+                      ? `Sup: ${selectedCarnet.assignedToResponsableName}`
                       : 'Non assigné (Stock Admin)'}
                   </p>
                 </div>
                 <div className="flex flex-col justify-between items-start sm:items-end gap-2">
                   <div className="text-right">
                     <span className="text-[11px] text-slate-500 uppercase font-bold">Généré le</span>
-                    <p className="text-xs text-slate-300">{formatDateTime(selectedCarnet.createdAt)}</p>
+                    <p className="text-xs text-slate-300">
+                      {formatDateTime(selectedCarnet.createdAt)}
+                    </p>
                     <p className="text-[11px] text-slate-400">par {selectedCarnet.createdByName}</p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
                     {currentUser?.role === 'ADMINISTRATEUR' ? (
                       <button
                         onClick={() => handlePrintPDF(selectedCarnet)}
@@ -472,7 +536,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                         className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 shadow-md transition disabled:opacity-60 cursor-pointer"
                       >
                         <Printer className={`w-4 h-4 ${actionLoading ? 'animate-spin' : ''}`} />
-                        <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (9/page)'}</span>
+                        <span>{actionLoading ? 'Génération...' : 'Imprimer PDF (6/page)'}</span>
                       </button>
                     ) : (
                       <span
@@ -486,7 +550,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     {selectedCarnet.status !== 'CANCELLED' && (
                       <button
                         onClick={() => setCancelModalCarnet(selectedCarnet)}
-                        className="flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/30 transition"
+                        className="flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-500/30 px-3 py-1.5 text-xs font-bold text-rose-300 hover:bg-rose-500/30 transition cursor-pointer"
                       >
                         <Ban className="w-3.5 h-3.5" />
                         <span>Annuler Carnet</span>
@@ -495,35 +559,15 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     {currentUser?.role === 'ADMINISTRATEUR' && (
                       <button
                         disabled={actionLoading}
-                        onClick={async () => {
-                          if (confirm(`ÊTES-VOUS ABSOLUMENT SÛR de vouloir SUPPRIMER DÉFINITIVEMENT le carnet ${selectedCarnet.carnetNumber} ? Cette action est irréversible, elle détruira le carnet et tous les tickets associés de la base de données.`)) {
-                            setActionLoading(true);
-                            setActionSuccess(null);
-                            setActionError(null);
-                            try {
-                              const carnetNum = selectedCarnet.carnetNumber;
-                              await deleteCarnet(selectedCarnet.id);
-                              setSelectedCarnet(null);
-                              const msg = `Le carnet ${carnetNum} et tous ses tickets associés ont été entièrement supprimés.`;
-                              setActionSuccess(msg);
-                              showToast('success', 'Carnet supprimé avec succès', msg, 6000);
-                              setTimeout(() => setActionSuccess(null), 8000);
-                            } catch (err: any) {
-                              const errMsg = err?.message || 'Erreur lors de la suppression du carnet.';
-                              setActionError(errMsg);
-                              showToast('error', 'Échec de suppression', errMsg, 6000);
-                              setTimeout(() => setActionError(null), 8000);
-                            } finally {
-                              setActionLoading(false);
-                            }
-                          }
-                        }}
-                        className={`flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-md transition ${
-                          actionLoading ? 'bg-red-800 cursor-not-allowed opacity-70' : 'bg-red-600 hover:bg-red-500'
+                        onClick={() => setDeleteConfirmCarnet(selectedCarnet)}
+                        className={`flex items-center gap-1 rounded-xl px-3 py-1.5 text-xs font-bold text-white shadow-md transition cursor-pointer ${
+                          actionLoading
+                            ? 'bg-red-800 cursor-not-allowed opacity-70'
+                            : 'bg-red-600 hover:bg-red-500'
                         }`}
                       >
-                        <X className="w-3.5 h-3.5" />
-                        <span>{actionLoading ? 'Suppression en cours...' : 'Supprimer Carnet'}</span>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Supprimer Définitivement</span>
                       </button>
                     )}
                   </div>
@@ -561,7 +605,9 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                           <td className="py-2.5 px-3 text-[11px] text-slate-500 whitespace-nowrap">
                             {t.id.slice(0, 16)}...
                           </td>
-                          <td className="py-2.5 px-3 whitespace-nowrap">{getTicketStatusBadge(t.status)}</td>
+                          <td className="py-2.5 px-3 whitespace-nowrap">
+                            {getTicketStatusBadge(t.status)}
+                          </td>
                           <td className="py-2.5 px-3 font-sans text-slate-300 whitespace-nowrap">
                             {t.assignedAgentName || '—'}
                           </td>
@@ -574,7 +620,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                           <td className="py-2.5 px-3 text-center whitespace-nowrap">
                             <button
                               onClick={() => setInspectedTicket(t)}
-                              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
                               title="Inspecter le payload QR Code sécurisé"
                             >
                               <QrCode className="w-3.5 h-3.5" />
@@ -584,7 +630,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                             {t.status !== 'CANCELLED' && t.status !== 'SOLD' && (
                               <button
                                 onClick={() => setCancelModalTicket(t)}
-                                className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-[11px] font-sans font-semibold border border-rose-500/20 transition"
+                                className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-[11px] font-sans font-semibold border border-rose-500/20 transition cursor-pointer"
                               >
                                 Annuler
                               </button>
@@ -598,18 +644,19 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
           ) : activeTab === 'HISTORY' ? (
-            /* ========================================================================= */
-            /* VUE HISTORIQUE DES ATTRIBUTIONS & CYCLES DE VIE                            */
-            /* ========================================================================= */
             <div className="mt-4 flex-1 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div>
-                  <h4 className="text-sm font-bold text-white">Journal d'Attribution & Événements Carnets</h4>
+                  <h4 className="text-sm font-bold text-white">
+                    Journal d'Attribution &amp; Événements Carnets
+                  </h4>
                   <p className="text-xs text-slate-400">
-                    Traçabilité inviolable : Administrateur, Responsable, Date, Heure et Références.
+                    Traçabilité inviolable : Administrateur, Superviseur, Date, Heure et Références.
                   </p>
                 </div>
-                <span className="text-xs text-slate-500 font-mono">{carnetAuditLogs.length} entrées</span>
+                <span className="text-xs text-slate-500 font-mono">
+                  {carnetAuditLogs.length} entrées
+                </span>
               </div>
 
               {carnetAuditLogs.length === 0 ? (
@@ -636,20 +683,23 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                           >
                             {log.action}
                           </span>
-                          <span className="text-slate-300 font-sans font-semibold">Par {log.actorName}</span>
+                          <span className="text-slate-300 font-sans font-semibold">
+                            Par {log.actorName}
+                          </span>
                         </div>
                         <span>{formatDateTime(log.timestamp)}</span>
                       </div>
-                      <p className="text-slate-200 font-sans text-xs">{log.details}</p>
+                      <p className="text-slate-200 font-sans text-xs">
+                        {typeof log.details === 'string'
+                          ? log.details
+                          : JSON.stringify(log.details ?? '')}
+                      </p>
                     </div>
                   ))}
                 </div>
               )}
             </div>
           ) : (
-            /* ========================================================================= */
-            /* VUE LISTE DES CARNETS                                                     */
-            /* ========================================================================= */
             <div className="mt-4 flex-1 flex flex-col min-h-0 space-y-3">
               {/* Filtres et Recherche */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
@@ -659,19 +709,19 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Référence C-2026-001, préfixe, responsable..."
+                    placeholder="Référence C-2026-001, préfixe, superviseur..."
                     className="w-full rounded-xl border border-slate-700 bg-slate-800/90 py-2 pl-9 pr-3 text-xs text-white focus:outline-hidden focus:border-emerald-500"
                   />
                 </div>
 
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  onChange={(e) => setStatusFilter(e.target.value as 'ALL' | CarnetStatus)}
                   className="rounded-xl border border-slate-700 bg-slate-800/90 py-2 px-3 text-xs text-white focus:outline-hidden focus:border-emerald-500"
                 >
-                  <option value="ALL">Tous les statuts</option>
+                  <option value="ALL">Tous les statuts actifs</option>
                   <option value="GENERATED">Généré (Stock Admin)</option>
-                  <option value="ASSIGNED_TO_RESPONSIBLE">Attribué au Responsable</option>
+                  <option value="ASSIGNED_TO_RESPONSIBLE">Attribué au Superviseur</option>
                   <option value="CANCELLED">Annulé</option>
                 </select>
 
@@ -691,7 +741,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                       <th className="py-2.5 px-3">Taille (x3)</th>
                       <th className="py-2.5 px-3">Plage Physique</th>
                       <th className="py-2.5 px-3">Statut</th>
-                      <th className="py-2.5 px-3">Responsable Attribué</th>
+                      <th className="py-2.5 px-3">Superviseur Attribué</th>
                       <th className="py-2.5 px-3">Date Génération</th>
                       <th className="py-2.5 px-3">Ventes</th>
                       <th className="py-2.5 px-3 text-right">Actions</th>
@@ -753,16 +803,14 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                             </td>
                             <td className="py-2.5 px-3 text-right whitespace-nowrap">
                               <div className="flex items-center justify-end gap-1 font-sans">
-                                {/* Voir les tickets du carnet */}
                                 <button
                                   onClick={() => setSelectedCarnet(c)}
-                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
                                   title="Consulter les tickets du carnet"
                                 >
                                   <Eye className="w-3.5 h-3.5" />
                                 </button>
 
-                                {/* Imprimer le PDF 9/page A4 */}
                                 {currentUser?.role === 'ADMINISTRATEUR' ? (
                                   <button
                                     onClick={() => handlePrintPDF(c)}
@@ -781,61 +829,38 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                                   </span>
                                 )}
 
-                                {/* Attribuer au responsable si non encore attribué */}
                                 {!c.assignedToResponsableId && c.status !== 'CANCELLED' && (
                                   <button
                                     onClick={() => setAssignModalCarnet(c)}
-                                    className="p-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition"
-                                    title="Attribuer à un responsable"
+                                    className="p-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 transition cursor-pointer"
+                                    title="Attribuer à un superviseur"
                                   >
                                     <UserCheck className="w-3.5 h-3.5" />
                                   </button>
                                 )}
 
-                                {/* Annuler le carnet */}
                                 {c.status !== 'CANCELLED' && (
                                   <button
                                     onClick={() => setCancelModalCarnet(c)}
-                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition"
+                                    className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 transition cursor-pointer"
                                     title="Annuler le carnet"
                                   >
                                     <Ban className="w-3.5 h-3.5" />
                                   </button>
                                 )}
 
-                                {/* Supprimer définitivement le carnet */}
                                 {currentUser?.role === 'ADMINISTRATEUR' && (
                                   <button
                                     disabled={actionLoading}
-                                    onClick={async () => {
-                                      if (confirm(`ÊTES-VOUS ABSOLUMENT SÛR de vouloir SUPPRIMER DÉFINITIVEMENT le carnet ${c.carnetNumber} et tous ses tickets associés de la base ? Cette action est irréversible.`)) {
-                                        setActionLoading(true);
-                                        setActionSuccess(null);
-                                        setActionError(null);
-                                        try {
-                                          await deleteCarnet(c.id);
-                                          const msg = `Le carnet ${c.carnetNumber} et tous ses tickets associés ont été entièrement supprimés.`;
-                                          setActionSuccess(msg);
-                                          showToast('success', 'Carnet supprimé avec succès', msg, 6000);
-                                          setTimeout(() => setActionSuccess(null), 8000);
-                                        } catch (err: any) {
-                                          const errMsg = err?.message || 'Erreur lors de la suppression du carnet.';
-                                          setActionError(errMsg);
-                                          showToast('error', 'Échec de suppression', errMsg, 6000);
-                                          setTimeout(() => setActionError(null), 8000);
-                                        } finally {
-                                          setActionLoading(false);
-                                        }
-                                      }
-                                    }}
-                                    className={`p-1.5 rounded-lg border transition ${
+                                    onClick={() => setDeleteConfirmCarnet(c)}
+                                    className={`p-1.5 rounded-lg border transition cursor-pointer ${
                                       actionLoading
                                         ? 'bg-red-950 text-red-700 border-red-900 cursor-not-allowed opacity-50'
                                         : 'bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-500/20'
                                     }`}
                                     title="Supprimer définitivement le carnet"
                                   >
-                                    <X className="w-3.5 h-3.5" />
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 )}
                               </div>
@@ -849,7 +874,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             </div>
           )}
-          
+
           {/* Bouton de fermeture global en bas */}
           <div className="mt-4 border-t border-slate-800 pt-3 flex justify-end">
             <button
@@ -863,7 +888,66 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL ATTRIBUTION DU CARNET AU RESPONSABLE                                */}
+      {/* MODAL DE CONFIRMATION DE SUPPRESSION DÉFINITIVE DE CARNET                 */}
+      {/* ========================================================================= */}
+      {deleteConfirmCarnet && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/85 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border-2 border-red-500/60 bg-slate-900 p-6 shadow-2xl text-slate-100">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-red-400">
+                <Trash2 className="w-5 h-5" />
+                <h4 className="text-base font-bold text-white">
+                  Suppression Définitive du Carnet
+                </h4>
+              </div>
+              <button
+                onClick={() => setDeleteConfirmCarnet(null)}
+                className="p-1 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="rounded-xl border border-red-500/40 bg-red-950/30 p-3.5 text-xs text-red-200 space-y-1.5">
+                <p className="font-black text-red-300 uppercase">
+                  ⚠️ Action Irréversible (CASCADE) :
+                </p>
+                <p>
+                  Vous êtes sur le point de détruire définitivement le carnet{' '}
+                  <strong className="text-white font-mono">
+                    {deleteConfirmCarnet.carnetNumber}
+                  </strong>{' '}
+                  ({deleteConfirmCarnet.size} tickets) ainsi que l'intégralité de ses tickets dans
+                  la base locale et sur Supabase Cloud.
+                </p>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmCarnet(null)}
+                  disabled={actionLoading}
+                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePermanentDeleteSubmit}
+                  disabled={actionLoading}
+                  className="flex-1 rounded-xl bg-red-600 py-2.5 text-xs font-black text-white hover:bg-red-500 shadow-lg transition disabled:opacity-50 cursor-pointer"
+                >
+                  {actionLoading ? 'Suppression en cours...' : 'Supprimer Définitivement'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL ATTRIBUTION DU CARNET AU SUPERVISEUR                                */}
       {/* ========================================================================= */}
       {assignModalCarnet && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs">
@@ -871,11 +955,13 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <UserCheck className="w-5 h-5 text-purple-400" />
-                <h4 className="text-base font-bold text-white">Attribuer le Carnet au Responsable</h4>
+                <h4 className="text-base font-bold text-white">
+                  Attribuer le Carnet au Superviseur
+                </h4>
               </div>
               <button
                 onClick={() => setAssignModalCarnet(null)}
-                className="p-1 text-slate-400 hover:text-white"
+                className="p-1 text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -884,15 +970,18 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
             <form onSubmit={handleAssignSubmit} className="mt-4 space-y-4">
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs space-y-1">
                 <p className="text-slate-400">Carnet à attribuer :</p>
-                <p className="font-mono font-bold text-white text-sm">{assignModalCarnet.carnetNumber}</p>
+                <p className="font-mono font-bold text-white text-sm">
+                  {assignModalCarnet.carnetNumber}
+                </p>
                 <p className="text-[11px] text-slate-500">
-                  {assignModalCarnet.size} tickets (Numéros {assignModalCarnet.startNumber} à {assignModalCarnet.endNumber})
+                  {assignModalCarnet.size} tickets (Numéros {assignModalCarnet.startNumber} à{' '}
+                  {assignModalCarnet.endNumber})
                 </p>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Choisir le Responsable
+                  Choisir le Superviseur (Responsable)
                 </label>
                 <select
                   required
@@ -900,10 +989,11 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   onChange={(e) => setSelectedResponsableId(e.target.value)}
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2.5 px-3 text-sm text-white focus:border-purple-500 focus:outline-hidden"
                 >
-                  <option value="">-- Sélectionner un responsable actif --</option>
+                  <option value="">-- Sélectionner un superviseur actif --</option>
                   {responsables.map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.fullName} ({r.sectorName || 'Secteur'} • Tél: {r.phone || 'Non renseigné'})
+                      {r.fullName} ({r.sectorName || 'Zone Portuaire'} • Tél:{' '}
+                      {r.phone || 'Non renseigné'})
                     </option>
                   ))}
                 </select>
@@ -911,23 +1001,28 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
               <div className="rounded-xl border border-purple-500/20 bg-purple-500/10 p-3 text-[11px] text-purple-300 space-y-1">
                 <p className="font-bold">Règle de traçabilité automatique :</p>
-                <p>• L’attribution enregistre automatiquement : carnet, responsable, administrateur, date et heure.</p>
-                <p>• Tous les tickets non vendus passent immédiatement à l'état "ASSIGNED_TO_RESPONSIBLE".</p>
-                <p>• Aucun bouton de confirmation de réception n'est requis pour le destinataire.</p>
+                <p>
+                  • L’attribution enregistre automatiquement : carnet, superviseur, administrateur,
+                  date et heure.
+                </p>
+                <p>
+                  • Tous les tickets non vendus passent immédiatement à l'état
+                  "ASSIGNED_TO_RESPONSIBLE".
+                </p>
               </div>
 
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setAssignModalCarnet(null)}
-                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={actionLoading || !selectedResponsableId}
-                  className="flex-1 rounded-xl bg-purple-600 py-2.5 text-xs font-bold text-white hover:bg-purple-500 shadow-md transition disabled:opacity-50"
+                  className="flex-1 rounded-xl bg-purple-600 py-2.5 text-xs font-bold text-white hover:bg-purple-500 shadow-md transition disabled:opacity-50 cursor-pointer"
                 >
                   {actionLoading ? 'Attribution...' : 'Confirmer l’Attribution'}
                 </button>
@@ -950,7 +1045,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
               <button
                 onClick={() => setCancelModalCarnet(null)}
-                className="p-1 text-slate-400 hover:text-white"
+                className="p-1 text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -961,11 +1056,14 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <p className="font-bold">⚠️ Action irréversible :</p>
                 <p>
                   Vous vous apprêtez à annuler le carnet{' '}
-                  <strong className="text-white font-mono">{cancelModalCarnet.carnetNumber}</strong>.
+                  <strong className="text-white font-mono">
+                    {cancelModalCarnet.carnetNumber}
+                  </strong>
+                  .
                 </p>
                 <p>
-                  Tous les tickets vierges ou non vendus de ce carnet seront marqués comme annulés et
-                  invalidés pour la vente et le contrôle.
+                  Tous les tickets vierges ou non vendus de ce carnet seront marqués comme annulés
+                  et invalidés pour la vente et le contrôle.
                 </p>
               </div>
 
@@ -987,14 +1085,14 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <button
                   type="button"
                   onClick={() => setCancelModalCarnet(null)}
-                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
                 >
                   Retour
                 </button>
                 <button
                   type="submit"
                   disabled={actionLoading || !cancelCarnetReason.trim()}
-                  className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-500 shadow-md transition disabled:opacity-50"
+                  className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-500 shadow-md transition disabled:opacity-50 cursor-pointer"
                 >
                   {actionLoading ? 'Annulation...' : 'Confirmer l’Annulation'}
                 </button>
@@ -1017,7 +1115,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
               <button
                 onClick={() => setCancelModalTicket(null)}
-                className="p-1 text-slate-400 hover:text-white"
+                className="p-1 text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1028,8 +1126,10 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <p className="font-bold">⚠️ Action irréversible :</p>
                 <p>
                   Annulation du ticket physique{' '}
-                  <strong className="text-white font-mono">{cancelModalTicket.ticketNumber}</strong> (UUID:{' '}
-                  {cancelModalTicket.id.slice(0, 16)}...).
+                  <strong className="text-white font-mono">
+                    {cancelModalTicket.ticketNumber}
+                  </strong>{' '}
+                  (UUID: {cancelModalTicket.id.slice(0, 16)}...).
                 </p>
               </div>
 
@@ -1051,14 +1151,14 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
                 <button
                   type="button"
                   onClick={() => setCancelModalTicket(null)}
-                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700"
+                  className="flex-1 rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 cursor-pointer"
                 >
                   Retour
                 </button>
                 <button
                   type="submit"
                   disabled={actionLoading || !cancelTicketReason.trim()}
-                  className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-500 shadow-md transition disabled:opacity-50"
+                  className="flex-1 rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white hover:bg-rose-500 shadow-md transition disabled:opacity-50 cursor-pointer"
                 >
                   {actionLoading ? 'Annulation...' : 'Confirmer l’Annulation'}
                 </button>
@@ -1081,7 +1181,7 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
               <button
                 onClick={() => setInspectedTicket(null)}
-                className="p-1 text-slate-400 hover:text-white"
+                className="p-1 text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1115,16 +1215,16 @@ export const CarnetManagementModal: React.FC<Props> = ({ isOpen, onClose }) => {
               <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3 text-[11px] text-cyan-300 space-y-1">
                 <p className="font-bold">Garantie d'unicité et de cryptographie :</p>
                 <p>
-                  Le QR Code ne contient pas uniquement le numéro physique. Il encapsule un jeton unique,
-                  l'UUID interne du ticket, l'identifiant du carnet et une signature cryptographique
-                  permettant aux contrôleurs d'authentifier le titre hors-ligne.
+                  Le QR Code encapsule un jeton unique, l'UUID interne du ticket, l'identifiant du
+                  carnet et une signature cryptographique permettant aux contrôleurs d'authentifier
+                  le titre hors-ligne.
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={() => setInspectedTicket(null)}
-                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 mt-2"
+                className="w-full rounded-xl bg-slate-800 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 mt-2 cursor-pointer"
               >
                 Fermer
               </button>

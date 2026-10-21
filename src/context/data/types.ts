@@ -1,5 +1,6 @@
 /**
- * DataContext contracts and public type definitions
+ * Contrats et définitions de types publics pour DataContext — PORTUS — U.J.P.A.S.
+ * Union des Jeunes du Port pour l'Assistance et la Sécurité
  */
 
 import type {
@@ -38,7 +39,8 @@ export type VerificationStatus =
   | 'SUSPICIOUS'
   | 'SUPERSEDED'
   | 'NOT_FOUND'
-  | 'NOT_SOLD';
+  | 'NOT_SOLD'
+  | 'EXPIRED';
 
 export interface VerifyTicketResult {
   status: VerificationStatus;
@@ -46,10 +48,13 @@ export interface VerifyTicketResult {
   ticket: Ticket | null;
   agentName: string | null;
   agentPhone: string | null;
+  agentAvatarUrl?: string | null;
   verifiedVia: 'SERVER' | 'LOCAL_CACHE';
   message: string;
   isRepeatedControl: boolean;
   previousControlCount: number;
+  expiresAt?: string | null;
+  isExpired?: boolean;
 }
 
 export interface DuplicateCheckResult {
@@ -163,6 +168,9 @@ export interface DataContextType {
     role: Role;
     sectorId?: string;
     phone?: string;
+    avatarUrl?: string;
+    matricule?: string;
+    brigade?: string;
     passwordRaw: string;
   }) => Promise<User>;
   updateUser: (
@@ -172,6 +180,9 @@ export interface DataContextType {
       phone?: string;
       sectorId?: string;
       role?: Role;
+      avatarUrl?: string;
+      matricule?: string;
+      brigade?: string;
     }
   ) => Promise<User>;
   toggleUserActive: (userId: string) => Promise<void>;
@@ -187,6 +198,7 @@ export interface DataContextType {
   assignCarnetToResponsable: (carnetId: string, responsableId: string) => Promise<Carnet>;
   cancelCarnet: (carnetId: string, reason: string) => Promise<Carnet>;
   deleteCarnet: (carnetId: string) => Promise<void>;
+  deleteCarnetPermanently?: (carnetId: string) => Promise<void>;
   updateTicketStatus: (ticketId: string, newStatus: TicketStatus, reason?: string) => Promise<Ticket>;
   cancelTicket: (ticketId: string, reason: string) => Promise<void>;
   correctRemiseAdmin: (
@@ -256,6 +268,8 @@ export interface DataContextType {
     photoDataUrl?: string;
     reason?: string;
     reasonLabel?: string;
+    suspectedAgentId?: string;
+    suspectedAgentName?: string;
   }) => Promise<FraudReport>;
   updateFraudReportStatus: (
     fraudId: string,

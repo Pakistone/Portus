@@ -1,5 +1,7 @@
 import QRCode from 'qrcode';
 import { ORG_INFO } from '../config/constants';
+import { computeExpirationDate } from './expiration';
+import { formatDateTime } from './normalization';
 
 export interface ReceiptData {
   ticketNumber: string;
@@ -7,6 +9,9 @@ export interface ReceiptData {
   amount: number;
   agentName: string;
   dateStr: string;
+  soldAtIso?: string;
+  expiresAtStr?: string;
+  paymentMethod?: string;
   driverName?: string;
   driverPhone?: string;
   carnetNumber?: string;
@@ -30,14 +35,13 @@ const loadImageSafe = (src: string): Promise<HTMLImageElement | null> => {
 };
 
 /**
- * Dessine un cachet de validation vectoriel UJPAS
+ * Dessine un cachet de validation vectoriel U.J.P.A.S.
  */
 function drawValidationUjpasFallback(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number) {
   ctx.save();
   ctx.strokeStyle = '#0F4C3A';
   ctx.fillStyle = '#0F4C3A';
 
-  // Scalloped circle
   const numPoints = 24;
   const rOuter = r;
   const rInner = r - 5;
@@ -61,25 +65,23 @@ function drawValidationUjpasFallback(ctx: CanvasRenderingContext2D, cx: number, 
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
-  // Cercle intérieur
   ctx.beginPath();
   ctx.arc(cx, cy, r - 12, 0, Math.PI * 2);
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // Textes centraux
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = 'bold 12px Helvetica, Arial, sans-serif';
   ctx.fillText('VALIDATION', cx, cy - 8);
 
   ctx.font = '900 17px Helvetica, Arial, sans-serif';
-  ctx.fillText('UJPAS', cx, cy + 10);
+  ctx.fillText('U.J.P.A.S.', cx, cy + 10);
   ctx.restore();
 }
 
 /**
- * Dessine un logo vectoriel de secours UJPAS
+ * Dessine un logo vectoriel de secours U.J.P.A.S.
  */
 function drawLogoFallback(ctx: CanvasRenderingContext2D, lx: number, ly: number, size: number) {
   ctx.save();
@@ -93,7 +95,7 @@ function drawLogoFallback(ctx: CanvasRenderingContext2D, lx: number, ly: number,
   ctx.stroke();
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 22px sans-serif';
+  ctx.font = 'bold 20px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText('UJPAS', lx, ly);
@@ -101,17 +103,20 @@ function drawLogoFallback(ctx: CanvasRenderingContext2D, lx: number, ly: number,
 }
 
 /**
- * Génère une image PNG haute définition (Blob) du nouveau modèle de ticket UJPAA
- * Format paysage 1100x520px avec guilloches, cases d'immatriculation, QR code, validation et talon.
+ * Génère une image PNG haute définition (Blob) du modèle de reçu officiel U.J.P.A.S.
+ * Format paysage 1100x520px avec filigrane, 8 cases d'immatriculation, validité 14 jours, QR code, validation et talon.
  */
 export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = 1100;
   canvas.height = 520;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Could not get 2d context');
+  if (!ctx) throw new Error('Impossible d’initialiser le contexte 2D pour le reçu');
 
-  // Chargement asynchrone des assets images UJPAS
+  const computedExpiryStr =
+    data.expiresAtStr ||
+    (data.soldAtIso ? formatDateTime(computeExpirationDate(data.soldAtIso)) : '14 jours après émission');
+
   const [logoImg, stampImg] = await Promise.all([
     loadImageSafe(ORG_INFO.LOGO_PATH),
     loadImageSafe(ORG_INFO.STAMP_PATH),
@@ -121,11 +126,11 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fillStyle = '#FBF9F3';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 2. Filigrane de sécurité officiel - CONTIENT UNIQUEMENT : UJPAS, UCRAO, CSCRAO, UCRPPLAO-CI
+  // 2. Filigrane de sécurité officiel : U.J.P.A.S., UCRAO, CSCRAO, UCRPPLAO-CI
   ctx.save();
   ctx.fillStyle = 'rgba(13, 74, 54, 0.12)';
   ctx.font = 'bold 9.5px Helvetica, Arial, sans-serif';
-  const watermarkUnit = 'UJPAS   UCRAO   CSCRAO   UCRPPLAO-CI   ';
+  const watermarkUnit = 'U.J.P.A.S.   UCRAO   CSCRAO   UCRPPLAO-CI   ';
   const unitWidth = ctx.measureText(watermarkUnit).width;
   const repeatCount = Math.ceil(canvas.width / unitWidth) + 3;
   const fullRowText = watermarkUnit.repeat(repeatCount);
@@ -139,7 +144,7 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   }
   ctx.restore();
 
-  // 3. Cadre externe du ticket aux couleurs UJPAA
+  // 3. Cadre externe du ticket aux couleurs U.J.P.A.S.
   ctx.strokeStyle = '#0D4A36';
   ctx.lineWidth = 2.5;
   ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
@@ -163,53 +168,59 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fill();
   ctx.restore();
 
-  // 5. Logo officiel UJPAA en haut à gauche
+  // 5. Logo officiel U.J.P.A.S. en haut à gauche
   if (logoImg) {
     ctx.drawImage(logoImg, 30, 42, 95, 95);
   } else {
     drawLogoFallback(ctx, 78, 90, 85);
   }
 
-  // 6. Textes d'en-tête officiels UJPAS
+  // 6. Textes d'en-tête officiels U.J.P.A.S.
   ctx.textAlign = 'left';
   ctx.fillStyle = '#0D4A36';
-  ctx.font = '900 21px Helvetica, Arial, sans-serif';
-  ctx.fillText("UNION DES JEUNES DU PORT POUR L'ASSISTANCE ET LA SÉCURITÉ (UJPAS)", 140, 68);
+  ctx.font = '900 20px Helvetica, Arial, sans-serif';
+  ctx.fillText("UNION DES JEUNES DU PORT POUR L'ASSISTANCE ET LA SÉCURITÉ (U.J.P.A.S.)", 140, 66);
 
   ctx.fillStyle = '#EA580C';
-  ctx.font = 'bold 16px Helvetica, Arial, sans-serif';
-  ctx.fillText("SURVEILLANCE & LOGISTIQUE - PORT D'ABIDJAN", 140, 93);
+  ctx.font = 'bold 15px Helvetica, Arial, sans-serif';
+  ctx.fillText("ASSISTANCE, FLUIDITÉ & SÉCURITÉ ROUTIÈRE — PORT D'ABIDJAN", 140, 90);
 
   ctx.fillStyle = '#334155';
   ctx.font = 'bold 12px Helvetica, Arial, sans-serif';
-  ctx.fillText("Zone Industrielle & Zone Portuaire d’Abidjan", 140, 115);
+  ctx.fillText('Zone Portuaire & Industrielle de Vridi — Validité Stricte : 14 Jours', 140, 112);
 
   // Référence Carnet en haut à droite
   ctx.textAlign = 'right';
   ctx.fillStyle = '#0D4A36';
   ctx.font = 'bold 12px Helvetica, Arial, sans-serif';
-  ctx.fillText(`CARNET : ${data.carnetNumber || 'ACTIF'}`, 840, 68);
+  ctx.fillText(`CARNET : ${data.carnetNumber || 'ACTIF'}`, 850, 112);
 
   // =========================================================================
-  // CARTOUCHE N° VRDCH & QR CODE DE VÉRIFICATION
+  // CARTOUCHE N° TICKET & QR CODE DE VÉRIFICATION
   // =========================================================================
-  const contentTopY = 145;
+  const contentTopY = 142;
 
-  // Cartouche Numéro
   ctx.fillStyle = '#F8FAFC';
   ctx.strokeStyle = '#0D4A36';
   ctx.lineWidth = 2.5;
-  ctx.fillRect(30, contentTopY, 600, 56);
-  ctx.strokeRect(30, contentTopY, 600, 56);
+  ctx.fillRect(30, contentTopY, 600, 54);
+  ctx.strokeRect(30, contentTopY, 600, 54);
 
   ctx.fillStyle = '#0D4A36';
   ctx.textAlign = 'left';
-  ctx.font = '900 24px "Arial Black", Impact, monospace';
-  ctx.fillText(`N° VRDCH : ${data.ticketNumber}`, 45, contentTopY + 38);
+  ctx.font = '900 22px "Arial Black", Impact, monospace';
+  ctx.fillText(`N° TICKET : ${data.ticketNumber}`, 45, contentTopY + 35);
+
+  if (data.paymentMethod) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#EA580C';
+    ctx.font = 'bold 12px Helvetica, Arial, sans-serif';
+    ctx.fillText(`MODE : ${data.paymentMethod}`, 615, contentTopY + 33);
+  }
 
   // QR Code sécurisé à droite
   const qrX = 665;
-  const qrY = 145;
+  const qrY = 142;
   const qrSize = 185;
 
   ctx.fillStyle = '#FFFFFF';
@@ -223,7 +234,7 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
       margin: 1,
       width: qrSize - 10,
       color: {
-        dark: '#0F4C3A',
+        dark: '#000000',
         light: '#FFFFFF',
       },
     });
@@ -238,23 +249,23 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   // =========================================================================
   // ZONE IMMATRICULATION : 8 CASES NORMALISÉES
   // =========================================================================
-  const immY = contentTopY + 68;
+  const immY = contentTopY + 64;
 
   ctx.fillStyle = '#FFFFFF';
   ctx.strokeStyle = '#94A3B8';
   ctx.lineWidth = 2;
-  ctx.fillRect(30, immY, 600, 58);
-  ctx.strokeRect(30, immY, 600, 58);
+  ctx.fillRect(30, immY, 600, 56);
+  ctx.strokeRect(30, immY, 600, 56);
 
+  ctx.textAlign = 'left';
   ctx.fillStyle = '#0F172A';
   ctx.font = 'bold 12px Helvetica, Arial, sans-serif';
-  ctx.fillText('N° IMMATRICULATION CAMION :', 42, immY + 35);
+  ctx.fillText('N° IMMATRICULATION CAMION :', 42, immY + 33);
 
-  // 8 cases avec lettres de la plaque
-  const cleanPlate = (data.plateNumber || '').replace(/\s+/g, '').toUpperCase();
+  const cleanPlate = (data.plateNumber || '').replace(/[\s-]/g, '').toUpperCase();
   const startBoxX = 265;
   const plateBoxW = 36;
-  const plateBoxH = 42;
+  const plateBoxH = 40;
   const boxGap = 6;
 
   for (let i = 0; i < 8; i++) {
@@ -271,45 +282,60 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
       ctx.fillStyle = '#0F172A';
       ctx.font = '900 22px "Courier New", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText(char, bx + plateBoxW / 2, by + 29);
+      ctx.fillText(char, bx + plateBoxW / 2, by + 28);
     }
   }
 
   // =========================================================================
-  // ZONE DATE & NOM DU CHAUFFEUR
+  // ZONE DATE D'ÉMISSION, EXPIRATION 14 JOURS & CHAUFFEUR
   // =========================================================================
-  const dateY = immY + 68;
+  const dateY = immY + 64;
 
   ctx.fillStyle = '#FFFFFF';
   ctx.strokeStyle = '#94A3B8';
   ctx.lineWidth = 2;
-  ctx.fillRect(30, dateY, 600, 48);
-  ctx.strokeRect(30, dateY, 600, 48);
+  ctx.fillRect(30, dateY, 600, 54);
+  ctx.strokeRect(30, dateY, 600, 54);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#0F172A';
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
-  ctx.fillText('DATE :', 42, dateY + 30);
+  ctx.fillText('ÉMIS LE :', 42, dateY + 22);
 
-  ctx.font = 'bold 16px "Courier New", monospace';
+  ctx.font = 'bold 13px "Courier New", monospace';
   ctx.fillStyle = '#1E293B';
-  ctx.fillText(data.dateStr, 95, dateY + 30);
+  ctx.fillText(data.dateStr, 105, dateY + 22);
 
-  // NOM DU CHAUFFEUR
+  ctx.fillStyle = '#B45309';
+  ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
+  ctx.fillText('EXPIRE LE (14J) :', 42, dateY + 42);
+
+  ctx.font = 'bold 13px "Courier New", monospace';
+  ctx.fillStyle = '#D97706';
+  ctx.fillText(computedExpiryStr, 150, dateY + 42);
+
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
   ctx.fillStyle = '#0F172A';
-  ctx.fillText('CHAUFFEUR :', 270, dateY + 30);
+  ctx.fillText('CHAUFFEUR :', 355, dateY + 22);
 
-  ctx.font = 'bold 15px Helvetica, Arial, sans-serif';
+  ctx.font = 'bold 13px Helvetica, Arial, sans-serif';
   ctx.fillStyle = '#334155';
-  ctx.fillText(data.driverName || '---', 360, dateY + 30);
+  ctx.fillText((data.driverName || '---').slice(0, 22), 440, dateY + 22);
+
+  ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText('TÉL :', 355, dateY + 42);
+
+  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.fillStyle = '#334155';
+  ctx.fillText(data.driverPhone || '---', 395, dateY + 42);
 
   // =========================================================================
-  // SIGNATURE AGENT & CACHET "VALIDATION UJPAA"
+  // SIGNATURE AGENT & CACHET "VALIDATION U.J.P.A.S."
   // =========================================================================
-  const boxY = dateY + 58;
+  const boxY = dateY + 62;
   const boxW = 290;
-  const boxH = 95;
+  const boxH = 92;
 
   // 1. Signature Agent
   ctx.strokeStyle = '#94A3B8';
@@ -323,24 +349,23 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fillStyle = '#334155';
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('SIGNATURE AGENT UJPAS', 30 + boxW / 2, boxY + 17);
+  ctx.fillText('SIGNATURE AGENT U.J.P.A.S.', 30 + boxW / 2, boxY + 17);
 
-  // Signature cursive bleue élégante
   ctx.save();
   ctx.strokeStyle = '#1E3A8A';
   ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(60, boxY + 55);
-  ctx.bezierCurveTo(90, boxY + 35, 120, boxY + 80, 160, boxY + 45);
-  ctx.bezierCurveTo(180, boxY + 30, 210, boxY + 65, 250, boxY + 55);
+  ctx.moveTo(60, boxY + 53);
+  ctx.bezierCurveTo(90, boxY + 35, 120, boxY + 78, 160, boxY + 45);
+  ctx.bezierCurveTo(180, boxY + 30, 210, boxY + 63, 250, boxY + 53);
   ctx.stroke();
 
   ctx.fillStyle = '#334155';
   ctx.font = 'italic bold 12px Helvetica, Arial, sans-serif';
-  ctx.fillText(data.agentName, 30 + boxW / 2, boxY + 82);
+  ctx.fillText(data.agentName, 30 + boxW / 2, boxY + 80);
   ctx.restore();
 
-  // 2. Cachet "VALIDATION UJPAA"
+  // 2. Cachet "VALIDATION U.J.P.A.S."
   ctx.strokeStyle = '#94A3B8';
   ctx.lineWidth = 1.5;
   ctx.setLineDash([4, 4]);
@@ -352,21 +377,20 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.fillStyle = '#0F4C3A';
   ctx.font = 'bold 11px Helvetica, Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('VALIDATION UJPAS', 340 + boxW / 2, boxY + 17);
+  ctx.fillText('VALIDATION U.J.P.A.S.', 340 + boxW / 2, boxY + 17);
 
   const stampCx = 340 + boxW / 2;
   const stampCy = boxY + boxH / 2 + 8;
 
   if (stampImg) {
-    ctx.drawImage(stampImg, stampCx - 36, stampCy - 36, 72, 72);
+    ctx.drawImage(stampImg, stampCx - 35, stampCy - 35, 70, 70);
   } else {
-    drawValidationUjpasFallback(ctx, stampCx, stampCy, 35);
+    drawValidationUjpasFallback(ctx, stampCx, stampCy, 34);
   }
 
   // =========================================================================
   // TALON DE CONTRÔLE DÉTACHABLE (DROITE)
   // =========================================================================
-  // Ligne de perforation verticale
   ctx.strokeStyle = '#64748B';
   ctx.lineWidth = 2;
   ctx.setLineDash([6, 5]);
@@ -376,61 +400,67 @@ export async function generateReceiptImageBlob(data: ReceiptData): Promise<Blob>
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Contenu du talon
   const stubX = 895;
   if (logoImg) {
-    ctx.drawImage(logoImg, stubX + 45, 45, 60, 60);
+    ctx.drawImage(logoImg, stubX + 45, 42, 58, 58);
   }
 
   ctx.textAlign = 'left';
   ctx.fillStyle = '#0D4A36';
-  ctx.font = '900 13px "Arial Black", monospace';
-  ctx.fillText(`N° VRDCH : ${data.ticketNumber}`, stubX + 10, 130);
+  ctx.font = '900 12px "Arial Black", monospace';
+  ctx.fillText(`N° : ${data.ticketNumber}`, stubX + 8, 122);
 
   ctx.fillStyle = '#0D4A36';
   ctx.font = 'bold 10px Helvetica, Arial, sans-serif';
-  ctx.fillText('IMMATRICULATION :', stubX + 10, 158);
+  ctx.fillText('IMMATRICULATION :', stubX + 8, 146);
 
   ctx.font = '900 15px "Courier New", monospace';
   ctx.fillStyle = '#0F172A';
-  ctx.fillText(data.plateNumber.toUpperCase(), stubX + 10, 182);
+  ctx.fillText(cleanPlate, stubX + 8, 166);
 
   ctx.fillStyle = '#0D4A36';
   ctx.font = 'bold 10px Helvetica, Arial, sans-serif';
-  ctx.fillText('DATE :', stubX + 10, 210);
+  ctx.fillText('ÉMIS LE :', stubX + 8, 192);
 
-  ctx.font = 'bold 12px "Courier New", monospace';
+  ctx.font = 'bold 11px "Courier New", monospace';
   ctx.fillStyle = '#334155';
-  ctx.fillText(data.dateStr, stubX + 10, 230);
+  ctx.fillText(data.dateStr, stubX + 8, 208);
+
+  ctx.fillStyle = '#B45309';
+  ctx.font = 'bold 10px Helvetica, Arial, sans-serif';
+  ctx.fillText('EXPIRE LE (14J) :', stubX + 8, 232);
+
+  ctx.font = 'bold 11px "Courier New", monospace';
+  ctx.fillStyle = '#D97706';
+  ctx.fillText(computedExpiryStr, stubX + 8, 248);
 
   // Cadre email officiel sur le talon
   ctx.fillStyle = '#0D4A36';
-  ctx.fillRect(stubX + 8, 260, 180, 48);
+  ctx.fillRect(stubX + 6, 268, 178, 48);
   ctx.fillStyle = '#FDE68A';
   ctx.font = '900 9px Helvetica, Arial, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('CONTACT OFFICIEL', stubX + 98, 278);
+  ctx.fillText('CONTACT OFFICIEL U.J.P.A.S.', stubX + 95, 285);
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 9.5px Helvetica, Arial, sans-serif';
-  ctx.fillText(ORG_INFO.CONTACT_EMAIL, stubX + 98, 296);
+  ctx.font = 'bold 9px Helvetica, Arial, sans-serif';
+  ctx.fillText(ORG_INFO.CONTACT_EMAIL, stubX + 95, 303);
 
-  // Mentions bord vertical talon
   ctx.save();
-  ctx.translate(1075, 420);
+  ctx.translate(1075, 430);
   ctx.rotate(-Math.PI / 2);
   ctx.fillStyle = '#64748B';
   ctx.font = 'bold 8.5px Helvetica, Arial, sans-serif';
-  ctx.fillText("PROPRIÉTÉ EXCLUSIVE UJPAS - TOUTE COPIE INTERDITE", 0, 0);
+  ctx.fillText('PROPRIÉTÉ EXCLUSIVE U.J.P.A.S. - TOUTE COPIE INTERDITE', 0, 0);
   ctx.restore();
 
   // =========================================================================
-  // PIED DE PAGE : CONTACTS OFFICIELS UJPAS
+  // PIED DE PAGE : CONTACTS OFFICIELS U.J.P.A.S.
   // =========================================================================
   ctx.textAlign = 'center';
   ctx.fillStyle = '#0D4A36';
   ctx.font = '900 11px Helvetica, Arial, sans-serif';
   ctx.fillText(
-    `POUR TOUTE VÉRIFICATION, CONTACTEZ L'UJPAS : TEL: ${ORG_INFO.CONTACT_TEL}  |  EMAIL: ${ORG_INFO.CONTACT_EMAIL}`,
+    `POUR TOUTE VÉRIFICATION, CONTACTEZ L'U.J.P.A.S. : TEL: ${ORG_INFO.CONTACT_TEL}  |  EMAIL: ${ORG_INFO.CONTACT_EMAIL}`,
     550,
     502
   );

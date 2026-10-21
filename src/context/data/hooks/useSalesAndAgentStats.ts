@@ -4,6 +4,7 @@ import type { DuplicateCheckResult } from '../types';
 import { TICKET_PRICE_FCFA, ACTIVE_TICKET_VALIDITY_MS } from '../../../config/constants';
 import { getDB } from '../../../db/indexedDb';
 import { normalizePlate, normalizePhone, formatFCFA } from '../../../utils/normalization';
+import { computeExpirationDate, getTicketValidityStatus } from '../../../utils/expiration';
 import { getCurrentCoordinates } from '../../../utils/geolocation';
 import { generateUUID } from '../../../utils/uuid';
 import { SupabaseDataLayer } from '../../../db/supabaseService';
@@ -49,25 +50,24 @@ export function useSalesAndAgentStats(
       return { hasActiveTicket: false, activeTicket: null, daysRemaining: 0 };
     }
 
-    const now = Date.now();
     const activeMatch = tickets.find((t) => {
-      if (t.status !== 'SOLD' || t.isSuperseded) return false;
+      if ((t.status !== 'SOLD' && t.status !== 'CONTROLLED') || t.isSuperseded) return false;
       if (normalizePlate(t.plateNumber || '') !== cleanPlate) return false;
       if (!t.soldAt) return false;
 
-      const saleTime = new Date(t.soldAt).getTime();
-      const diffMs = now - saleTime;
-      return diffMs < ACTIVE_TICKET_VALIDITY_MS;
+      const validity = getTicketValidityStatus(t.soldAt, t.expiresAt);
+      return !validity.isExpired;
     });
 
     if (activeMatch && activeMatch.soldAt) {
+      const validity = getTicketValidityStatus(activeMatch.soldAt, activeMatch.expiresAt);
       const saleTime = new Date(activeMatch.soldAt).getTime();
-      const diffMs = now - saleTime;
-      const daysLeft = Math.ceil((ACTIVE_TICKET_VALIDITY_MS - diffMs) / (24 * 60 * 60 * 1000));
+      const diffMs = Date.now() - saleTime;
+      const fallbackDaysLeft = Math.ceil((ACTIVE_TICKET_VALIDITY_MS - diffMs) / (24 * 60 * 60 * 1000));
       return {
         hasActiveTicket: true,
         activeTicket: activeMatch,
-        daysRemaining: Math.max(1, daysLeft),
+        daysRemaining: Math.max(1, validity.daysRemaining || fallbackDaysLeft),
       };
     }
 
@@ -107,7 +107,7 @@ export function useSalesAndAgentStats(
 
       if (currentUser && currentUser.role === 'AGENT') {
         if (ticket.assignedAgentId && ticket.assignedAgentId !== currentUser.id) {
-          throw new Error("Violation de sécurité : Ce ticket ne vous est pas attribué.");
+          throw new Error('Violation de sécurité : Ce ticket ne vous est pas attribué.');
         }
       }
       if (currentUser && currentUser.role === 'CONTROLEUR') {
@@ -124,12 +124,13 @@ export function useSalesAndAgentStats(
 
       const saleId = generateUUID();
       const originalSoldAt = new Date().toISOString();
+      const computedExpiresAt = computeExpirationDate(originalSoldAt);
 
       const allExistingTickets: Ticket[] = await db.getAll('tickets');
       for (const oldTkt of allExistingTickets) {
         if (
           oldTkt.id !== ticket.id &&
-          oldTkt.status === 'SOLD' &&
+          (oldTkt.status === 'SOLD' || oldTkt.status === 'CONTROLLED') &&
           !oldTkt.isSuperseded &&
           normalizePlate(oldTkt.plateNumber || '') === cleanPlate
         ) {
@@ -155,6 +156,7 @@ export function useSalesAndAgentStats(
         status: 'SOLD',
         saleId,
         soldAt: originalSoldAt,
+        expiresAt: computedExpiresAt,
         plateNumber: cleanPlate,
         driverPhone: cleanPhone,
         driverName: params.driverName,
@@ -167,13 +169,16 @@ export function useSalesAndAgentStats(
         ticketId: ticket.id,
         ticketNumber: ticket.ticketNumber,
         agentId: ticket.assignedAgentId || currentUser?.id || 'admin',
-        agentName: ticket.assignedAgentName || (isAdmin ? `${currentUser?.fullName || 'ADMINISTRATEUR'} (Admin)` : currentUser?.fullName || 'AGENT'),
+        agentName:
+          ticket.assignedAgentName ||
+          (isAdmin ? `${currentUser?.fullName || 'ADMINISTRATEUR'} (Admin)` : currentUser?.fullName || 'AGENT'),
         sectorId: ticket.sectorId,
         sectorName: ticket.sectorName,
         plateNumber: cleanPlate,
         driverPhone: cleanPhone,
         driverName: params.driverName,
         soldAt: originalSoldAt,
+        expiresAt: computedExpiresAt,
         gpsLatitude: gps.latitude,
         gpsLongitude: gps.longitude,
         gpsAccuracy: gps.accuracy,
@@ -231,7 +236,7 @@ export function useSalesAndAgentStats(
         'TICKET_SOLD',
         'Ticket',
         ticket.id,
-        `Vente du ticket ${ticket.ticketNumber} pour l'immatriculation ${cleanPlate} (${isOnline ? 'En ligne' : 'Hors ligne'})`
+        `Vente du ticket ${ticket.ticketNumber} pour l'immatriculation ${cleanPlate} — Valable 14 jours (${isOnline ? 'En ligne' : 'Hors ligne'})`
       );
 
       if (isOnline) {
@@ -271,7 +276,9 @@ export function useSalesAndAgentStats(
     const soldCount = agentTickets.filter((t) => t.status === 'SOLD' || t.status === 'CONTROLLED').length;
     const expectedAmount = soldCount * ticketPrice;
 
-    const agentRemises = remises.filter((r) => r.agentId === agentId || (userObj?.role === 'RESPONSABLE' && r.responsableId === agentId));
+    const agentRemises = remises.filter(
+      (r) => r.agentId === agentId || (userObj?.role === 'RESPONSABLE' && r.responsableId === agentId)
+    );
     const remittedAmount = agentRemises.reduce((sum, r) => sum + r.amount, 0);
     const remainingBalance = Math.max(0, expectedAmount - remittedAmount);
     const ecart = Math.max(0, remittedAmount - expectedAmount);

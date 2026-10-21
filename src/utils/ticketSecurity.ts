@@ -1,5 +1,5 @@
 /**
- * Module de sécurité cryptographique, de signature QR Code et de machine à états pour PORTUS — U.J.S.R.V.
+ * Module de sécurité cryptographique, de signature QR Code et de machine à états pour PORTUS — U.J.P.A.S.
  * 
  * PROTOCOLE OFFICIEL UNIFIÉ :
  * 1. Payload canonique : PORTUS|v1|ticket_id|carnet_number|ticket_number|price

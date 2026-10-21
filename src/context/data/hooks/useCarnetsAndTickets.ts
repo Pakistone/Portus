@@ -14,7 +14,14 @@ import { usePortusStore } from '../../../store/usePortusStore';
 export function useCarnetsAndTickets(
   currentUser: User | null,
   ticketPrice: number,
-  recordAudit: (action: any, entity: string, id: string, details?: string, oldVal?: any, newVal?: any) => Promise<void>,
+  recordAudit: (
+    action: import('../../../types').AuditAction,
+    entity: string,
+    id: string,
+    details?: string,
+    oldVal?: import('./useAuditLogs').AuditLogValue,
+    newVal?: import('./useAuditLogs').AuditLogValue
+  ) => Promise<void>,
   refreshData: (forceSync?: boolean) => Promise<void>,
   setNotifications: React.Dispatch<React.SetStateAction<NotificationRecord[]>>
 ) {
@@ -586,6 +593,20 @@ export function useCarnetsAndTickets(
     }
     if (agent.role !== 'AGENT') {
       throw new Error(`L'utilisateur sélectionné (${agent.fullName}) n'a pas le rôle AGENT.`);
+    }
+
+    // RÈGLE DE GARDE SÉCURISÉE : Empêcher la double attribution à un agent qui a déjà des tickets actifs (ASSIGNE_AGENT)
+    const allTicketsInDb: Ticket[] = await db.getAll('tickets');
+    const activeAgentTickets = allTicketsInDb.filter(
+      (t) =>
+        t.assignedAgentId === agent.id &&
+        ((t.status as string) === 'ASSIGNED_TO_AGENT' || (t.status as string) === 'ASSIGNE_AGENT')
+    );
+
+    if (activeAgentTickets.length > 0) {
+      throw new Error(
+        `Attribution impossible : L'agent ${agent.fullName} possède déjà ${activeAgentTickets.length} ticket(s) actif(s) non encore épuisé(s) (Statut : ASSIGNE_AGENT). L'agent doit obligatoirement solder ou remettre ses tickets en cours avant de recevoir une nouvelle attribution.`
+      );
     }
 
     for (const tId of ticketIds) {

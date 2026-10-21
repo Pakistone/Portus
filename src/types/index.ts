@@ -1,6 +1,6 @@
 /**
- * Types TypeScript pour PORTUS — U.J.S.R.V.
- * Union des Jeunes de la Sécurité Routière de Vridi
+ * Types TypeScript Officiels pour PORTUS — U.J.P.A.S.
+ * Union des Jeunes du Port pour l'Assistance et la Sécurité — Zone Portuaire & Industrielle d'Abidjan
  */
 
 export type Role =
@@ -39,6 +39,9 @@ export interface User {
   sectorId?: string;
   sectorName?: string;
   phone?: string;
+  avatarUrl?: string;
+  matricule?: string;
+  brigade?: string;
   isActive: boolean;
   failedAttempts: number;
   lockedUntil?: string | null;
@@ -87,10 +90,10 @@ export type CarnetStatus =
   | 'ASSIGNED';
 
 export interface Carnet {
-  id: string; // UUID unique
-  carnetNumber: string; // Ex: C-2026-001
-  seriesPrefix: string; // Ex: VRD
-  size: number; // Multiples de 3 (3, 6, 9, ... 150, 153...)
+  id: string;
+  carnetNumber: string;
+  seriesPrefix: string;
+  size: number;
   startNumber: number;
   endNumber: number;
   createdById: string;
@@ -98,26 +101,26 @@ export interface Carnet {
   assignedToResponsableId?: string;
   assignedToResponsableName?: string;
   assignedToResponsableAt?: string;
-  assignedAt?: string; // Date et heure d'attribution au responsable
-  assignedById?: string; // Administrateur ayant attribué
+  assignedAt?: string;
+  assignedById?: string;
   assignedByName?: string;
   sectorId?: string;
   sectorName?: string;
-  createdAt: string; // Date et heure de génération
+  createdAt: string;
   updatedAt?: string;
   status: CarnetStatus;
 }
 
 export interface Ticket {
-  id: string; // Identifiant interne unique
-  ticketNumber: string; // Numéro affiché (ex: VRD-000101)
-  physicalNumber?: number; // Numéro séquentiel physique (ex: 1, 2... 100)
+  id: string;
+  ticketNumber: string;
+  physicalNumber?: number;
   carnetId: string;
   carnetNumber: string;
-  qrPayload: string; // Payload crypté / lisible pour QR code
+  qrPayload: string;
   securityToken?: string;
   status: TicketStatus;
-  price: number; // 5 000 FCFA
+  price: number;
   assignedResponsableId?: string;
   assignedResponsableName?: string;
   assignedAgentId?: string;
@@ -127,13 +130,15 @@ export interface Ticket {
   sectorId?: string;
   sectorName?: string;
 
-  // Données de vente
+  // Données de vente & validité 14 jours
   saleId?: string;
-  soldAt?: string; // Date/heure originale de vente (ISO)
-  plateNumber?: string; // Normalisé (ex: AB1234CD)
-  driverPhone?: string; // Chiffres uniquement
-  driverName?: string; // Nom & Prénoms du chauffeur
-  isSuperseded?: boolean; // Remplacé par un nouveau ticket actif pour la même immat
+  soldAt?: string;
+  expiresAt?: string;
+  paymentMethod?: PortusPaymentMethod;
+  plateNumber?: string;
+  driverPhone?: string;
+  driverName?: string;
+  isSuperseded?: boolean;
   supersededByTicketNumber?: string;
   coveredByRemiseId?: string;
 
@@ -173,25 +178,26 @@ export type VehicleCategory =
   | string;
 
 export interface Sale {
-  id: string; // Identifiant de vente unique UUID (généré immédiatement hors ligne)
+  id: string;
   ticketId: string;
   ticketNumber: string;
   agentId: string;
   agentName: string;
   sectorId?: string;
   sectorName?: string;
-  plateNumber: string; // Normalisé
-  driverPhone?: string; // Chiffres uniquement ou vide
-  driverName?: string; // Nom & Prénoms du chauffeur
+  plateNumber: string;
+  driverPhone?: string;
+  driverName?: string;
   vehicleCategory?: string;
-  soldAt: string; // Date originale de vente (NE JAMAIS écraser par la synchro)
+  soldAt: string;
+  expiresAt?: string;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
   gpsAccuracy: number | null;
   gpsStatus: 'AVAILABLE' | 'UNAVAILABLE' | 'GPS_UNAVAILABLE';
-  syncedAt?: string; // Date/heure réelle de synchronisation
+  syncedAt?: string;
   syncStatus: 'PENDING_SYNC' | 'SYNCED';
-  price: number; // 5000 FCFA
+  price: number;
   paymentMethod?: PortusPaymentMethod;
   paymentReference?: string;
   coveredByRemiseId?: string;
@@ -207,7 +213,7 @@ export interface Control {
   controlledAt: string;
   isValid: boolean;
   validationMessage: string;
-  resultType?: 'VALID' | 'CANCELLED' | 'INVALID_UNKNOWN' | 'SUPERSEDED' | 'NOT_SOLD';
+  resultType?: 'VALID' | 'CANCELLED' | 'INVALID_UNKNOWN' | 'SUPERSEDED' | 'NOT_SOLD' | 'EXPIRED';
   isOnline?: boolean;
   gpsLatitude: number | null;
   gpsLongitude: number | null;
@@ -249,6 +255,8 @@ export interface FraudReport {
   sectorName?: string;
   controleurId: string;
   controleurName: string;
+  suspectedAgentId?: string;
+  suspectedAgentName?: string;
   type: FraudType;
   typeLabel: string;
   reason?: string;
@@ -297,7 +305,7 @@ export interface Remise {
   sectorId: string;
   sectorName: string;
   amount: number;
-  montant?: number; // compatibilité
+  montant?: number;
   date: string;
   time: string;
   createdAt: string;
@@ -365,6 +373,7 @@ export type AuditAction =
   | 'CARNET_GENERATED'
   | 'CARNET_ASSIGNED_RESPONSABLE'
   | 'CARNET_CANCELLED'
+  | 'CARNET_DELETED'
   | 'TICKETS_ASSIGNED_AGENT'
   | 'TICKETS_REASSIGNED'
   | 'TICKET_SOLD'
@@ -379,6 +388,7 @@ export type AuditAction =
   | 'FRAUD_CONFIRMED'
   | 'FRAUD_REJECTED'
   | 'FRAUD_SYNCED'
+  | 'SOS_REPORTED'
   | 'REMISE_RECORDED'
   | 'REMISE_EXCEPTIONAL_CORRECTION'
   | 'EXPENSE_CREATED'
@@ -404,11 +414,11 @@ export interface AuditLog {
   timestamp: string;
   targetEntity: string;
   targetId: string;
-  oldValue?: string | number | Record<string, unknown> | null;
-  newValue?: string | number | Record<string, unknown> | null;
+  oldValue?: string | number | boolean | Record<string, unknown> | null;
+  newValue?: string | number | boolean | Record<string, unknown> | null;
   gpsLatitude?: number | null;
   gpsLongitude?: number | null;
-  details?: any;
+  details?: string | Record<string, unknown> | null;
 }
 
 export interface FinancialAlert {
@@ -437,10 +447,6 @@ export interface NotificationRecord {
   readAt?: string | null;
   createdAt: string;
 }
-
-// --------------------------------------------------------------------------
-// NOUVELLES INTERFACES OPÉRATIONNELLES (VEHICULES, CAISSE, CLÔTURE, RÉIMPRESSION)
-// --------------------------------------------------------------------------
 
 export type VehicleType =
   | 'CAMION_CITERNE'
@@ -498,7 +504,7 @@ export interface DailyClosing {
   declaredBalance: number;
   declaredCash?: number;
   difference?: number;
-  discrepancy: number; // declaredBalance - expectedBalance
+  discrepancy: number;
   totalSales?: number;
   totalExpenses?: number;
   totalRemises?: number;
@@ -524,7 +530,7 @@ export interface CashManagementSummary {
   expenses: number;
   expectedBalance: number;
   declaredBalance: number;
-  difference: number; // declared - expected
+  difference: number;
   salesCount: number;
   ticketsSoldList: string[];
 }
@@ -557,11 +563,15 @@ export interface QRVerificationLog {
   verifiedAt: string;
 }
 
-// --------------------------------------------------------------------------
-// PAIEMENTS MOBILE MONEY, SOS, LITIGES ET PLANNING DES BRIGADES
-// --------------------------------------------------------------------------
-
-export type PortusPaymentMethod = 'ESPECES' | 'WAVE' | 'ORANGE_MONEY' | 'MTN_MOMO' | 'BON_ABONNEMENT' | 'MOBILE_MONEY' | 'AUTRE';
+export type PortusPaymentMethod =
+  | 'ESPECES'
+  | 'WAVE'
+  | 'ORANGE_MONEY'
+  | 'MOOV'
+  | 'MTN_MOMO'
+  | 'BON_ABONNEMENT'
+  | 'MOBILE_MONEY'
+  | 'AUTRE';
 
 export type SOSAlertStatus = 'ACTIVE' | 'RESOLU';
 
@@ -616,7 +626,7 @@ export interface BrigadeAssignment {
   brigade: BrigadeType;
   sector: SectorType;
   sectorName: string;
-  shiftDate: string; // Format YYYY-MM-DD
+  shiftDate: string;
   checkInAt?: string;
   checkInApprovedBy?: string;
   checkInApprovedByName?: string;
@@ -625,4 +635,3 @@ export interface BrigadeAssignment {
   status: 'PLANIFIE' | 'PRESENT' | 'ABSENT' | 'TERMINE';
   createdAt: string;
 }
-

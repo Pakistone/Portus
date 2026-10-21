@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import type { User, Role, Ticket } from '../../../types';
 import { DEFAULT_SECTORS } from '../../../config/constants';
 import { getDB } from '../../../db/indexedDb';
-import { normalizeName, normalizePhone, normalizeText } from '../../../utils/normalization';
+import { normalizeName, normalizePhone } from '../../../utils/normalization';
 import { generateSecureToken } from '../../../utils/uuid';
 import { SupabaseDataLayer, normalizeSectorId } from '../../../db/supabaseService';
 import { safeFetchJson } from '../../../utils/safeApi';
@@ -21,6 +21,7 @@ export function useUsers(
     role: Role;
     sectorId?: string;
     phone?: string;
+    avatarUrl?: string;
     passwordRaw: string;
   }): Promise<User> => {
     if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
@@ -38,29 +39,35 @@ export function useUsers(
       throw new Error(`Le nom d'utilisateur "${cleanUsername}" est déjà utilisé.`);
     }
 
+    // Gouvernance U.J.P.A.S. : Pool global d'agents mobiles (aucun secteur fixe imposé aux agents)
+    const effectiveSectorId = userData.role === 'RESPONSABLE' ? userData.sectorId : undefined;
     let newUser: User;
 
     if (SupabaseDataLayer.isAvailable()) {
-      // Création officielle dans Supabase Auth + public.profiles
       newUser = await SupabaseDataLayer.createAdminUser({
         username: cleanUsername,
         fullName: normalizedFullName,
         role: userData.role,
-        sectorId: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? userData.sectorId : undefined,
+        sectorId: effectiveSectorId,
         phone: normalizedPhone,
+        avatarUrl: userData.avatarUrl,
         passwordRaw: userData.passwordRaw,
       });
+      if (userData.avatarUrl && !newUser.avatarUrl) {
+        newUser.avatarUrl = userData.avatarUrl;
+      }
       await db.put('users', newUser);
     } else {
-      const sector = DEFAULT_SECTORS.find((s) => s.id === userData.sectorId);
+      const sector = effectiveSectorId ? DEFAULT_SECTORS.find((s) => s.id === effectiveSectorId) : undefined;
       newUser = {
         id: `usr-${Date.now()}`,
         username: cleanUsername,
         fullName: normalizedFullName,
         role: userData.role,
-        sectorId: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? userData.sectorId : undefined,
-        sectorName: (userData.role === 'AGENT' || userData.role === 'RESPONSABLE') ? sector?.name : undefined,
+        sectorId: effectiveSectorId,
+        sectorName: sector?.name,
         phone: normalizedPhone,
+        avatarUrl: userData.avatarUrl,
         isActive: true,
         failedAttempts: 0,
         lockedUntil: null,
@@ -74,7 +81,7 @@ export function useUsers(
       'USER_CREATED',
       'User',
       newUser.id,
-      `Création du compte "${newUser.username}" avec le rôle ${newUser.role}`
+      `Création du compte "${newUser.username}" avec le rôle ${newUser.role}${newUser.avatarUrl ? ' (Photo officielle jointe)' : ''}`
     );
 
     await refreshData();
@@ -88,6 +95,7 @@ export function useUsers(
       phone?: string;
       sectorId?: string;
       role?: Role;
+      avatarUrl?: string;
     }
   ): Promise<User> => {
     if (currentUser && currentUser.role !== 'ADMINISTRATEUR') {
@@ -103,6 +111,7 @@ export function useUsers(
       phone: user.phone,
       sectorId: user.sectorId,
       role: user.role,
+      hasAvatar: Boolean(user.avatarUrl),
     };
 
     if (updates.fullName !== undefined) {
@@ -114,7 +123,14 @@ export function useUsers(
     if (updates.role !== undefined) {
       user.role = updates.role;
     }
-    if (updates.sectorId !== undefined) {
+    if (updates.avatarUrl !== undefined) {
+      user.avatarUrl = updates.avatarUrl || undefined;
+    }
+
+    if (user.role === 'AGENT' || user.role === 'CONTROLEUR' || user.role === 'ADMINISTRATEUR') {
+      user.sectorId = undefined;
+      user.sectorName = undefined;
+    } else if (updates.sectorId !== undefined) {
       const normSector = normalizeSectorId(updates.sectorId);
       user.sectorId = normSector;
       const sector = DEFAULT_SECTORS.find((s) => s.id === normSector || s.id === updates.sectorId);
@@ -141,14 +157,18 @@ export function useUsers(
           phone: user.phone,
           sectorId: user.sectorId,
           role: user.role,
+          avatarUrl: user.avatarUrl,
         });
         if (remoteUpdated) {
           const normRemoteSec = normalizeSectorId(remoteUpdated.sectorId, remoteUpdated.sectorName) || user.sectorId;
           user.role = remoteUpdated.role || user.role;
           user.fullName = remoteUpdated.fullName || user.fullName;
           user.phone = remoteUpdated.phone !== undefined ? remoteUpdated.phone : user.phone;
-          user.sectorId = normRemoteSec;
-          user.sectorName = remoteUpdated.sectorName || user.sectorName;
+          user.sectorId = user.role === 'RESPONSABLE' ? normRemoteSec : undefined;
+          user.sectorName = user.role === 'RESPONSABLE' ? (remoteUpdated.sectorName || user.sectorName) : undefined;
+          if (remoteUpdated.avatarUrl !== undefined) {
+            user.avatarUrl = remoteUpdated.avatarUrl;
+          }
           await db.put('users', user);
         }
       } catch (e) {
@@ -162,7 +182,7 @@ export function useUsers(
       user.id,
       `Mise à jour des informations pour ${user.fullName} (${user.username})`,
       oldValues,
-      updates
+      { ...updates, avatarUrl: updates.avatarUrl ? '[Photo Base64]' : undefined }
     );
 
     await refreshData();

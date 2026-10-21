@@ -5,6 +5,28 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+
+  // Extraction stricte depuis les variables d'environnement — Zéro secret ou URL codé en dur
+  const supabaseUrl = (env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const supabaseAnonKey = (
+    env.VITE_SUPABASE_ANON_KEY ||
+    env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    ''
+  ).trim();
+
+  // Validation explicite au démarrage (Développement & Production)
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn(
+      '[PORTUS — U.J.P.A.S. Security] Avertissement au démarrage : VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY est manquant dans les variables d’environnement (.env).'
+    );
+  } else if (!supabaseUrl.startsWith('https://')) {
+    console.warn(
+      '[PORTUS — U.J.P.A.S. Security] Avertissement : VITE_SUPABASE_URL doit utiliser le protocole sécurisé HTTPS.'
+    );
+  }
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -13,15 +35,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
-        env.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://wbbpaebrhobuaoherwmg.supabase.co'
-      ),
-      'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(
-        env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727'
-      ),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
-        env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_C55bwXXFjzdKGWo8y_DyzA_lVZSu727'
-      ),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
+      'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabaseAnonKey),
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

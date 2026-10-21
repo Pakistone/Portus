@@ -1,64 +1,103 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { DataProvider } from './context/DataContext';
+import { DataProvider, useData } from './context/DataContext';
 import { OfflineIndicator } from './components/pwa/OfflineIndicator';
-import { Header } from './components/common/Header';
 import { LoginView } from './components/auth/LoginView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
-import { ToastNotificationContainer } from './components/common/ToastNotification';
+import { ToastNotificationContainer, showToast } from './components/common/ToastNotification';
 import { Loader2 } from 'lucide-react';
 
+// Shell Navigation Adaptative (Desktop Sidebar, Top Header & Mobile Bottom Nav)
+import { AppSidebar } from './components/navigation/AppSidebar';
+import { AppHeader } from './components/navigation/AppHeader';
+import { MobileBottomNav } from './components/navigation/MobileBottomNav';
+
 // Dashboards par rôle (Lazy loaded)
-const AdminDashboard = lazy(() => import('./components/dashboard/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
-const ResponsableDashboard = lazy(() => import('./components/dashboard/ResponsableDashboard').then(m => ({ default: m.ResponsableDashboard })));
-const AgentDashboard = lazy(() => import('./components/dashboard/AgentDashboard').then(m => ({ default: m.AgentDashboard })));
-const ControleurDashboard = lazy(() => import('./components/dashboard/ControleurDashboard').then(m => ({ default: m.ControleurDashboard })));
+const AdminDashboard = lazy(() =>
+  import('./components/dashboard/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
+const ResponsableDashboard = lazy(() =>
+  import('./components/dashboard/ResponsableDashboard').then((m) => ({ default: m.ResponsableDashboard }))
+);
+const AgentDashboard = lazy(() =>
+  import('./components/dashboard/AgentDashboard').then((m) => ({ default: m.AgentDashboard }))
+);
+const ControleurDashboard = lazy(() =>
+  import('./components/dashboard/ControleurDashboard').then((m) => ({ default: m.ControleurDashboard }))
+);
 
 // Modals accessibles globalement (Lazy loaded)
-const AuditTrailModal = lazy(() => import('./components/audit/AuditTrailModal').then(m => ({ default: m.AuditTrailModal })));
-const UserManagementModal = lazy(() => import('./components/admin/UserManagementModal').then(m => ({ default: m.UserManagementModal })));
-const SupabaseModal = lazy(() => import('./components/admin/SupabaseModal').then(m => ({ default: m.SupabaseModal })));
-const AdvancedSearchModal = lazy(() => import('./components/search/AdvancedSearchModal').then(m => ({ default: m.AdvancedSearchModal })));
-const OfficialStampModal = lazy(() => import('./components/common/OfficialStampModal').then(m => ({ default: m.OfficialStampModal })));
-const DailyOperationsCenterModal = lazy(() => import('./components/operations/DailyOperationsCenterModal').then(m => ({ default: m.DailyOperationsCenterModal })));
-const SecurityCenterModal = lazy(() => import('./components/security/SecurityCenterModal').then(m => ({ default: m.SecurityCenterModal })));
-const TruckRegistryModal = lazy(() => import('./components/admin/TruckRegistryModal').then(m => ({ default: m.TruckRegistryModal })));
-const TicketTimelineModal = lazy(() => import('./components/tickets/TicketTimelineModal').then(m => ({ default: m.TicketTimelineModal })));
-const PortusAssistantModal = lazy(() => import('./components/assistant/PortusAssistantModal').then(m => ({ default: m.PortusAssistantModal })));
-const ExpensesModule = lazy(() => import('./components/expenses/ExpensesModule').then(m => ({ default: m.ExpensesModule })));
-const RemisesListModal = lazy(() => import('./components/remises/RemisesListModal').then(m => ({ default: m.RemisesListModal })));
-const AgentBadgeModal = lazy(() => import('./components/agents/AgentBadgeModal').then(m => ({ default: m.AgentBadgeModal })));
+const SaleFormModal = lazy(() =>
+  import('./components/sales/SaleFormModal').then((m) => ({ default: m.SaleFormModal }))
+);
+const RemiseFormModal = lazy(() =>
+  import('./components/remises/RemiseFormModal').then((m) => ({ default: m.RemiseFormModal }))
+);
+const ControlScanModal = lazy(() =>
+  import('./components/controls/ControlScanModal').then((m) => ({ default: m.ControlScanModal }))
+);
+const CarnetManagementModal = lazy(() =>
+  import('./components/tickets/CarnetManagementModal').then((m) => ({ default: m.CarnetManagementModal }))
+);
+const UserManagementModal = lazy(() =>
+  import('./components/admin/UserManagementModal').then((m) => ({ default: m.UserManagementModal }))
+);
+const AgentBadgeModal = lazy(() =>
+  import('./components/agents/AgentBadgeModal').then((m) => ({ default: m.AgentBadgeModal }))
+);
+const AdvancedSearchModal = lazy(() =>
+  import('./components/search/AdvancedSearchModal').then((m) => ({ default: m.AdvancedSearchModal }))
+);
+const FraudManagementModal = lazy(() =>
+  import('./components/admin/FraudManagementModal').then((m) => ({ default: m.FraudManagementModal }))
+);
+const AuditTrailModal = lazy(() =>
+  import('./components/audit/AuditTrailModal').then((m) => ({ default: m.AuditTrailModal }))
+);
+const AdminSettingsModal = lazy(() =>
+  import('./components/admin/AdminSettingsModal').then((m) => ({ default: m.AdminSettingsModal }))
+);
+const SupabaseModal = lazy(() =>
+  import('./components/admin/SupabaseModal').then((m) => ({ default: m.SupabaseModal }))
+);
+const TicketTimelineModal = lazy(() =>
+  import('./components/tickets/TicketTimelineModal').then((m) => ({ default: m.TicketTimelineModal }))
+);
 
 const LoadingFallback: React.FC = () => (
-  <div className="flex-1 flex items-center justify-center bg-slate-950 p-6">
+  <div className="flex-1 flex items-center justify-center bg-slate-950 p-6 min-h-[50vh]">
     <div className="flex items-center gap-3 text-emerald-400">
       <Loader2 className="w-5 h-5 animate-spin" />
-      <span className="text-xs font-bold tracking-wider uppercase text-slate-300">Chargement en cours...</span>
+      <span className="text-xs font-bold tracking-wider uppercase text-slate-300">
+        Chargement de l'espace PORTUS...
+      </span>
     </div>
   </div>
 );
 
 const AppContent: React.FC = () => {
   const { currentUser } = useAuth();
+  const { triggerSOSAlert } = useData();
 
-  const [auditModalOpen, setAuditModalOpen] = useState(false);
+  // Navigation State
+  const [activeModule, setActiveModule] = useState('dashboard');
+
+  // Modals global states
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [remiseModalOpen, setRemiseModalOpen] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [carnetModalOpen, setCarnetModalOpen] = useState(false);
   const [usersModalOpen, setUsersModalOpen] = useState(false);
-  const [supabaseModalOpen, setSupabaseModalOpen] = useState(false);
+  const [badgeModalOpen, setBadgeModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
-  const [stampModalOpen, setStampModalOpen] = useState(false);
-
-  // Nouveaux centres opérationnels
-  const [dailyOpsModalOpen, setDailyOpsModalOpen] = useState(false);
-  const [securityCenterModalOpen, setSecurityCenterModalOpen] = useState(false);
-  const [vehiclesModalOpen, setVehiclesModalOpen] = useState(false);
-  const [assistantModalOpen, setAssistantModalOpen] = useState(false);
+  const [fraudsModalOpen, setFraudsModalOpen] = useState(false);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [supabaseModalOpen, setSupabaseModalOpen] = useState(false);
   const [timelineModalOpen, setTimelineModalOpen] = useState(false);
   const [timelineTicketNumber, setTimelineTicketNumber] = useState<string | null>(null);
-  const [expensesModalOpen, setExpensesModalOpen] = useState(false);
-  const [remisesModalOpen, setRemisesModalOpen] = useState(false);
-  const [badgeModalOpen, setBadgeModalOpen] = useState(false);
 
-  // Écoute de l'événement système pour afficher la chronologie d'un ticket spécifique
+  // Écoute de l'événement système pour la chronologie d'un ticket
   useEffect(() => {
     const handleOpenTimeline = (e: any) => {
       if (e.detail?.ticketNumber) {
@@ -73,7 +112,20 @@ const AppContent: React.FC = () => {
     };
   }, []);
 
-  // Si l'utilisateur n'est pas connecté, afficher la page de connexion
+  const handleTriggerSOS = async () => {
+    try {
+      await triggerSOSAlert('Alerte d’urgence déclenchée depuis la barre de navigation');
+      showToast(
+        'success',
+        '🚨 ALERTE SOS TRANSMISE',
+        'Les coordinateurs terrain et la brigade de contrôle ont été notifiés de votre position GPS.'
+      );
+    } catch (err: any) {
+      showToast('error', "Échec de l'alerte SOS", err?.message || 'Erreur réseau');
+    }
+  };
+
+  // Si non connecté -> Écran d'authentification
   if (!currentUser) {
     return (
       <>
@@ -83,9 +135,50 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // Rendu conditionnel du tableau de bord selon le rôle de l'utilisateur (4 rôles officiels)
+  const role = currentUser.role;
+
+  // Helper pour vérifier et ouvrir une modale de manière sécurisée par rôle (RBAC)
+  const openModalSecurely = (modalSetter: (val: boolean) => void, allowedRoles: string[]) => {
+    if (allowedRoles.includes(role)) {
+      modalSetter(true);
+    } else {
+      showToast('error', 'Accès Refusé', `Votre rôle (${role}) ne possède pas la permission d'accéder à ce module.`);
+    }
+  };
+
+  // Label dynamique du module actif pour le Header
+  const getModuleName = () => {
+    switch (activeModule) {
+      case 'dashboard':
+        return 'Tableau de Bord';
+      case 'sale':
+        return 'Saisie Vente Express';
+      case 'remise':
+        return 'Encaissements & Remises';
+      case 'scan':
+        return 'Contrôle & Scan QR 14J';
+      case 'carnets':
+        return 'Gestion des Carnets';
+      case 'users':
+        return 'Équipe & Trombinoscope';
+      case 'badges':
+        return 'Badges Professionnels';
+      case 'search':
+        return 'Recherches & Exports';
+      case 'frauds':
+        return 'Incidents & Signalements';
+      case 'audit':
+        return 'Audit Logs & Clôtures';
+      case 'settings':
+        return 'Paramètres & Tarifs';
+      default:
+        return 'Tableau de Bord';
+    }
+  };
+
+  // Dashboard par rôle avec vérification RBAC stricte
   const renderDashboard = () => {
-    switch (currentUser.role) {
+    switch (role) {
       case 'ADMINISTRATEUR':
         return <AdminDashboard />;
       case 'RESPONSABLE':
@@ -100,124 +193,105 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-white">
-      {/* Toast notifications flottantes système */}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col sm:flex-row font-sans selection:bg-emerald-500 selection:text-white">
+      {/* Toast Notifications système */}
       <ToastNotificationContainer />
 
-      {/* Indicateur de connectivité PWA */}
+      {/* PWA Network Status Bar */}
       <OfflineIndicator />
 
-      {/* Barre supérieure commune */}
-      <Header
-        onOpenAudit={() => setAuditModalOpen(true)}
-        onOpenUsers={() => setUsersModalOpen(true)}
-        onOpenSupabase={() => setSupabaseModalOpen(true)}
-        onOpenSearch={() => setSearchModalOpen(true)}
-        onOpenStamp={() => setStampModalOpen(true)}
-        onOpenDailyOps={() => setDailyOpsModalOpen(true)}
-        onOpenSecurityCenter={() => setSecurityCenterModalOpen(true)}
-        onOpenVehicles={() => setVehiclesModalOpen(true)}
-        onOpenAssistant={() => setAssistantModalOpen(true)}
-        onOpenTimeline={() => {
-          setTimelineTicketNumber(null);
-          setTimelineModalOpen(true);
-        }}
-        onOpenBadge={() => setBadgeModalOpen(true)}
+      {/* SIDEBAR LATÉRALE RÉTRACTABLE DESKTOP (Hidden on mobile) */}
+      <AppSidebar
+        activeModule={activeModule}
+        onSelectModule={(key) => setActiveModule(key)}
+        onOpenSale={() => openModalSecurely(setSaleModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'])}
+        onOpenRemise={() => openModalSecurely(setRemiseModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'])}
+        onOpenScan={() => openModalSecurely(setScanModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'])}
+        onOpenCarnets={() => openModalSecurely(setCarnetModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE'])}
+        onOpenUsers={() => openModalSecurely(setUsersModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'])}
+        onOpenBadges={() => openModalSecurely(setBadgeModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE'])}
+        onOpenSearch={() => openModalSecurely(setSearchModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'])}
+        onOpenFrauds={() => openModalSecurely(setFraudsModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'])}
+        onOpenAudit={() => openModalSecurely(setAuditModalOpen, ['ADMINISTRATEUR'])}
+        onOpenSettings={() => openModalSecurely(setSettingsModalOpen, ['ADMINISTRATEUR'])}
+        onTriggerSOS={handleTriggerSOS}
       />
 
-      {/* Contenu principal selon le rôle avec Suspense */}
-      <main className="flex-1 pb-6">
-        <Suspense fallback={<LoadingFallback />}>
-          {renderDashboard()}
-        </Suspense>
-      </main>
+      {/* ZONE PRINCIPALE DE L'APPLICATION */}
+      <div className="flex-1 flex flex-col min-w-0 pb-16 sm:pb-0">
+        {/* TOPBAR HEADER CONTEXTUELLE */}
+        <AppHeader
+          currentModuleName={getModuleName()}
+          onOpenSearch={() => openModalSecurely(setSearchModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'])}
+          onOpenAudit={() => openModalSecurely(setAuditModalOpen, ['ADMINISTRATEUR'])}
+          onOpenUsers={() => openModalSecurely(setUsersModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'])}
+          onOpenSupabase={() => openModalSecurely(setSupabaseModalOpen, ['ADMINISTRATEUR'])}
+          onTriggerSOS={handleTriggerSOS}
+        />
 
-      {/* Modals globaux standards avec Suspense */}
+        {/* CONTENU PRINCIPAL DE L'APPLICATION */}
+        <main className="flex-1 p-3 sm:p-6 overflow-y-auto">
+          <Suspense fallback={<LoadingFallback />}>{renderDashboard()}</Suspense>
+        </main>
+      </div>
+
+      {/* BARRE TACTILE BASSE MOBILE (Hidden on desktop) */}
+      <MobileBottomNav
+        activeTab={activeModule}
+        onSelectTab={(key) => setActiveModule(key)}
+        onOpenSale={() => openModalSecurely(setSaleModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'])}
+        onOpenRemise={() => openModalSecurely(setRemiseModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'])}
+        onOpenScan={() => openModalSecurely(setScanModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'])}
+        onOpenCarnets={() => openModalSecurely(setCarnetModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE'])}
+        onOpenUsers={() => openModalSecurely(setUsersModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'])}
+        onOpenBadges={() => openModalSecurely(setBadgeModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE'])}
+        onOpenSearch={() => openModalSecurely(setSearchModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'])}
+        onOpenFrauds={() => openModalSecurely(setFraudsModalOpen, ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT', 'CONTROLEUR'])}
+        onOpenAudit={() => openModalSecurely(setAuditModalOpen, ['ADMINISTRATEUR'])}
+        onOpenSettings={() => openModalSecurely(setSettingsModalOpen, ['ADMINISTRATEUR'])}
+        onTriggerSOS={handleTriggerSOS}
+      />
+
+      {/* MODALS GLOBAUX STRICTEMENT VERROUILLÉS PAR RÔLE (BLINDAGE RBAC) */}
       <Suspense fallback={null}>
+        {saleModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'].includes(role) && (
+          <SaleFormModal isOpen={saleModalOpen} onClose={() => setSaleModalOpen(false)} />
+        )}
+        {remiseModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE', 'AGENT'].includes(role) && (
+          <RemiseFormModal isOpen={remiseModalOpen} onClose={() => setRemiseModalOpen(false)} />
+        )}
+        {scanModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'].includes(role) && (
+          <ControlScanModal isOpen={scanModalOpen} onClose={() => setScanModalOpen(false)} />
+        )}
+        {carnetModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE'].includes(role) && (
+          <CarnetManagementModal isOpen={carnetModalOpen} onClose={() => setCarnetModalOpen(false)} />
+        )}
+        {usersModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE', 'CONTROLEUR'].includes(role) && (
+          <UserManagementModal isOpen={usersModalOpen} onClose={() => setUsersModalOpen(false)} />
+        )}
+        {badgeModalOpen && ['ADMINISTRATEUR', 'RESPONSABLE'].includes(role) && (
+          <AgentBadgeModal isOpen={badgeModalOpen} onClose={() => setBadgeModalOpen(false)} />
+        )}
         {searchModalOpen && (
-          <AdvancedSearchModal
-            isOpen={searchModalOpen}
-            onClose={() => setSearchModalOpen(false)}
-          />
+          <AdvancedSearchModal isOpen={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
         )}
-        {auditModalOpen && (
-          <AuditTrailModal
-            isOpen={auditModalOpen}
-            onClose={() => setAuditModalOpen(false)}
-          />
+        {fraudsModalOpen && (
+          <FraudManagementModal isOpen={fraudsModalOpen} onClose={() => setFraudsModalOpen(false)} />
         )}
-        {usersModalOpen && (
-          <UserManagementModal
-            isOpen={usersModalOpen}
-            onClose={() => setUsersModalOpen(false)}
-          />
+        {auditModalOpen && role === 'ADMINISTRATEUR' && (
+          <AuditTrailModal isOpen={auditModalOpen} onClose={() => setAuditModalOpen(false)} />
         )}
-        {supabaseModalOpen && (
-          <SupabaseModal
-            isOpen={supabaseModalOpen}
-            onClose={() => setSupabaseModalOpen(false)}
-          />
+        {settingsModalOpen && role === 'ADMINISTRATEUR' && (
+          <AdminSettingsModal isOpen={settingsModalOpen} onClose={() => setSettingsModalOpen(false)} />
         )}
-        {stampModalOpen && (
-          <OfficialStampModal
-            isOpen={stampModalOpen}
-            onClose={() => setStampModalOpen(false)}
-          />
-        )}
-
-        {/* Nouveaux centres opérationnels intégrés */}
-        {dailyOpsModalOpen && (
-          <DailyOperationsCenterModal
-            isOpen={dailyOpsModalOpen}
-            onClose={() => setDailyOpsModalOpen(false)}
-            onOpenExpenses={() => setExpensesModalOpen(true)}
-            onOpenRemises={() => setRemisesModalOpen(true)}
-          />
-        )}
-        {securityCenterModalOpen && (
-          <SecurityCenterModal
-            isOpen={securityCenterModalOpen}
-            onClose={() => setSecurityCenterModalOpen(false)}
-          />
-        )}
-        {vehiclesModalOpen && (
-          <TruckRegistryModal
-            isOpen={vehiclesModalOpen}
-            onClose={() => setVehiclesModalOpen(false)}
-            onSelectTicket={(ticketNumber) => {
-              setTimelineTicketNumber(ticketNumber);
-              setTimelineModalOpen(true);
-            }}
-          />
+        {supabaseModalOpen && role === 'ADMINISTRATEUR' && (
+          <SupabaseModal isOpen={supabaseModalOpen} onClose={() => setSupabaseModalOpen(false)} />
         )}
         {timelineModalOpen && (
           <TicketTimelineModal
             isOpen={timelineModalOpen}
             onClose={() => setTimelineModalOpen(false)}
             ticketNumber={timelineTicketNumber}
-          />
-        )}
-        {assistantModalOpen && (
-          <PortusAssistantModal
-            isOpen={assistantModalOpen}
-            onClose={() => setAssistantModalOpen(false)}
-          />
-        )}
-
-        {/* Modules financiers connectés */}
-        {expensesModalOpen && (
-          <ExpensesModule onClose={() => setExpensesModalOpen(false)} />
-        )}
-        {remisesModalOpen && (
-          <RemisesListModal
-            isOpen={remisesModalOpen}
-            onClose={() => setRemisesModalOpen(false)}
-          />
-        )}
-        {badgeModalOpen && (
-          <AgentBadgeModal
-            isOpen={badgeModalOpen}
-            onClose={() => setBadgeModalOpen(false)}
           />
         )}
       </Suspense>

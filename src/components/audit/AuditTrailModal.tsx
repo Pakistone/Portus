@@ -24,13 +24,18 @@ export const AuditTrailModal: React.FC<Props> = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
+  const formatDetailsText = (details: string | Record<string, unknown> | null | undefined): string => {
+    if (!details) return '';
+    return typeof details === 'string' ? details : JSON.stringify(details);
+  };
+
   const filteredLogs = auditLogs.filter((log) => {
     if (roleFilter !== 'ALL' && log.actorRole !== roleFilter) return false;
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       const matchActor = log.actorName.toLowerCase().includes(term);
       const matchAction = log.action.toLowerCase().includes(term);
-      const matchDetails = (log.details || '').toLowerCase().includes(term);
+      const matchDetails = formatDetailsText(log.details).toLowerCase().includes(term);
       const matchEntity = log.targetEntity.toLowerCase().includes(term);
       return matchActor || matchAction || matchDetails || matchEntity;
     }
@@ -147,7 +152,7 @@ export const AuditTrailModal: React.FC<Props> = ({ isOpen, onClose }) => {
                   </div>
                 </div>
 
-                <p className="text-slate-300 leading-relaxed font-sans">{log.details}</p>
+                <p className="text-slate-300 leading-relaxed font-sans">{formatDetailsText(log.details)}</p>
 
                 {(log.oldValue || log.newValue) && (
                   <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] font-mono bg-slate-950 p-2 rounded-lg border border-slate-800/80">

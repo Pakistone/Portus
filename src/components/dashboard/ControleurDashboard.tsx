@@ -402,88 +402,222 @@ export const ControleurDashboard: React.FC = () => {
       ) : (
         <>
           {/* ========================================================================= */}
-          {/* ACTIONS PRIORITAIRES TERRAIN (GROS BOUTONS TOUCH FRIENDLY)                */}
+          {/* BLOC 1 : INDICATEURS CLÉS DE PERFORMANCE (KPIs CONTRÔLEUR)                */}
           {/* ========================================================================= */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            {/* Bouton Scan / Vérification */}
-            <button
-              id="btn-controleur-scan"
-              onClick={() => setScanModalOpen(true)}
-              className="flex flex-col items-center justify-center p-5 sm:p-6 rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-emerald-600 hover:from-orange-500 hover:to-emerald-500 text-white shadow-xl shadow-orange-950/40 active:scale-98 transition text-center cursor-pointer space-y-2 border border-orange-400/40"
-            >
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-black/20 text-white shadow-inner">
-                <QrCode className="w-7 h-7 sm:w-8 sm:h-8" />
-              </div>
-              <div>
-                <h3 className="text-base sm:text-lg font-black tracking-wide">
-                  CONTRÔLER UN VÉHICULE
-                </h3>
-                <p className="text-xs text-orange-100 font-medium">
-                  Scanner QR Code UJPAS ou vérifier l'immatriculation
-                </p>
-              </div>
-            </button>
-
-            {/* Bouton Signalement Fraude */}
-            <button
-              id="btn-controleur-fraud"
-              onClick={() => setFraudModalOpen(true)}
-              className="flex flex-col items-center justify-center p-5 sm:p-6 rounded-2xl bg-slate-900 hover:bg-slate-800 text-rose-300 shadow-xl border border-rose-500/40 active:scale-98 transition text-center cursor-pointer space-y-2"
-            >
-              <div className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center rounded-2xl bg-rose-500/20 text-rose-400">
-                <ShieldAlert className="w-7 h-7 sm:w-8 sm:h-8" />
-              </div>
-              <div>
-                <h3 className="text-base sm:text-lg font-black tracking-wide">
-                  SIGNALER UNE FRAUDE
-                </h3>
-                <p className="text-xs text-slate-400 font-medium">
-                  Faux ticket, plaque usurpée ou refus de stationnement
-                </p>
-              </div>
-            </button>
-          </div>
-
-          {/* ========================================================================= */}
-          {/* STATISTIQUES CONTRÔLEUR                                                   */}
-          {/* ========================================================================= */}
-          <div className="space-y-3">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Indicateurs d'Activité
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-orange-400" />
+                <span>Bloc 1 — Statistiques de Contrôle Routier</span>
               </h3>
               <PeriodSelector period={period} onChange={setPeriod} />
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <StatCard
-                title="Contrôles (Période)"
+                title="Contrôles Période"
                 value={periodControls.length}
-                subtitle="Vérifications effectuées"
-                icon={<ShieldCheck className="w-4 h-4" />}
-                variant="slate"
+                subtitle={`Aujourd'hui : ${todayControls.length}`}
+                icon={<History className="w-4 h-4" />}
+                variant="blue"
+                onClick={() => setControlsListOpen(true)}
               />
               <StatCard
                 title="Tickets Valides"
                 value={periodValidCount}
-                subtitle="Conformes corridor"
+                subtitle={`${periodControls.length > 0 ? Math.round((periodValidCount / periodControls.length) * 100) : 100}% de conformité`}
                 icon={<CheckCircle2 className="w-4 h-4" />}
                 variant="emerald"
+                onClick={() => setControlsListOpen(true)}
               />
               <StatCard
-                title="Tickets Rejetés"
+                title="Infractions Détectées"
                 value={periodInvalidCount}
-                subtitle="Fraudes / Expirés"
+                subtitle="Tickets expirés / falsifiés"
                 icon={<XCircle className="w-4 h-4" />}
                 variant={periodInvalidCount > 0 ? 'rose' : 'slate'}
+                onClick={() => setControlsListOpen(true)}
               />
               <StatCard
-                title="Fraudes Signalées"
+                title="Signalements Emis"
                 value={periodFrauds.length}
-                subtitle="Procès-verbaux"
-                icon={<AlertTriangle className="w-4 h-4" />}
-                variant={periodFrauds.length > 0 ? 'rose' : 'slate'}
+                subtitle={`Total historique: ${myFrauds.length}`}
+                icon={<ShieldAlert className="w-4 h-4" />}
+                variant={periodFrauds.length > 0 ? 'amber' : 'slate'}
+                onClick={() => setActiveTab('incidents')}
               />
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* BLOC 2 : ACTIONS TERRAIN IMMÉDIATES (2 Grands Boutons Distincts)          */}
+          {/* ========================================================================= */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <QrCode className="w-4 h-4 text-orange-400" />
+                <span>Bloc 2 — Actions Terrain Immédiates</span>
+              </h3>
+              <span className="text-[11px] text-slate-500">Poste de Barrage Routier</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {/* BOUTON LARGE 1 : SCAN & CONTRÔLE */}
+              <button
+                id="btn-controleur-scan"
+                onClick={() => setScanModalOpen(true)}
+                className="relative overflow-hidden rounded-2xl bg-linear-to-r from-orange-600 via-orange-500 to-amber-500 p-4 sm:p-5 text-left text-white shadow-xl shadow-orange-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-orange-400/40 group"
+              >
+                <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
+                  <QrCode className="w-16 h-16 text-white" />
+                </div>
+                <div className="relative z-10 flex items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+                    <QrCode className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                      Scanner Caméra ANPR
+                    </span>
+                    <h4 className="text-lg sm:text-xl font-black text-white">Contrôler un Véhicule</h4>
+                    <p className="text-xs text-orange-100/90 mt-0.5">
+                      Scanner le QR Code du ticket ou lire la plaque d'immatriculation
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              {/* BOUTON LARGE 2 : SIGNALER FRAUDE */}
+              <button
+                id="btn-controleur-fraud"
+                onClick={() => setFraudModalOpen(true)}
+                className="relative overflow-hidden rounded-2xl bg-linear-to-r from-rose-700 via-rose-600 to-amber-600 p-4 sm:p-5 text-left text-white shadow-xl shadow-rose-950/40 hover:scale-[1.01] active:scale-[0.99] transition-all cursor-pointer border border-rose-400/40 group"
+              >
+                <div className="absolute right-3 top-3 opacity-20 group-hover:opacity-30 transition pointer-events-none">
+                  <ShieldAlert className="w-16 h-16 text-white" />
+                </div>
+                <div className="relative z-10 flex items-center gap-4">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20 backdrop-blur-md border border-white/30 text-white shadow-md">
+                    <ShieldAlert className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <span className="inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-white mb-1">
+                      Signalement SOS &amp; Incidents
+                    </span>
+                    <h4 className="text-lg sm:text-xl font-black text-white">Signaler une Fraude</h4>
+                    <p className="text-xs text-rose-100/90 mt-0.5">
+                      Faux ticket, usure plaque, usurpation ou refus d'obtempérer
+                    </p>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* ========================================================================= */}
+          {/* BLOC 3 : GRILLE DE GESTION SECONDAIRE (Grid 2 ou 4 Colonnes Propre)        */}
+          {/* ========================================================================= */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                <History className="w-4 h-4 text-purple-400" />
+                <span>Bloc 3 — Registres &amp; Outils de Contrôle</span>
+              </h3>
+              <span className="text-[11px] text-slate-500">Poste de Brigade</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              {/* 1. Registre des Contrôles */}
+              <div
+                onClick={() => setControlsListOpen(true)}
+                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-amber-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 group-hover:scale-110 transition">
+                    <History className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 border border-amber-500/30">
+                    {myControls.length} passage(s)
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-xs font-black text-white group-hover:text-amber-400 transition">
+                    Registre des Contrôles
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                    Historique de vos vérifications
+                  </p>
+                </div>
+              </div>
+
+              {/* 2. Trombinoscope Agents */}
+              <div
+                onClick={() => setActiveTab('directory')}
+                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-emerald-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 group-hover:scale-110 transition">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold rounded-full bg-emerald-500/20 text-emerald-300 px-2 py-0.5 border border-emerald-500/30">
+                    Annuaire
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-xs font-black text-white group-hover:text-emerald-400 transition">
+                    Trombinoscope Agents
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                    Vérification d'identité des agents
+                  </p>
+                </div>
+              </div>
+
+              {/* 3. Recherche Multicritères */}
+              <div
+                onClick={() => setSearchModalOpen(true)}
+                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-blue-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 group-hover:scale-110 transition">
+                    <Search className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold rounded-full bg-blue-500/20 text-blue-300 px-2 py-0.5 border border-blue-500/30">
+                    Recherche
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-xs font-black text-white group-hover:text-blue-400 transition">
+                    Recherche Multicritères
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                    Tickets, camions, reçus
+                  </p>
+                </div>
+              </div>
+
+              {/* 4. Test Alerte SOS Realtime */}
+              <div
+                onClick={() => simulateIncidentForTesting()}
+                className="bg-slate-900/80 border border-white/10 rounded-2xl p-4 hover:border-purple-500/40 hover:bg-slate-800/80 transition-all cursor-pointer shadow-lg flex flex-col justify-between group"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30 group-hover:scale-110 transition">
+                    <Zap className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] font-bold rounded-full bg-purple-500/20 text-purple-300 px-2 py-0.5 border border-purple-500/30">
+                    Test
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <h4 className="text-xs font-black text-white group-hover:text-purple-400 transition">
+                    Test Alerte Realtime
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                    Simuler un appel d'urgence SOS
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 

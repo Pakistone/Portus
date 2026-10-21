@@ -116,47 +116,39 @@ export function useOnlineAndSyncState(
         tx.done,
       ]);
 
-      // 2. Effectuer les appels réseau Supabase en dehors de toute transaction IndexedDB
+      // 2. Synchronisation Réseau Supabase en Lots (Chunking de 50 éléments - Ultra Performant)
       if (SupabaseDataLayer.isAvailable()) {
-        for (const sale of updatedSales) {
-          try {
-            await SupabaseDataLayer.insertSaleIdempotent(sale);
-            await SupabaseDataLayer.pushToSyncQueue({
-              clientMutationId: sale.id,
-              agentId: sale.agentId,
-              entityType: 'SALE',
-              operation: 'INSERT',
-              payload: sale as any,
-              clientTimestamp: sale.soldAt,
-            });
-          } catch (syncErr) {
-            console.warn('Erreur réplication Supabase vente:', syncErr);
-          }
-        }
+        const syncItems = [
+          ...updatedSales.map((sale) => ({
+            clientMutationId: sale.id,
+            agentId: sale.agentId,
+            entityType: 'SALE' as const,
+            operation: 'INSERT' as const,
+            payload: sale as any,
+            clientTimestamp: sale.soldAt,
+          })),
+          ...updatedFrauds.map((fraud) => ({
+            clientMutationId: fraud.id,
+            agentId: fraud.controleurId,
+            entityType: 'FRAUD_REPORT' as const,
+            operation: 'INSERT' as const,
+            payload: fraud as any,
+            clientTimestamp: fraud.reportedAt,
+          })),
+        ];
 
-        for (const ctrl of updatedControls) {
-          try {
-            await SupabaseDataLayer.insertControl(ctrl);
-          } catch (ctrlErr) {
-            console.warn('Erreur réplication Supabase contrôle:', ctrlErr);
-          }
-        }
+        // Exécution en lots parallèles de 50 items
+        await Promise.allSettled([
+          SupabaseDataLayer.insertSalesBatchIdempotent(updatedSales),
+          SupabaseDataLayer.insertControlsBatch(updatedControls),
+          SupabaseDataLayer.insertFraudReportsBatch(updatedFrauds),
+          SupabaseDataLayer.pushToSyncQueueBatch(syncItems),
+        ]);
 
-        for (const fraud of updatedFrauds) {
-          try {
-            await SupabaseDataLayer.insertFraudReport(fraud);
-            await SupabaseDataLayer.pushToSyncQueue({
-              clientMutationId: fraud.id,
-              agentId: fraud.controleurId,
-              entityType: 'FRAUD_REPORT',
-              operation: 'INSERT',
-              payload: fraud as any,
-              clientTimestamp: fraud.reportedAt,
-            });
-          } catch (frdErr) {
-            console.warn('Erreur réplication Supabase fraude:', frdErr);
-          }
-        }
+        // Synchronisation asynchrone NON-BLOQUANTE des logs d'audit en arrière-plan
+        SupabaseDataLayer.insertAuditLogBatch(allAudits).catch((auditErr) => {
+          console.warn('Erreur réplication asynchrone des logs d audit:', auditErr);
+        });
       }
 
       // Déclencher les notifications obligatoires après synchronisation réussie

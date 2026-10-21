@@ -12,6 +12,8 @@ import {
   ArrowRight,
   Info,
   SlidersHorizontal,
+  User as UserIcon,
+  Phone,
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -37,6 +39,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
   const [method, setMethod] = useState<AssignmentMethod>('RANGE');
   const [isReassignment, setIsReassignment] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [agentSearchTerm, setAgentSearchTerm] = useState('');
   const [selectedCarnetId, setSelectedCarnetId] = useState<string>('ALL');
 
   // Sélection de tickets
@@ -62,11 +65,52 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     notificationMsg: string;
   } | null>(null);
 
-  // Liste des agents éligibles (avec repli réseau pour éviter que la liste soit vide)
+  // Calcul du nombre de tickets actifs au statut ASSIGNE_AGENT pour chaque agent
+  const agentActiveTicketCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tickets) {
+      if (t.assignedAgentId && (t.status === 'ASSIGNED_TO_AGENT' || (t as any).status === 'ASSIGNE_AGENT')) {
+        counts[t.assignedAgentId] = (counts[t.assignedAgentId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [tickets]);
+
+  // Pool global d'agents mobiles U.J.P.A.S. avec tri par disponibilité (Agents libres en premier)
   const eligibleAgents = useMemo(() => {
-    const agents = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
-    return agents.length > 0 ? agents : users.filter((u) => u.role === 'AGENT');
-  }, [users]);
+    const activeAgents = users.filter((u) => u.role === 'AGENT' && u.isActive !== false);
+    const baseList = activeAgents.length > 0 ? activeAgents : users.filter((u) => u.role === 'AGENT');
+    
+    let filtered = baseList;
+    if (agentSearchTerm.trim()) {
+      const q = agentSearchTerm.toLowerCase();
+      filtered = baseList.filter(
+        (ag) =>
+          ag.fullName.toLowerCase().includes(q) ||
+          ag.username.toLowerCase().includes(q) ||
+          (ag.phone && ag.phone.includes(q))
+      );
+    }
+
+    // Tri : agents libres (0 ticket actif) d'abord, puis agents occupés
+    return [...filtered].sort((a, b) => {
+      const countA = agentActiveTicketCounts[a.id] || 0;
+      const countB = agentActiveTicketCounts[b.id] || 0;
+      return countA - countB;
+    });
+  }, [users, agentSearchTerm, agentActiveTicketCounts]);
+
+  const selectedAgentObj = useMemo(
+    () => users.find((u) => u.id === selectedAgentId) || null,
+    [users, selectedAgentId]
+  );
+
+  const selectedAgentActiveCount = useMemo(() => {
+    if (!selectedAgentId) return 0;
+    return agentActiveTicketCounts[selectedAgentId] || 0;
+  }, [selectedAgentId, agentActiveTicketCounts]);
+
+  const isSelectedAgentBusy = !isReassignment && selectedAgentActiveCount > 0;
 
   // Carnets du responsable (exclure les carnets annulés)
   const availableCarnets = useMemo(() => {
@@ -92,11 +136,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     });
   }, [tickets, currentUser, selectedCarnetId]);
 
-  // Tickets éligibles selon l'opération (Nouvelle attribution vs Réattribution)
-  // RÈGLES MÉTIER :
-  // - Seuls les tickets non vendus peuvent être attribués ou réattribués.
-  // - Un ticket vendu ne peut JAMAIS être réattribué.
-  // - Un ticket annulé ne peut pas être attribué.
   const eligibleTickets = useMemo(() => {
     return responsableTicketsPool.filter((t) => {
       if (t.status === 'SOLD' || t.status === 'CONTROLLED' || t.status === 'CANCELLED') {
@@ -105,22 +144,19 @@ export const TicketAssignmentModal: React.FC<Props> = ({
       if (isReassignment) {
         return t.status === 'ASSIGNED_TO_AGENT';
       } else {
-        return t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE';
+        return t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE' || t.status === 'GENERATED';
       }
     });
   }, [responsableTicketsPool, isReassignment]);
 
-  // Helper d'extraction numérique
   const extractNumericSuffix = (val: string): number => {
     const trimmed = val.trim();
     if (!trimmed) return NaN;
-    // Extraire les chiffres
     const match = trimmed.match(/\d+/g);
     if (!match) return NaN;
     return parseInt(match[match.length - 1], 10);
   };
 
-  // Analyse en direct de la plage continue saisie
   const rangeAnalysis = useMemo(() => {
     const startNum = extractNumericSuffix(rangeStart);
     const endNum = extractNumericSuffix(rangeEnd);
@@ -135,7 +171,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
       };
     }
 
-    // Parcourir tous les tickets du pool du carnet / responsable
     const inRangeTickets = responsableTicketsPool.filter((t) => {
       const ticketNum = t.physicalNumber || extractNumericSuffix(t.ticketNumber);
       return !isNaN(ticketNum) && ticketNum >= startNum && ticketNum <= endNum;
@@ -148,7 +183,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
       if (isReassignment) {
         return t.status === 'ASSIGNED_TO_AGENT';
       } else {
-        return t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE';
+        return t.status === 'ASSIGNED_TO_RESPONSIBLE' || t.status === 'AVAILABLE' || t.status === 'GENERATED';
       }
     });
 
@@ -167,14 +202,12 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     };
   }, [rangeStart, rangeEnd, responsableTicketsPool, isReassignment]);
 
-  // Application automatique de la plage continue
   const handleApplyRange = () => {
     if (!rangeAnalysis.isValid || rangeAnalysis.eligibleTickets.length === 0) return;
     const eligibleIds = rangeAnalysis.eligibleTickets.map((t) => t.id);
     setSelectedTicketIds((prev) => Array.from(new Set([...prev, ...eligibleIds])));
   };
 
-  // Méthode B : Saisie rapide de plusieurs numéros (ex: 003, 008, 011, 025)
   const handleApplyQuickInput = () => {
     setQuickInputFeedback(null);
     if (!quickInputNumbers.trim()) return;
@@ -192,7 +225,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
 
     tokens.forEach((token) => {
       const targetNum = extractNumericSuffix(token);
-      // Chercher le ticket dans le pool
       const found = responsableTicketsPool.find((t) => {
         const ticketNum = t.physicalNumber || extractNumericSuffix(t.ticketNumber);
         return (
@@ -231,7 +263,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     setQuickInputNumbers('');
   };
 
-  // Bascule sélection individuelle
   const handleToggleTicket = (id: string) => {
     setSelectedTicketIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
@@ -253,7 +284,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     setSelectedTicketIds([]);
   };
 
-  // Filtrage pour la vue liste individuelle
   const filteredIndividualTickets = useMemo(() => {
     return eligibleTickets.filter((t) => {
       if (!searchTerm) return true;
@@ -266,7 +296,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
     });
   }, [eligibleTickets, searchTerm]);
 
-  // Validation et soumission finale
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -316,9 +345,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4 backdrop-blur-xs">
       <div className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl text-slate-100 max-h-[92vh] flex flex-col overflow-hidden">
-        {/* ========================================================================= */}
-        {/* EN-TÊTE MODALE                                                            */}
-        {/* ========================================================================= */}
+        {/* EN-TÊTE MODALE */}
         <div className="flex items-center justify-between border-b border-slate-800 p-4 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30">
@@ -326,22 +353,23 @@ export const TicketAssignmentModal: React.FC<Props> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white">
-                {isReassignment ? 'Réattribution de Tickets non vendus' : 'Attribution des Tickets aux Agents'}
+                {isReassignment
+                  ? 'Réattribution de Tickets non vendus'
+                  : 'Attribution des Tickets — Pool Mobile Global U.J.P.A.S.'}
               </h3>
               <p className="text-xs text-slate-400">
-                Plage continue (ex: 001 à 020) ou sélection individuelle (ex: 003, 008, 011...)
+                Tout superviseur ou administrateur peut attribuer des tickets à tout agent disponible
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="rounded-lg p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Message d'erreur */}
         {error && (
           <div className="mx-4 sm:mx-6 mt-3 flex items-start gap-2.5 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
@@ -349,7 +377,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Écran de succès */}
         {successInfo ? (
           <div className="my-10 px-6 text-center space-y-3 animate-fadeIn">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
@@ -369,33 +396,41 @@ export const TicketAssignmentModal: React.FC<Props> = ({
         ) : (
           <form onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <div className="flex-1 overflow-y-auto p-4 sm:px-6 space-y-4">
-              {/* ========================================================================= */}
-              {/* 1. CHOIX DE L'AGENT ET TYPE D'ATTRIBUTION                                 */}
-              {/* ========================================================================= */}
+              {/* 1. CHOIX DE L'AGENT ET CARNET SOURCE */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Choix de l'Agent */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-200 mb-1">
-                    1. Agent de terrain bénéficiaire <span className="text-rose-400">*</span>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-200">
+                    1. Agent de terrain bénéficiaire (Pool Global) <span className="text-rose-400">*</span>
                   </label>
+                  <input
+                    type="text"
+                    value={agentSearchTerm}
+                    onChange={(e) => setAgentSearchTerm(e.target.value)}
+                    placeholder="Filtrer un agent par nom ou tél..."
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 py-1.5 px-3 text-xs text-slate-200 focus:border-blue-500 focus:outline-hidden"
+                  />
                   <select
                     required
                     value={selectedAgentId}
                     onChange={(e) => setSelectedAgentId(e.target.value)}
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 py-2 px-3 text-xs sm:text-sm text-white focus:border-blue-500 focus:outline-hidden"
                   >
-                    <option value="">-- Sélectionner un agent --</option>
-                    {eligibleAgents.map((ag) => (
-                      <option key={ag.id} value={ag.id}>
-                        {ag.fullName} ({ag.sectorName || 'Secteur'} • Tél: {ag.phone || 'Non renseigné'})
-                      </option>
-                    ))}
+                    <option value="">-- Sélectionner un agent ({eligibleAgents.length}) --</option>
+                    {eligibleAgents.map((ag) => {
+                      const activeCount = agentActiveTicketCounts[ag.id] || 0;
+                      return (
+                        <option key={ag.id} value={ag.id}>
+                          {activeCount === 0
+                            ? `🟢 ${ag.fullName} (Libre • Tél: ${ag.phone || 'N/R'})`
+                            : `🔴 ${ag.fullName} (${activeCount} ticket(s) actif(s) - BLOQUÉ)`}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
-                {/* Filtre de carnet optionnel */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-200 mb-1">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-200">
                     Carnet source
                   </label>
                   <select
@@ -406,10 +441,62 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     <option value="ALL">Tous mes carnets disponibles</option>
                     {availableCarnets.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.carnetNumber} ({c.size} tickets • {c.sectorName || 'Secteur'})
+                        {c.carnetNumber} ({c.size} tickets • {c.sectorName || 'U.J.P.A.S.'})
                       </option>
                     ))}
                   </select>
+
+                  {/* Aperçu visuel de l'agent sélectionné avec sa photo et alerte si occupé */}
+                  {selectedAgentObj && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2.5 rounded-xl border border-blue-500/30 bg-blue-950/30 p-2">
+                        {selectedAgentObj.avatarUrl ? (
+                          <img
+                            src={selectedAgentObj.avatarUrl}
+                            alt={selectedAgentObj.fullName}
+                            className="w-9 h-9 rounded-full object-cover border border-blue-400 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-black text-blue-400 shrink-0">
+                            <UserIcon className="w-4 h-4" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-white truncate flex items-center gap-2">
+                            <span>{selectedAgentObj.fullName}</span>
+                            {selectedAgentActiveCount > 0 ? (
+                              <span className="rounded bg-rose-500/20 px-1.5 py-0.2 text-[9px] font-bold text-rose-300 border border-rose-500/30">
+                                {selectedAgentActiveCount} TICKET(S) ACTIF(S)
+                              </span>
+                            ) : (
+                              <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[9px] font-bold text-emerald-300 border border-emerald-500/30">
+                                LIBRE POUR ATTRIBUTION
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-blue-300 flex items-center gap-1">
+                            <Phone className="w-3 h-3" />
+                            <span>{selectedAgentObj.phone || 'Tél non renseigné'} • Pool Mobile U.J.P.A.S.</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* BANNÈRE D'ALERTE DE BLOCAGE DE DOUBLE ATTRIBUTION */}
+                      {isSelectedAgentBusy && (
+                        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-200 space-y-1">
+                          <div className="flex items-center gap-1.5 font-bold text-rose-400">
+                            <AlertCircle className="w-4 h-4 shrink-0" />
+                            <span>ATTRIBUTION IMPOSSIBLE (DOUBLE ATTRIBUTION INTERDITE)</span>
+                          </div>
+                          <p className="text-[11px] leading-relaxed text-rose-200">
+                            L'agent <strong className="text-white">{selectedAgentObj.fullName}</strong> possède déjà{' '}
+                            <strong className="text-rose-300 font-mono">{selectedAgentActiveCount} ticket(s) actif(s)</strong> non encore épuisé(s) (Statut : <strong className="font-mono">ASSIGNE_AGENT</strong>).
+                            L'agent doit obligatoirement solder ou remettre ses tickets en cours avant de recevoir une nouvelle attribution.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -421,13 +508,13 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     setIsReassignment(false);
                     setSelectedTicketIds([]);
                   }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                     !isReassignment
                       ? 'bg-blue-600 text-white shadow-xs'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Nouvelle attribution (Stock responsable vierge)
+                  Nouvelle attribution (Stock superviseur vierge)
                 </button>
                 <button
                   type="button"
@@ -435,7 +522,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     setIsReassignment(true);
                     setSelectedTicketIds([]);
                   }}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
                     isReassignment
                       ? 'bg-amber-600 text-white shadow-xs'
                       : 'text-slate-400 hover:text-white'
@@ -445,9 +532,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                 </button>
               </div>
 
-              {/* ========================================================================= */}
-              {/* 2. CHOIX DE LA MÉTHODE D'ATTRIBUTION (ONGLETS A / B)                      */}
-              {/* ========================================================================= */}
+              {/* 2. CHOIX DE LA MÉTHODE D'ATTRIBUTION */}
               <div>
                 <label className="block text-xs font-bold text-slate-200 mb-2">
                   2. Méthode d'attribution des tickets
@@ -456,7 +541,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => setMethod('RANGE')}
-                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition text-left ${
+                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition text-left cursor-pointer ${
                       method === 'RANGE'
                         ? 'border-blue-500 bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/50'
                         : 'border-slate-800 bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -474,7 +559,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                   <button
                     type="button"
                     onClick={() => setMethod('INDIVIDUAL')}
-                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition text-left ${
+                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition text-left cursor-pointer ${
                       method === 'INDIVIDUAL'
                         ? 'border-blue-500 bg-blue-500/15 text-blue-300 ring-1 ring-blue-500/50'
                         : 'border-slate-800 bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -491,9 +576,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                 </div>
               </div>
 
-              {/* ========================================================================= */}
-              {/* CORPS MÉTHODE A : PLAGE CONTINUE                                          */}
-              {/* ========================================================================= */}
+              {/* CORPS MÉTHODE A : PLAGE CONTINUE */}
               {method === 'RANGE' && (
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -534,7 +617,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* Résumé de détection en direct */}
                   {rangeAnalysis.isValid && (
                     <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 space-y-2 text-xs">
                       <div className="flex items-center justify-between text-[11px]">
@@ -551,7 +633,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                         </span>
                       </div>
 
-                      {/* Règle stricte : Tickets vendus dans la plage */}
                       {rangeAnalysis.soldOrControlledTickets.length > 0 && (
                         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-[11px] text-rose-300">
                           <strong className="block font-bold">
@@ -563,7 +644,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                         </div>
                       )}
 
-                      {/* Règle stricte : Tickets annulés dans la plage */}
                       {rangeAnalysis.cancelledTickets.length > 0 && (
                         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-300">
                           <strong className="block font-bold">
@@ -576,7 +656,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                         type="button"
                         onClick={handleApplyRange}
                         disabled={rangeAnalysis.eligibleTickets.length === 0}
-                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 py-2 px-3 text-xs font-bold text-white transition disabled:opacity-40"
+                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 py-2 px-3 text-xs font-bold text-white transition disabled:opacity-40 cursor-pointer"
                       >
                         <span>
                           Sélectionner automatiquement les {rangeAnalysis.eligibleTickets.length} tickets éligibles de cette plage
@@ -594,12 +674,9 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* ========================================================================= */}
-              {/* CORPS MÉTHODE B : SÉLECTION INDIVIDUELLE                                  */}
-              {/* ========================================================================= */}
+              {/* CORPS MÉTHODE B : SÉLECTION INDIVIDUELLE */}
               {method === 'INDIVIDUAL' && (
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 space-y-3">
-                  {/* Saisie rapide de plusieurs numéros (ex: 003, 008, 011, 025) */}
                   <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 space-y-2">
                     <label className="block text-[11px] font-bold text-slate-200">
                       Saisie rapide séparée par des virgules ou espaces
@@ -621,7 +698,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                       <button
                         type="button"
                         onClick={handleApplyQuickInput}
-                        className="rounded-xl bg-slate-800 hover:bg-slate-700 px-3.5 py-2 text-xs font-bold text-white border border-slate-700 transition"
+                        className="rounded-xl bg-slate-800 hover:bg-slate-700 px-3.5 py-2 text-xs font-bold text-white border border-slate-700 transition cursor-pointer"
                       >
                         Ajouter
                       </button>
@@ -633,7 +710,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     )}
                   </div>
 
-                  {/* Recherche et bascules de masse */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
                     <div className="relative flex-1">
                       <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -648,7 +724,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={handleSelectAllFiltered}
-                      className="text-xs text-blue-400 hover:text-blue-300 font-semibold px-2 py-1"
+                      className="text-xs text-blue-400 hover:text-blue-300 font-semibold px-2 py-1 cursor-pointer"
                     >
                       {filteredIndividualTickets.every((t) => selectedTicketIds.includes(t.id))
                         ? 'Désélectionner les résultats'
@@ -656,7 +732,6 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     </button>
                   </div>
 
-                  {/* Liste des tickets disponibles */}
                   <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 rounded-xl border border-slate-800 bg-slate-900 p-2">
                     {filteredIndividualTickets.length === 0 ? (
                       <div className="py-6 text-center text-xs text-slate-500">
@@ -701,9 +776,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* ========================================================================= */}
-              {/* 3. PANIER / APERÇU DES TICKETS SÉLECTIONNÉS                                */}
-              {/* ========================================================================= */}
+              {/* 3. PANIER / APERÇU DES TICKETS SÉLECTIONNÉS */}
               <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -717,7 +790,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={handleClearSelection}
-                      className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold"
+                      className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold cursor-pointer"
                     >
                       Effacer la sélection
                     </button>
@@ -738,7 +811,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => handleToggleTicket(id)}
-                            className="text-blue-400 hover:text-white"
+                            className="text-blue-400 hover:text-white cursor-pointer"
                           >
                             ×
                           </button>
@@ -754,9 +827,7 @@ export const TicketAssignmentModal: React.FC<Props> = ({
               </div>
             </div>
 
-            {/* ========================================================================= */}
-            {/* PIED DE MODALE                                                            */}
-            {/* ========================================================================= */}
+            {/* PIED DE MODALE */}
             <div className="flex items-center justify-between p-4 sm:px-6 border-t border-slate-800 bg-slate-900">
               <span className="text-xs text-slate-400">
                 {selectedTicketIds.length === 0 ? (
@@ -771,14 +842,14 @@ export const TicketAssignmentModal: React.FC<Props> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-xl bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition"
+                  className="rounded-xl bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition cursor-pointer"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || selectedTicketIds.length === 0 || !selectedAgentId}
-                  className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition disabled:opacity-50 flex items-center gap-1.5 shadow-md shadow-blue-900/30"
+                  disabled={loading || selectedTicketIds.length === 0 || !selectedAgentId || isSelectedAgentBusy}
+                  className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition disabled:opacity-50 flex items-center gap-1.5 shadow-md shadow-blue-900/30 cursor-pointer"
                 >
                   <UserPlus className="w-4 h-4" />
                   <span>

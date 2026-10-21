@@ -20,7 +20,7 @@ import type { Ticket } from '../types';
 import { formatTicketQrForCameraScan } from './ticketSecurity';
 
 export interface TicketRenderOptions {
-  width?: number;              // Largeur / longueur en pixels (défaut 1075 pour 300 DPI à 9.1 cm / 91 mm)
+  width?: number;              // Largeur / longueur en pixels (défaut 1181 pour 300 DPI à 10.0 cm / 100 mm)
   height?: number;             // Hauteur en pixels (défaut 945 pour 300 DPI à 8.0 cm / 80 mm)
   immatriculation?: string;    // Immatriculation optionnelle pour les 8 cases
   showCutLines?: boolean;      // Afficher les repères de coupe légers sur le pourtour
@@ -503,7 +503,7 @@ export async function renderTicketToDataUrl(
   ticket: Ticket,
   options: TicketRenderOptions = {}
 ): Promise<string> {
-  const width = options.width || 1075;
+  const width = options.width || 1181;
   const height = options.height || 945;
   const fmt = options.format || 'image/jpeg';
   const quality = options.quality !== undefined ? options.quality : 0.82;
